@@ -171,4 +171,54 @@ def get_match(schedule_id):
         """
         SELECT *
         FROM matches
-     
+        WHERE schedule_id=?
+        """,
+        (str(schedule_id),)
+    )
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    return row
+
+
+def get_odds(schedule_id):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT *
+        FROM odds
+        WHERE schedule_id=?
+        ORDER BY id
+        """,
+        (str(schedule_id),)
+    )
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return rows
+
+
+def get_database_stats():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM matches")
+    matches = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM odds")
+    odds = cur.fetchone()[0]
+
+    conn.close()
+
+    return {
+        "matches": matches,
+        "odds": odds
+    }
