@@ -263,19 +263,37 @@ st.divider()
 
 st.subheader("실제 스코어맨 경기 테스트")
 
-if st.button("강원 vs 부천 데이터 가져오기"):
+# ==========================================
+# 실제 스코어맨 경기 구조 분석
+# ==========================================
 
-    url = "https://www.scoreman123.com/match/data-2929675"
+import requests
+from bs4 import BeautifulSoup
+
+st.divider()
+
+st.subheader("실제 스코어맨 경기 구조 분석")
+
+
+if st.button("스코어맨 경기 구조 분석"):
+
+    url = (
+        "https://www.scoreman123.com/"
+        "match/data-2929675"
+    )
 
     headers = {
+
         "User-Agent": (
             "Mozilla/5.0 "
             "(Linux; Android 10) "
             "AppleWebKit/537.36 "
             "(KHTML, like Gecko) "
-            "Chrome/120.0 Mobile Safari/537.36"
+            "Chrome/120.0 "
+            "Mobile Safari/537.36"
         )
     }
+
 
     try:
 
@@ -285,46 +303,178 @@ if st.button("강원 vs 부천 데이터 가져오기"):
             timeout=30
         )
 
+
         st.write(
             "HTTP 상태:",
             response.status_code
         )
+
 
         st.write(
             "페이지 크기:",
             len(response.text)
         )
 
+
         soup = BeautifulSoup(
             response.text,
             "html.parser"
         )
+
+
+        # ==================================
+        # 1. 제목
+        # ==================================
+
+        if soup.title:
+
+            st.subheader("페이지 제목")
+
+            st.write(
+                soup.title.get_text(
+                    " ",
+                    strip=True
+                )
+            )
+
+
+        # ==================================
+        # 2. 스크립트 개수
+        # ==================================
+
+        scripts = soup.find_all(
+            "script"
+        )
+
+
+        st.subheader(
+            "스크립트 분석"
+        )
+
+
+        st.write(
+            "스크립트 개수:",
+            len(scripts)
+        )
+
+
+        # ==================================
+        # 3. 배당 관련 HTML 검색
+        # ==================================
+
+        keywords = [
+
+            "Bet365",
+            "SBOBET",
+            "Pinnacle",
+            "Macauslot",
+            "Crown",
+            "12BET",
+            "18Bet",
+            "First Odds",
+            "Odds",
+            "odds",
+            "배당",
+            "初盘",
+            "终盘"
+
+        ]
+
+
+        found = []
+
+
+        for keyword in keywords:
+
+            count = response.text.count(
+                keyword
+            )
+
+            if count > 0:
+
+                found.append(
+                    (
+                        keyword,
+                        count
+                    )
+                )
+
+
+        st.subheader(
+            "배당 관련 데이터 발견"
+        )
+
+
+        if found:
+
+            for keyword, count in found:
+
+                st.write(
+                    f"**{keyword}** : "
+                    f"{count}회"
+                )
+
+        else:
+
+            st.warning(
+                "배당 관련 키워드를 찾지 못했습니다."
+            )
+
+
+        # ==================================
+        # 4. 경기 관련 키워드
+        # ==================================
+
+        match_keywords = [
+
+            "강원",
+            "부천",
+            "0-3",
+            "0 : 3",
+            "2026-08-01",
+            "19:30"
+
+        ]
+
+
+        st.subheader(
+            "경기 정보 발견 여부"
+        )
+
+
+        for keyword in match_keywords:
+
+            count = response.text.count(
+                keyword
+            )
+
+            st.write(
+                f"{keyword}: {count}회"
+            )
+
+
+        # ==================================
+        # 5. 경기 페이지 텍스트
+        # ==================================
 
         page_text = soup.get_text(
             " ",
             strip=True
         )
 
-        st.subheader("가져온 경기 데이터")
 
-        st.text(
-            page_text[:8000]
+        st.subheader(
+            "경기 페이지 텍스트"
         )
 
-        if response.status_code == 200:
 
-            st.success(
-                "실제 스코어맨 경기 페이지 접속 성공"
-            )
+        st.text(
+            page_text[:10000]
+        )
 
-        else:
-
-            st.error(
-                "경기 페이지 접속 실패"
-            )
 
     except Exception as e:
 
         st.error(
-            f"오류 발생: {e}"
-        )
+            f"오류: {e}"
+    )
