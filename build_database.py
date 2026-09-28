@@ -1,9 +1,6 @@
-import requests
-import re
 import time
-import sqlite3
-from datetime import datetime, timedelta
-from pathlib import Path
+import re
+import requests
 
 import database
 
@@ -83,31 +80,18 @@ def calculate_result(home_score, away_score):
 
 
 # =========================================================
-# HTTP 요청
+# 세션
 # =========================================================
 
-def get(url, timeout=15):
+session = requests.Session()
 
-    try:
-
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=timeout
-        )
-
-        if response.status_code != 200:
-            return None
-
-        return response
-
-    except Exception:
-
-        return None
+session.headers.update(
+    HEADERS
+)
 
 
 # =========================================================
-# 경기 상세 페이지
+# 경기 페이지
 # =========================================================
 
 def get_match_page(schedule_id):
@@ -116,28 +100,53 @@ def get_match_page(schedule_id):
         f"{BASE_URL}/match/data-{schedule_id}"
     )
 
-    return get(url)
+    try:
+
+        response = session.get(
+            url,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+
+            return None
+
+        if len(response.text) < 500:
+
+            return None
+
+        return response.text
+
+    except Exception:
+
+        return None
 
 
 # =========================================================
-# 경기 정보 파싱
+# 경기정보 파싱
 # =========================================================
 
-def parse_match_info(html, schedule_id):
+def parse_match_info(
+    html,
+    schedule_id
+):
 
     home_team = ""
+
     away_team = ""
 
     home_score = None
+
     away_score = None
 
     match_date = ""
+
 
     # -----------------------------------------------------
     # 홈팀
     # -----------------------------------------------------
 
-    home_patterns = [
+    patterns = [
 
         r'"homeTeamName"\s*:\s*"([^"]+)"',
 
@@ -145,23 +154,22 @@ def parse_match_info(html, schedule_id):
 
         r'"homeTeam"\s*:\s*"([^"]+)"',
 
-        r'"HomeTeamName"\s*:\s*"([^"]+)"',
-
         r'"HomeTeam"\s*:\s*"([^"]+)"'
 
     ]
 
-    for pattern in home_patterns:
 
-        match = re.search(
+    for pattern in patterns:
+
+        m = re.search(
             pattern,
             html,
             re.I
         )
 
-        if match:
+        if m:
 
-            home_team = match.group(1).strip()
+            home_team = m.group(1).strip()
 
             break
 
@@ -170,7 +178,7 @@ def parse_match_info(html, schedule_id):
     # 원정팀
     # -----------------------------------------------------
 
-    away_patterns = [
+    patterns = [
 
         r'"awayTeamName"\s*:\s*"([^"]+)"',
 
@@ -178,23 +186,22 @@ def parse_match_info(html, schedule_id):
 
         r'"awayTeam"\s*:\s*"([^"]+)"',
 
-        r'"AwayTeamName"\s*:\s*"([^"]+)"',
-
         r'"AwayTeam"\s*:\s*"([^"]+)"'
 
     ]
 
-    for pattern in away_patterns:
 
-        match = re.search(
+    for pattern in patterns:
+
+        m = re.search(
             pattern,
             html,
             re.I
         )
 
-        if match:
+        if m:
 
-            away_team = match.group(1).strip()
+            away_team = m.group(1).strip()
 
             break
 
@@ -203,7 +210,7 @@ def parse_match_info(html, schedule_id):
     # 스코어
     # -----------------------------------------------------
 
-    score_patterns = [
+    patterns = [
 
         r'"homeScore"\s*:\s*(\d+).*?'
         r'"awayScore"\s*:\s*(\d+)',
@@ -212,36 +219,34 @@ def parse_match_info(html, schedule_id):
         r'"away_score"\s*:\s*(\d+)',
 
         r'"hscore"\s*:\s*(\d+).*?'
-        r'"ascore"\s*:\s*(\d+)',
-
-        r'"HomeScore"\s*:\s*(\d+).*?'
-        r'"AwayScore"\s*:\s*(\d+)'
+        r'"ascore"\s*:\s*(\d+)'
 
     ]
 
-    for pattern in score_patterns:
 
-        match = re.search(
+    for pattern in patterns:
+
+        m = re.search(
             pattern,
             html,
             re.I | re.S
         )
 
-        if match:
+        if m:
 
             home_score = to_int(
-                match.group(1)
+                m.group(1)
             )
 
             away_score = to_int(
-                match.group(2)
+                m.group(2)
             )
 
             break
 
 
     # -----------------------------------------------------
-    # HTML 일반 스코어
+    # HTML 스코어 보완
     # -----------------------------------------------------
 
     if home_score is None:
@@ -272,81 +277,43 @@ def parse_match_info(html, schedule_id):
 
         r'"startTime"\s*:\s*"([^"]+)"',
 
-        r'"MatchTime"\s*:\s*"([^"]+)"',
-
-        r'"MatchDate"\s*:\s*"([^"]+)"'
+        r'"date"\s*:\s*"([^"]+)"'
 
     ]
 
+
     for pattern in date_patterns:
 
-        match = re.search(
+        m = re.search(
             pattern,
             html,
             re.I
         )
 
-        if match:
+        if m:
 
-            match_date = match.group(1).strip()
+            match_date = m.group(1).strip()
 
             break
 
 
     # -----------------------------------------------------
-    # 제목
+    # 결과
     # -----------------------------------------------------
-
-    title = ""
-
-    title_match = re.search(
-        r"<title>(.*?)</title>",
-        html,
-        re.I | re.S
-    )
-
-    if title_match:
-
-        title = re.sub(
-            r"\s+",
-            " ",
-            title_match.group(1)
-        ).strip()
-
-
-    # -----------------------------------------------------
-    # 제목으로 팀명 보완
-    # -----------------------------------------------------
-
-    if not home_team or not away_team:
-
-        title_team = re.search(
-            r"(.+?)\s+vs\s+(.+?)(?:\s+\||$)",
-            title,
-            re.I
-        )
-
-        if title_team:
-
-            if not home_team:
-
-                home_team = (
-                    title_team.group(1)
-                    .strip()
-                )
-
-            if not away_team:
-
-                away_team = (
-                    title_team.group(2)
-                    .strip()
-                )
-
 
     result = calculate_result(
         home_score,
         away_score
     )
+
+
+    # -----------------------------------------------------
+    # 최소 경기정보 확인
+    # -----------------------------------------------------
+
+    if not home_team and not away_team:
+
+        return None
 
 
     return {
@@ -370,10 +337,7 @@ def parse_match_info(html, schedule_id):
             away_score,
 
         "result":
-            result,
-
-        "title":
-            title
+            result
 
     }
 
@@ -382,7 +346,9 @@ def parse_match_info(html, schedule_id):
 # 배당 API
 # =========================================================
 
-def get_scoreman_odds(schedule_id):
+def get_odds(
+    schedule_id
+):
 
     url = (
         f"{BASE_URL}/ajax/soccerajax"
@@ -392,27 +358,38 @@ def get_scoreman_odds(schedule_id):
         f"&h=0"
     )
 
-    response = get(url)
-
-    if response is None:
-
-        return []
 
     try:
 
+        response = session.get(
+            url,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+
+            return []
+
+
         data = response.json()
+
 
     except Exception:
 
         return []
 
 
-    if not isinstance(data, dict):
+    if not isinstance(
+        data,
+        dict
+    ):
 
         return []
 
 
-    if data.get("ErrCode") != 0:
+    if data.get(
+        "ErrCode"
+    ) != 0:
 
         return []
 
@@ -421,14 +398,6 @@ def get_scoreman_odds(schedule_id):
         "Data",
         {}
     )
-
-
-    if not isinstance(
-        data_block,
-        dict
-    ):
-
-        return []
 
 
     mixodds = data_block.get(
@@ -445,7 +414,7 @@ def get_scoreman_odds(schedule_id):
         return []
 
 
-    companies = []
+    result = []
 
 
     for item in mixodds:
@@ -475,14 +444,6 @@ def get_scoreman_odds(schedule_id):
         )
 
 
-        if not isinstance(
-            euro,
-            dict
-        ):
-
-            continue
-
-
         initial = euro.get(
             "f",
             {}
@@ -495,23 +456,42 @@ def get_scoreman_odds(schedule_id):
         )
 
 
-        if not isinstance(
-            initial,
-            dict
+        initial_home = to_float(
+            initial.get("u")
+        )
+
+        initial_draw = to_float(
+            initial.get("g")
+        )
+
+        initial_away = to_float(
+            initial.get("d")
+        )
+
+
+        final_home = to_float(
+            final.get("u")
+        )
+
+        final_draw = to_float(
+            final.get("g")
+        )
+
+        final_away = to_float(
+            final.get("d")
+        )
+
+
+        if not (
+            initial_home
+            and initial_draw
+            and initial_away
         ):
 
-            initial = {}
+            continue
 
 
-        if not isinstance(
-            final,
-            dict
-        ):
-
-            final = {}
-
-
-        row = {
+        result.append({
 
             "company_id":
                 company_id,
@@ -520,62 +500,27 @@ def get_scoreman_odds(schedule_id):
                 company_name,
 
             "initial_home":
-                to_float(
-                    initial.get("u")
-                ),
+                initial_home,
 
             "initial_draw":
-                to_float(
-                    initial.get("g")
-                ),
+                initial_draw,
 
             "initial_away":
-                to_float(
-                    initial.get("d")
-                ),
+                initial_away,
 
             "final_home":
-                to_float(
-                    final.get("u")
-                ),
+                final_home,
 
             "final_draw":
-                to_float(
-                    final.get("g")
-                ),
+                final_draw,
 
             "final_away":
-                to_float(
-                    final.get("d")
-                )
+                final_away
 
-        }
+        })
 
 
-        # -------------------------------------------------
-        # 최소 1개라도 배당이 있으면 저장
-        # -------------------------------------------------
-
-        valid = [
-
-            row["initial_home"],
-
-            row["initial_draw"],
-
-            row["initial_away"]
-
-        ]
-
-
-        if any(
-            x is not None and x > 1
-            for x in valid
-        ):
-
-            companies.append(row)
-
-
-    return companies
+    return result
 
 
 # =========================================================
@@ -610,7 +555,8 @@ def save_match_data(
         result=
             match["result"],
 
-        source="Scoreman"
+        source=
+            "Scoreman"
 
     )
 
@@ -650,229 +596,174 @@ def save_match_data(
 
 
 # =========================================================
-# 기존 DB ID 확인
+# 기존 경기 확인
 # =========================================================
 
-def get_existing_ids():
-
-    conn = database.get_connection()
-
-    cursor = conn.cursor()
+def match_exists(
+    schedule_id
+):
 
     try:
 
-        cursor.execute(
-            "SELECT schedule_id FROM matches"
-        )
-
-        rows = cursor.fetchall()
-
-        return {
-            str(row[0])
-            for row in rows
-        }
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# ID 자동 탐색
-#
-# Scoreman 경기 ID는 연속 숫자이지만
-# 모든 ID가 축구 경기인 것은 아니므로
-# 상세 페이지를 실제 확인한다.
-# =========================================================
-
-def find_scoreman_ids(
-    start_id,
-    end_id,
-    progress_callback=None,
-    log_callback=None,
-    delay=0.3
-):
-
-    found = []
-
-    total = (
-        end_id -
-        start_id +
-        1
-    )
-
-
-    if total <= 0:
-
-        return found
-
-
-    for index, schedule_id in enumerate(
-        range(start_id, end_id + 1),
-        start=1
-    ):
-
-        response = get_match_page(
+        row = database.get_match(
             schedule_id
         )
 
+        return row is not None
 
-        if response is not None:
+    except Exception:
 
-            text = response.text
-
-
-            # -------------------------------------------------
-            # 실제 경기 페이지인지 확인
-            # -------------------------------------------------
-
-            has_match_data = (
-
-                "homeTeam"
-                in text
-
-                or
-
-                "home_team"
-                in text
-
-                or
-
-                "homeTeamName"
-                in text
-
-                or
-
-                "HomeTeam"
-                in text
-
-            )
-
-
-            if has_match_data:
-
-                match = parse_match_info(
-                    text,
-                    schedule_id
-                )
-
-
-                # -------------------------------------------------
-                # 완료 경기만
-                # -------------------------------------------------
-
-                if (
-
-                    match["home_team"]
-
-                    and
-
-                    match["away_team"]
-
-                    and
-
-                    match["result"]
-
-                ):
-
-                    found.append(match)
-
-
-                    if log_callback:
-
-                        log_callback(
-                            f"발견: "
-                            f'{schedule_id} | '
-                            f'{match["home_team"]} '
-                            f'vs '
-                            f'{match["away_team"]} | '
-                            f'{match["result"]}'
-                        )
-
-
-        if progress_callback:
-
-            progress_callback(
-                index / total
-            )
-
-
-        if delay > 0:
-
-            time.sleep(delay)
-
-
-    return found
+        return False
 
 
 # =========================================================
-# 날짜 필터
+# ID 하나 수집
 # =========================================================
 
-def date_in_range(
-    match_date,
-    start_date,
-    end_date
+def collect_one(
+    schedule_id
 ):
 
-    if not match_date:
+    # -----------------------------------------------------
+    # 기존 DB에 있으면 건너뜀
+    # -----------------------------------------------------
 
-        return True
+    if match_exists(
+        schedule_id
+    ):
+
+        return {
+
+            "status":
+                "exists",
+
+            "odds":
+                0
+
+        }
 
 
     # -----------------------------------------------------
-    # 날짜 문자열에서 YYYY-MM-DD 추출
+    # 경기 페이지
     # -----------------------------------------------------
 
-    match = re.search(
-        r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})",
-        match_date
+    html = get_match_page(
+        schedule_id
+    )
+
+
+    if not html:
+
+        return {
+
+            "status":
+                "skip",
+
+            "odds":
+                0
+
+        }
+
+
+    # -----------------------------------------------------
+    # 경기정보
+    # -----------------------------------------------------
+
+    match = parse_match_info(
+        html,
+        schedule_id
     )
 
 
     if not match:
 
-        return True
+        return {
+
+            "status":
+                "skip",
+
+            "odds":
+                0
+
+        }
 
 
-    try:
+    # -----------------------------------------------------
+    # 결과가 없는 진행중/예정 경기는 제외
+    # -----------------------------------------------------
 
-        current = datetime(
-            int(match.group(1)),
-            int(match.group(2)),
-            int(match.group(3))
-        ).date()
+    if match["result"] not in [
+
+        "승",
+        "무",
+        "패"
+
+    ]:
+
+        return {
+
+            "status":
+                "skip",
+
+            "odds":
+                0
+
+        }
 
 
-        return (
-            start_date
-            <=
-            current
-            <=
-            end_date
-        )
+    # -----------------------------------------------------
+    # 배당
+    # -----------------------------------------------------
 
-    except Exception:
+    odds_list = get_odds(
+        schedule_id
+    )
 
-        return True
+
+    if not odds_list:
+
+        return {
+
+            "status":
+                "skip",
+
+            "odds":
+                0
+
+        }
+
+
+    # -----------------------------------------------------
+    # 저장
+    # -----------------------------------------------------
+
+    save_match_data(
+        match,
+        odds_list
+    )
+
+
+    return {
+
+        "status":
+            "success",
+
+        "odds":
+            len(odds_list)
+
+    }
 
 
 # =========================================================
-# 자동 DB 구축
+# 진행률 수집
 # =========================================================
 
 def build_database_progress(
-
     start_id,
-
     end_id,
-
     progress_callback=None,
-
     log_callback=None,
-
     delay=0.5
-
 ):
 
     database.init_database()
@@ -889,21 +780,17 @@ def build_database_progress(
 
     if end_id < start_id:
 
-        return {
-
-            "success": 0,
-
-            "failed": 0,
-
-            "odds": 0,
-
-            "found": 0
-
-        }
+        raise ValueError(
+            "end_id가 start_id보다 작습니다."
+        )
 
 
-    existing_ids = (
-        get_existing_ids()
+    total = (
+        end_id
+        -
+        start_id
+        +
+        1
     )
 
 
@@ -911,16 +798,9 @@ def build_database_progress(
 
     failed = 0
 
-    odds_count = 0
+    odds_total = 0
 
-    found = 0
-
-
-    total = (
-        end_id -
-        start_id +
-        1
-    )
+    exists = 0
 
 
     for index, schedule_id in enumerate(
@@ -934,176 +814,83 @@ def build_database_progress(
 
     ):
 
-        sid = str(
-            schedule_id
-        )
-
-
-        # -----------------------------------------------------
-        # 이미 존재
-        # -----------------------------------------------------
-
-        if sid in existing_ids:
-
-            if progress_callback:
-
-                progress_callback(
-                    index / total
-                )
-
-            continue
-
 
         try:
 
-            # -------------------------------------------------
-            # 경기 페이지
-            # -------------------------------------------------
-
-            response = get_match_page(
+            result = collect_one(
                 schedule_id
             )
 
 
-            if response is None:
-
-                failed += 1
-
-                continue
-
-
-            # -------------------------------------------------
-            # 경기 파싱
-            # -------------------------------------------------
-
-            match = parse_match_info(
-
-                response.text,
-
-                schedule_id
-
+            status = result.get(
+                "status",
+                "skip"
             )
 
 
-            # -------------------------------------------------
-            # 경기 아닌 ID
-            # -------------------------------------------------
+            if status == "success":
 
-            if not match["home_team"]:
+                success += 1
 
-                failed += 1
-
-                continue
-
-
-            if not match["away_team"]:
-
-                failed += 1
-
-                continue
-
-
-            # -------------------------------------------------
-            # 완료 경기만 저장
-            # -------------------------------------------------
-
-            if match["result"] not in [
-
-                "승",
-                "무",
-                "패"
-
-            ]:
-
-                failed += 1
-
-                continue
-
-
-            found += 1
-
-
-            # -------------------------------------------------
-            # 배당
-            # -------------------------------------------------
-
-            odds_list = (
-                get_scoreman_odds(
-                    schedule_id
+                odds_total += int(
+                    result.get(
+                        "odds",
+                        0
+                    )
+                    or 0
                 )
-            )
 
 
-            # -------------------------------------------------
-            # 저장
-            # -------------------------------------------------
+                if log_callback:
 
-            save_match_data(
-
-                match,
-
-                odds_list
-
-            )
+                    log_callback(
+                        f"[성공] "
+                        f"ID {schedule_id} "
+                        f"/ 업체 "
+                        f"{result.get('odds', 0)}"
+                    )
 
 
-            success += 1
+            elif status == "exists":
 
-            odds_count += len(
-                odds_list
-            )
+                exists += 1
 
+            else:
 
-            existing_ids.add(
-                sid
-            )
-
-
-            if log_callback:
-
-                log_callback(
-
-                    f"저장 완료 | "
-                    f"{sid} | "
-                    f"{match['home_team']} "
-                    f"vs "
-                    f"{match['away_team']} | "
-                    f"{match['result']} | "
-                    f"배당 {len(odds_list)}개"
-
-                )
+                failed += 1
 
 
         except Exception as e:
 
             failed += 1
 
-
             if log_callback:
 
                 log_callback(
-
-                    f"오류 | "
-                    f"{sid} | "
-                    f"{e}"
-
+                    f"[오류] ID {schedule_id}: {e}"
                 )
 
 
-        finally:
+        # -------------------------------------------------
+        # 진행률
+        # -------------------------------------------------
 
-            if progress_callback:
+        if progress_callback:
 
-                progress_callback(
-                    index / total
-                )
+            progress_callback(
+                index / total
+            )
 
 
-            if delay > 0:
+        # -------------------------------------------------
+        # 서버 부하 방지
+        # -------------------------------------------------
 
-                time.sleep(
-                    delay
-                )
+        if delay:
+
+            time.sleep(
+                delay
+            )
 
 
     return {
@@ -1114,108 +901,20 @@ def build_database_progress(
         "failed":
             failed,
 
-        "odds":
-            odds_count,
+        "exists":
+            exists,
 
-        "found":
-            found
+        "odds":
+            odds_total,
+
+        "total":
+            total
 
     }
 
 
 # =========================================================
-# 2020~2026 자동 수집
-# =========================================================
-#
-# 주의:
-# Scoreman의 내부 경기 ID는 날짜 ID가 아니므로
-# 2020~2026 전체를 직접 날짜로 변환할 수 없다.
-#
-# 따라서 현재 알려진 ID 범위를 탐색하는 방식으로
-# 구현한다.
-# =========================================================
-
-def auto_collect_scoreman(
-
-    start_id,
-
-    end_id,
-
-    progress_callback=None,
-
-    log_callback=None,
-
-    delay=0.5
-
-):
-
-    return build_database_progress(
-
-        start_id,
-
-        end_id,
-
-        progress_callback=
-            progress_callback,
-
-        log_callback=
-            log_callback,
-
-        delay=delay
-
-    )
-
-
-# =========================================================
-# ID 자동 범위 확장
-# =========================================================
-
-def scan_id_range(
-
-    center_id,
-
-    radius,
-
-    progress_callback=None,
-
-    log_callback=None,
-
-    delay=0.3
-
-):
-
-    start_id = max(
-        1,
-        int(center_id) -
-        int(radius)
-    )
-
-
-    end_id = (
-        int(center_id) +
-        int(radius)
-    )
-
-
-    return find_scoreman_ids(
-
-        start_id,
-
-        end_id,
-
-        progress_callback=
-            progress_callback,
-
-        log_callback=
-            log_callback,
-
-        delay=delay
-
-    )
-
-
-# =========================================================
-# 테스트
+# 간단 실행
 # =========================================================
 
 if __name__ == "__main__":
@@ -1224,44 +923,64 @@ if __name__ == "__main__":
 
 
     print(
-        "================================"
+        "스코어맨 과거 DB 수집"
     )
 
-    print(
-        "Scoreman DB 수집 테스트"
+
+    start_id = int(
+        input(
+            "시작 ID: "
+        )
     )
 
-    print(
-        "DB:",
-        database.DB_FILE
-    )
 
-    print(
-        "현재 경기:",
-        database.get_match_count()
-    )
-
-    print(
-        "현재 배당:",
-        database.get_odds_count()
-    )
-
-    print(
-        "================================"
+    end_id = int(
+        input(
+            "마지막 ID: "
+        )
     )
 
 
     result = build_database_progress(
 
-        2716480,
+        start_id,
 
-        2716580,
+        end_id,
 
-        delay=0.5
+        log_callback=
+            print
 
     )
 
 
     print(
-        result
-        )
+        "\n=========================="
+    )
+
+    print(
+        "수집 완료"
+    )
+
+    print(
+        "성공:",
+        result["success"]
+    )
+
+    print(
+        "실패:",
+        result["failed"]
+    )
+
+    print(
+        "기존:",
+        result["exists"]
+    )
+
+    print(
+        "배당 업체:",
+        result["odds"]
+    )
+
+    print(
+        "=========================="
+            )
