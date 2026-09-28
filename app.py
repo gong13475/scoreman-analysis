@@ -18,7 +18,12 @@ st.set_page_config(
     layout="wide"
 )
 
-database.init_database()
+try:
+    database.init_database()
+except Exception as e:
+    st.error("DATABASE 오류")
+    st.code(str(e))
+    st.stop()
 
 BASE_URL = "https://www.scoreman123.com"
 
