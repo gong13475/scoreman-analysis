@@ -926,8 +926,8 @@ if matches:
             "결과":
                 match["result"],
 
-            "출처":
-                match.get("source", "Scoreman")
+           "출처":
+    match["source"] if "source" in match.keys() else "Scoreman"
 
         })
 
