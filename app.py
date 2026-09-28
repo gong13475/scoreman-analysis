@@ -765,3 +765,59 @@ st.caption(
     "현재는 구조 분석 단계입니다. "
     "실제 배당 요청 주소 확인 후 자동 저장 기능을 연결합니다."
 )
+# ==========================================
+# 스코어맨 실제 배당 API 테스트
+# ==========================================
+
+st.divider()
+
+st.subheader("🎯 스코어맨 실제 배당 API 테스트")
+
+if st.button("실제 배당 JSON 가져오기"):
+
+    api_url = (
+        "https://www.scoreman123.com/"
+        "ajax/soccerajax"
+    )
+
+    params = {
+        "type": 14,
+        "t": 1,
+        "id": 2929675,
+        "h": 0
+    }
+
+    try:
+
+        response = requests.get(
+            api_url,
+            params=params,
+            headers=HEADERS,
+            timeout=30
+        )
+
+        st.write(
+            "HTTP 상태:",
+            response.status_code
+        )
+
+        st.write(
+            "요청 URL:",
+            response.url
+        )
+
+        st.write(
+            "응답 크기:",
+            len(response.text)
+        )
+
+        st.code(
+            response.text[:20000],
+            language="json"
+        )
+
+    except Exception as e:
+
+        st.error(
+            f"오류: {e}"
+        )
