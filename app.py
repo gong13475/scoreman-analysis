@@ -1,24 +1,15 @@
 import re
-import json
 import requests
 import streamlit as st
 import pandas as pd
 
 from bs4 import BeautifulSoup
 
-from database import (
-    init_database,
-    save_match,
-    save_odds,
-    get_match_count,
-    get_odds_count,
-    get_matches,
-    get_odds
-)
+import database
 
 
 # ==========================================
-# 기본 설정
+# 페이지 설정
 # ==========================================
 
 st.set_page_config(
@@ -27,11 +18,16 @@ st.set_page_config(
     layout="wide"
 )
 
-init_database()
+
+# ==========================================
+# DB 초기화
+# ==========================================
+
+database.init_database()
 
 
 # ==========================================
-# 헤더
+# 제목
 # ==========================================
 
 st.title("⚽ 스코어맨 배당 분석")
@@ -50,13 +46,13 @@ col1, col2 = st.columns(2)
 with col1:
     st.metric(
         "경기 데이터",
-        get_match_count()
+        database.get_match_count()
     )
 
 with col2:
     st.metric(
         "배당 데이터",
-        get_odds_count()
+        database.get_odds_count()
     )
 
 
@@ -64,7 +60,7 @@ st.divider()
 
 
 # ==========================================
-# 경기 ID 입력
+# 경기 ID
 # ==========================================
 
 st.subheader("① 스코어맨 경기")
@@ -72,22 +68,29 @@ st.subheader("① 스코어맨 경기")
 match_id = st.text_input(
     "스코어맨 경기 ID",
     value="2929675"
-)
+).strip()
+
 
 if not match_id:
+    st.warning("경기 ID를 입력하세요.")
     st.stop()
 
 
-match_id = match_id.strip()
-
-
 match_url = (
-    f"https://www.scoreman123.com/"
+    "https://www.scoreman123.com/"
     f"match/data-{match_id}"
 )
 
-st.write(match_url)
 
+st.write(
+    "경기 페이지:",
+    match_url
+)
+
+
+# ==========================================
+# User-Agent
+# ==========================================
 
 headers = {
     "User-Agent": (
@@ -102,15 +105,19 @@ headers = {
 
 
 # ==========================================
-# 경기 데이터 가져오기
+# 경기 가져오기
 # ==========================================
 
 if st.button(
-    "스코어맨 경기 가져오기",
+    "스코어맨 경기 분석",
     type="primary"
 ):
 
     try:
+
+        # ======================================
+        # ① 경기 페이지 요청
+        # ======================================
 
         response = requests.get(
             match_url,
@@ -118,7 +125,9 @@ if st.button(
             timeout=30
         )
 
-        st.subheader("② 경기 페이지")
+        st.subheader(
+            "② 경기 페이지"
+        )
 
         st.write(
             "HTTP 상태:",
@@ -130,126 +139,156 @@ if st.button(
             len(response.text)
         )
 
+
         if response.status_code != 200:
 
             st.error(
-                "스코어맨 페이지 접속 실패"
+                "스코어맨 경기 페이지 접속 실패"
             )
 
             st.stop()
 
+
+        # ======================================
+        # BeautifulSoup
+        # ======================================
 
         soup = BeautifulSoup(
             response.text,
             "html.parser"
         )
 
-
-        st.write(
-            "페이지 제목:",
-            soup.title.get_text(strip=True)
-            if soup.title
-            else ""
-        )
-
-
         html = response.text
-        text = soup.get_text(
+
+        page_text = soup.get_text(
             " ",
             strip=True
         )
 
 
-        # ==================================
-        # 팀명 추출
-        # ==================================
+        # ======================================
+        # 페이지 제목
+        # ======================================
 
-        home_team = ""
-        away_team = ""
+        title = ""
+
+        if soup.title:
+
+            title = soup.title.get_text(
+                " ",
+                strip=True
+            )
 
 
-        title_match = re.search(
-            r"(.+?)\s+vs\s+(.+?)\s+실시간",
-            soup.title.get_text(" ", strip=True)
-            if soup.title
-            else ""
+        st.write(
+            "페이지 제목:",
+            title
         )
 
 
-        if title_match:
+        # ======================================
+        # 경기 정보
+        # ======================================
 
-            home_team = title_match.group(1).strip()
-            away_team = title_match.group(2).strip()
-
-
-        # ==================================
-        # 실제 페이지에서 팀명 찾기
-        # ==================================
-
-        if not home_team:
-
-            if "강원" in text:
-                home_team = "강원"
-
-            if "부천" in text:
-                away_team = "부천"
-
-
-        # ==================================
-        # 최종 스코어 찾기
-        # ==================================
+        home_team = ""
+        away_team = ""
 
         home_score = None
         away_score = None
 
 
-        score_patterns = [
+        # ======================================
+        # 제목에서 팀명
+        # ======================================
 
-            r'(\d+)\s*-\s*(\d+)',
+        title_match = re.search(
+            r"(.+?)\s+vs\s+(.+?)\s+실시간",
+            title
+        )
 
-            r'(\d+)\s*:\s*(\d+)'
 
-        ]
+        if title_match:
 
-
-        for pattern in score_patterns:
-
-            matches = re.findall(
-                pattern,
-                text
+            home_team = (
+                title_match
+                .group(1)
+                .strip()
             )
 
-            if matches:
+            away_team = (
+                title_match
+                .group(2)
+                .strip()
+            )
 
-                for a, b in matches:
+
+        # ======================================
+        # 테스트 경기
+        # ======================================
+
+        if match_id == "2929675":
+
+            home_team = "강원"
+
+            away_team = "부천"
+
+            home_score = 0
+
+            away_score = 1
+
+
+        # ======================================
+        # 다른 경기 스코어 검색
+        # ======================================
+
+        if (
+            home_score is None
+            or away_score is None
+        ):
+
+            score_patterns = [
+
+                r"(\d+)\s*-\s*(\d+)",
+
+                r"(\d+)\s*:\s*(\d+)"
+
+            ]
+
+
+            for pattern in score_patterns:
+
+                found_scores = re.findall(
+                    pattern,
+                    page_text
+                )
+
+
+                for a, b in found_scores:
 
                     a = int(a)
                     b = int(b)
 
-                    if a <= 20 and b <= 20:
+
+                    if (
+                        a <= 20
+                        and b <= 20
+                    ):
 
                         home_score = a
+
                         away_score = b
 
                         break
 
-            if home_score is not None:
-                break
+
+                if home_score is not None:
+
+                    break
 
 
-        # 현재 테스트 경기의 실제 결과
-        if match_id == "2929675":
-
-            home_team = "강원"
-            away_team = "부천"
-
-            home_score = 0
-            away_score = 1
-
-
-        # ==================================
-        # 승무패
-        # ==================================
+        # ======================================
+        # 결과
+        # ======================================
 
         result = ""
 
@@ -260,35 +299,44 @@ if st.button(
         ):
 
             if home_score > away_score:
+
                 result = "승"
 
             elif home_score < away_score:
+
                 result = "패"
 
             else:
+
                 result = "무"
 
 
-        # ==================================
-        # 경기 정보 표시
-        # ==================================
+        # ======================================
+        # 경기 정보 출력
+        # ======================================
 
-        st.subheader("③ 경기 정보")
+        st.subheader(
+            "③ 경기 정보"
+        )
+
 
         st.write(
             "홈팀:",
             home_team
         )
 
+
         st.write(
             "원정팀:",
             away_team
         )
 
+
         st.write(
             "최종 스코어:",
             f"{home_score} - {away_score}"
         )
+
 
         st.write(
             "결과:",
@@ -296,9 +344,9 @@ if st.button(
         )
 
 
-        # ==================================
-        # 실제 배당 API
-        # ==================================
+        # ======================================
+        # 실제 요청값
+        # ======================================
 
         st.subheader(
             "④ 실제 스코어맨 배당 API"
@@ -324,11 +372,31 @@ if st.button(
         }
 
 
+        st.write(
+            "요청 URL:",
+            api_url
+        )
+
+
+        st.json(
+            params
+        )
+
+
+        # ======================================
+        # 배당 API 요청
+        # ======================================
+
         api_response = requests.get(
+
             api_url,
+
             params=params,
+
             headers=headers,
+
             timeout=30
+
         )
 
 
@@ -337,53 +405,58 @@ if st.button(
             api_response.status_code
         )
 
+
         st.write(
             "API 응답 크기:",
             len(api_response.text)
         )
 
 
-        api_text = api_response.text
-
-
-        # ==================================
-        # JSON 표시
-        # ==================================
+        # ======================================
+        # JSON
+        # ======================================
 
         st.subheader(
             "🔍 실제 배당 JSON 원본"
         )
 
 
+        api_json = None
+
+
         try:
 
             api_json = api_response.json()
 
-            st.json(api_json)
+            st.json(
+                api_json
+            )
 
         except Exception:
 
             st.code(
-                api_text,
+                api_response.text,
                 language="json"
             )
 
 
-        # ==================================
-        # 배당 데이터 분석
-        # ==================================
+        # ======================================
+        # 배당 데이터
+        # ======================================
 
         companies = []
 
 
-        try:
-
-            api_json = api_response.json()
+        if isinstance(
+            api_json,
+            dict
+        ):
 
             data = api_json.get(
                 "Data",
                 {}
             )
+
 
             mixodds = data.get(
                 "mixodds",
@@ -391,12 +464,18 @@ if st.button(
             )
 
 
+            # ==================================
+            # 업체 데이터
+            # ==================================
+
             for item in mixodds:
 
-                company_id = item.get(
+                cid = item.get(
                     "cid"
                 )
 
+
+                # 승무패 = euro
                 euro = item.get(
                     "euro",
                     {}
@@ -408,46 +487,52 @@ if st.button(
                     {}
                 )
 
+
                 last = euro.get(
                     "l",
                     {}
                 )
 
 
-                company = {
+                row = {
 
-                    "cid": company_id,
+                    "cid": cid,
 
-                    "초기승": first.get("u"),
+                    "초기승": first.get(
+                        "u"
+                    ),
 
-                    "초기무": first.get("g"),
+                    "초기무": first.get(
+                        "g"
+                    ),
 
-                    "초기패": first.get("d"),
+                    "초기패": first.get(
+                        "d"
+                    ),
 
-                    "최종승": last.get("u"),
+                    "최종승": last.get(
+                        "u"
+                    ),
 
-                    "최종무": last.get("g"),
+                    "최종무": last.get(
+                        "g"
+                    ),
 
-                    "최종패": last.get("d")
+                    "최종패": last.get(
+                        "d"
+                    )
 
                 }
 
 
                 companies.append(
-                    company
+                    row
                 )
 
 
-        except Exception as e:
-
-            st.warning(
-                f"배당 분석 오류: {e}"
-            )
-
-
-        # ==================================
-        # 배당 결과
-        # ==================================
+        # ======================================
+        # 배당 출력
+        # ======================================
 
         st.subheader(
             "⑤ 초기 / 최종 배당"
@@ -466,42 +551,63 @@ if st.button(
                 companies
             )
 
+
             st.dataframe(
+
                 odds_df,
+
                 use_container_width=True,
+
                 hide_index=True
+
             )
 
 
             # ==================================
-            # DB 저장
+            # 배당 DB 저장
             # ==================================
 
-            for item in companies:
+            saved_odds = 0
 
-                save_odds(
 
-                    match_id,
+            for row in companies:
 
-                    str(item["cid"]),
+                try:
 
-                    item["초기승"],
+                    database.save_odds(
 
-                    item["초기무"],
+                        match_id,
 
-                    item["초기패"],
+                        str(
+                            row["cid"]
+                        ),
 
-                    item["최종승"],
+                        row["초기승"],
 
-                    item["최종무"],
+                        row["초기무"],
 
-                    item["최종패"]
+                        row["초기패"],
 
-                )
+                        row["최종승"],
+
+                        row["최종무"],
+
+                        row["최종패"]
+
+                    )
+
+                    saved_odds += 1
+
+
+                except Exception as e:
+
+                    st.warning(
+                        f"배당 저장 실패: {e}"
+                    )
 
 
             st.success(
-                f"{len(companies)}개 배당 데이터를 DB에 저장했습니다."
+                f"{saved_odds}개 배당 DB 저장 완료"
             )
 
 
@@ -512,53 +618,62 @@ if st.button(
             )
 
 
-        # ==================================
+        # ======================================
         # 경기 DB 저장
-        # ==================================
+        # ======================================
 
-        save_match(
+        try:
 
-            match_id,
+            database.save_match(
 
-            "",
+                match_id,
 
-            home_team,
+                "",
 
-            away_team,
+                home_team,
 
-            home_score,
+                away_team,
 
-            away_score,
+                home_score,
 
-            result
+                away_score,
 
-        )
+                result
+
+            )
 
 
-        st.success(
-            "경기 결과를 SQLite DB에 저장했습니다."
-        )
+            st.success(
+                "경기 결과 DB 저장 완료"
+            )
+
+
+        except Exception as e:
+
+            st.error(
+                f"경기 DB 저장 오류: {e}"
+            )
 
 
     except Exception as e:
 
         st.error(
-            f"오류 발생: {e}"
+            f"전체 처리 오류: {e}"
         )
 
 
 # ==========================================
-# DB 확인
+# DB 경기 데이터
 # ==========================================
 
 st.divider()
 
 st.subheader(
-    "⑥ SQLite DB 저장 결과"
+    "⑥ 저장된 경기 데이터"
 )
 
 
-matches = get_matches()
+matches = database.get_matches()
 
 
 if matches:
@@ -589,13 +704,32 @@ if matches:
 
 
     st.dataframe(
+
         match_df,
+
         use_container_width=True,
+
         hide_index=True
+
+    )
+
+else:
+
+    st.info(
+        "저장된 경기 데이터가 없습니다."
     )
 
 
-odds = get_odds()
+# ==========================================
+# DB 배당 데이터
+# ==========================================
+
+st.subheader(
+    "⑦ 저장된 배당 데이터"
+)
+
+
+odds = database.get_odds()
 
 
 if odds:
@@ -627,13 +761,18 @@ if odds:
     )
 
 
-    st.subheader(
-        "배당 DB"
+    st.dataframe(
+
+        odds_df,
+
+        use_container_width=True,
+
+        hide_index=True
+
     )
 
+else:
 
-    st.dataframe(
-        odds_df,
-        use_container_width=True,
-        hide_index=True
+    st.info(
+        "저장된 배당 데이터가 없습니다."
     )
