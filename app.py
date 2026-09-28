@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+from bs4 import BeautifulSoup
 
 from database import (
     create_database,
@@ -32,12 +33,6 @@ create_database()
 st.title("⚽ 스코어맨 배당 분석")
 
 
-st.write(
-    "스코어맨 경기 데이터를 수집하여 "
-    "초기배당·최종배당·실제결과를 분석합니다."
-)
-
-
 # ==========================================
 # DB 현황
 # ==========================================
@@ -68,13 +63,15 @@ st.divider()
 
 
 # ==========================================
-# 스코어맨 접속 테스트
+# 스코어맨 HTML 확인
 # ==========================================
 
-st.subheader("스코어맨 연결 테스트")
+st.subheader(
+    "스코어맨 데이터 확인"
+)
 
 
-if st.button("스코어맨 접속 확인"):
+if st.button("스코어맨 경기 데이터 확인"):
 
     url = (
         "https://www.scoreman123.com/"
@@ -93,6 +90,7 @@ if st.button("스코어맨 접속 확인"):
             "Mobile Safari/537.36"
         )
     }
+
 
     try:
 
@@ -115,23 +113,131 @@ if st.button("스코어맨 접속 확인"):
         )
 
 
-        if response.ok:
+        # ======================================
+        # HTML 분석
+        # ======================================
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+
+        # 모든 링크 찾기
+
+        links = soup.find_all("a")
+
+
+        st.write(
+            "페이지 링크 수:",
+            len(links)
+        )
+
+
+        # ======================================
+        # 경기 관련 링크 검색
+        # ======================================
+
+        match_links = []
+
+
+        for link in links:
+
+            href = link.get(
+                "href"
+            )
+
+
+            text = link.get_text(
+                " ",
+                strip=True
+            )
+
+
+            if not href:
+
+                continue
+
+
+            lower_href = href.lower()
+
+
+            if (
+                "match" in lower_href
+                or
+                "analysis" in lower_href
+                or
+                "football" in lower_href
+            ):
+
+                match_links.append({
+
+                    "text": text,
+
+                    "url": href
+
+                })
+
+
+        st.write(
+            "경기 관련 링크:",
+            len(match_links)
+        )
+
+
+        # ======================================
+        # 최대 30개 표시
+        # ======================================
+
+        if match_links:
 
             st.success(
-                "스코어맨 서버 접속 성공"
+                "경기 관련 링크를 찾았습니다."
             )
+
+
+            for item in match_links[:30]:
+
+                st.write(
+                    item["text"]
+                )
+
+                st.code(
+                    item["url"]
+                )
+
 
         else:
 
-            st.error(
-                "스코어맨 접속 실패"
+            st.warning(
+                "HTML에서 경기 링크가 발견되지 않았습니다."
             )
+
+
+        # ======================================
+        # 페이지 텍스트 확인
+        # ======================================
+
+        st.subheader(
+            "페이지 텍스트 일부"
+        )
+
+
+        page_text = soup.get_text(
+            " ",
+            strip=True
+        )
+
+
+        st.text(
+            page_text[:5000]
+        )
 
 
     except Exception as e:
 
         st.error(
-            f"접속 오류: {e}"
+            f"오류: {e}"
         )
 
 
@@ -139,34 +245,10 @@ st.divider()
 
 
 # ==========================================
-# 데이터 수집 준비
+# 다음 단계
 # ==========================================
 
-st.subheader(
-    "데이터 수집"
-)
-
-
 st.info(
-    "현재는 연결 테스트 단계입니다. "
-    "실제 경기 데이터 구조를 확인한 후 "
-    "자동 저장 기능을 연결합니다."
-)
-
-
-st.write(
-    """
-    다음 단계에서 수집합니다.
-
-    • 경기일시
-    • 국가
-    • 리그
-    • 홈팀
-    • 원정팀
-    • 초기 승/무/패 배당
-    • 최종 승/무/패 배당
-    • 배당 변동
-    • 홈/원정 득점
-    • 실제 승/무/패 결과
-    """
+    "이 단계에서는 데이터를 DB에 저장하지 않습니다. "
+    "먼저 실제 경기 링크와 페이지 구조를 확인합니다."
 )
