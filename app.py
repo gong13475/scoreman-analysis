@@ -1340,7 +1340,653 @@ if st.button(
 
 
     col1, col2 = st.columns(2)
+# =========================================================
+# 사용자 배당 입력 분석
+# =========================================================
 
+st.divider()
+
+st.header("🎯 배당 입력 → 과거 경기 자동 분석")
+
+st.caption(
+    "입력한 승/무/패 배당과 비슷한 과거 경기의 실제 결과를 분석합니다."
+)
+
+
+# =========================================================
+# 배당 입력
+# =========================================================
+
+col1, col2, col3 = st.columns(3)
+
+
+with col1:
+
+    input_home = st.number_input(
+        "승 배당",
+        min_value=1.01,
+        max_value=100.0,
+        value=1.65,
+        step=0.01,
+        format="%.2f"
+    )
+
+
+with col2:
+
+    input_draw = st.number_input(
+        "무 배당",
+        min_value=1.01,
+        max_value=100.0,
+        value=3.70,
+        step=0.01,
+        format="%.2f"
+    )
+
+
+with col3:
+
+    input_away = st.number_input(
+        "패 배당",
+        min_value=1.01,
+        max_value=100.0,
+        value=5.20,
+        step=0.01,
+        format="%.2f"
+    )
+
+
+# =========================================================
+# 분석 버튼
+# =========================================================
+
+if st.button(
+    "🔎 과거 배당 분석",
+    type="primary",
+    use_container_width=True
+):
+
+    # -----------------------------------------------------
+    # 전체 DB
+    # -----------------------------------------------------
+
+    try:
+
+        analysis_data = (
+            analysis.get_all_analysis_data()
+        )
+
+    except Exception as e:
+
+        st.error(
+            "분석 데이터를 불러오지 못했습니다."
+        )
+
+        st.code(
+            str(e)
+        )
+
+        st.stop()
+
+
+    if analysis_data.empty:
+
+        st.warning(
+            "분석할 과거 경기 데이터가 없습니다."
+        )
+
+        st.stop()
+
+
+    # -----------------------------------------------------
+    # 배당 차이
+    # -----------------------------------------------------
+
+    analysis_data = analysis_data.copy()
+
+
+    analysis_data["승차이"] = abs(
+        analysis_data["initial_home"]
+        -
+        input_home
+    )
+
+
+    analysis_data["무차이"] = abs(
+        analysis_data["initial_draw"]
+        -
+        input_draw
+    )
+
+
+    analysis_data["패차이"] = abs(
+        analysis_data["initial_away"]
+        -
+        input_away
+    )
+
+
+    # -----------------------------------------------------
+    # 종합 배당 차이
+    # -----------------------------------------------------
+
+    analysis_data["총차이"] = (
+
+        analysis_data["승차이"] +
+
+        analysis_data["무차이"] +
+
+        analysis_data["패차이"]
+
+    )
+
+
+    # -----------------------------------------------------
+    # 비슷한 경기 찾기
+    # -----------------------------------------------------
+
+    tolerance = st.session_state.get(
+        "odds_tolerance",
+        0.10
+    )
+
+
+    similar = analysis_data[
+
+        (analysis_data["승차이"] <= tolerance)
+
+        &
+
+        (analysis_data["무차이"] <= tolerance)
+
+        &
+
+        (analysis_data["패차이"] <= tolerance)
+
+    ].copy()
+
+
+    # -----------------------------------------------------
+    # 결과가 너무 적으면 범위 확대
+    # -----------------------------------------------------
+
+    used_tolerance = tolerance
+
+
+    if len(similar) < 10:
+
+        used_tolerance = 0.20
+
+
+        similar = analysis_data[
+
+            (analysis_data["승차이"] <= 0.20)
+
+            &
+
+            (analysis_data["무차이"] <= 0.20)
+
+            &
+
+            (analysis_data["패차이"] <= 0.20)
+
+        ].copy()
+
+
+    if len(similar) < 10:
+
+        used_tolerance = 0.30
+
+
+        similar = analysis_data[
+
+            (analysis_data["승차이"] <= 0.30)
+
+            &
+
+            (analysis_data["무차이"] <= 0.30)
+
+            &
+
+            (analysis_data["패차이"] <= 0.30)
+
+        ].copy()
+
+
+    # -----------------------------------------------------
+    # 결과 없음
+    # -----------------------------------------------------
+
+    if similar.empty:
+
+        st.warning(
+            "입력한 배당과 비슷한 과거 경기가 없습니다."
+        )
+
+        st.info(
+            "과거 데이터를 더 많이 수집하면 분석 정확도가 높아집니다."
+        )
+
+        st.stop()
+
+
+    # -----------------------------------------------------
+    # 경기 중복 제거
+    # -----------------------------------------------------
+
+    similar = similar.drop_duplicates(
+        subset=["schedule_id"]
+    ).copy()
+
+
+    # -----------------------------------------------------
+    # 결과 통계
+    # -----------------------------------------------------
+
+    total = len(
+        similar
+    )
+
+
+    home_count = int(
+        (
+            similar["result"] ==
+            "승"
+        ).sum()
+    )
+
+
+    draw_count = int(
+        (
+            similar["result"] ==
+            "무"
+        ).sum()
+    )
+
+
+    away_count = int(
+        (
+            similar["result"] ==
+            "패"
+        ).sum()
+    )
+
+
+    home_percent = round(
+        home_count /
+        total *
+        100,
+        2
+    )
+
+
+    draw_percent = round(
+        draw_count /
+        total *
+        100,
+        2
+    )
+
+
+    away_percent = round(
+        away_count /
+        total *
+        100,
+        2
+    )
+
+
+    # =====================================================
+    # 결과 표시
+    # =====================================================
+
+    st.subheader(
+        "📊 과거 유사 배당 분석 결과"
+    )
+
+
+    st.info(
+        f"입력 배당: "
+        f"승 {input_home:.2f} / "
+        f"무 {input_draw:.2f} / "
+        f"패 {input_away:.2f}"
+    )
+
+
+    st.caption(
+        f"유사 배당 허용범위 ±{used_tolerance:.2f} "
+        f"| 분석 경기 {total}경기"
+    )
+
+
+    # -----------------------------------------------------
+    # 3개 결과
+    # -----------------------------------------------------
+
+    col1, col2, col3 = st.columns(3)
+
+
+    with col1:
+
+        st.metric(
+            "승",
+            f"{home_percent:.2f}%",
+            f"{home_count}경기"
+        )
+
+
+    with col2:
+
+        st.metric(
+            "무",
+            f"{draw_percent:.2f}%",
+            f"{draw_count}경기"
+        )
+
+
+    with col3:
+
+        st.metric(
+            "패",
+            f"{away_percent:.2f}%",
+            f"{away_count}경기"
+        )
+
+
+    # =====================================================
+    # 추천
+    # =====================================================
+
+    result_percent = {
+
+        "승":
+            home_percent,
+
+        "무":
+            draw_percent,
+
+        "패":
+            away_percent
+
+    }
+
+
+    recommendation = max(
+        result_percent,
+        key=result_percent.get
+    )
+
+
+    recommendation_percent = (
+        result_percent[
+            recommendation
+        ]
+    )
+
+
+    # -----------------------------------------------------
+    # 신뢰도
+    # -----------------------------------------------------
+
+    if total >= 100:
+
+        confidence = "높음"
+
+    elif total >= 50:
+
+        confidence = "보통"
+
+    elif total >= 20:
+
+        confidence = "낮음"
+
+    else:
+
+        confidence = "매우 낮음"
+
+
+    # -----------------------------------------------------
+    # 추천 표시
+    # -----------------------------------------------------
+
+    st.subheader(
+        "🎯 과거 통계 기준 결과"
+    )
+
+
+    if recommendation == "승":
+
+        st.success(
+            f"추천: **승** "
+            f"({recommendation_percent:.2f}%)"
+        )
+
+    elif recommendation == "무":
+
+        st.warning(
+            f"추천: **무** "
+            f"({recommendation_percent:.2f}%)"
+        )
+
+    else:
+
+        st.error(
+            f"추천: **패** "
+            f"({recommendation_percent:.2f}%)"
+        )
+
+
+    st.write(
+        f"분석 경기: **{total}경기**"
+    )
+
+    st.write(
+        f"신뢰도: **{confidence}**"
+    )
+
+
+    # =====================================================
+    # 입력 배당의 이론 확률
+    # =====================================================
+
+    st.subheader(
+        "📐 입력 배당의 이론 확률"
+    )
+
+
+    inverse_home = 1 / input_home
+
+    inverse_draw = 1 / input_draw
+
+    inverse_away = 1 / input_away
+
+
+    inverse_total = (
+
+        inverse_home +
+
+        inverse_draw +
+
+        inverse_away
+
+    )
+
+
+    market_home = round(
+        inverse_home /
+        inverse_total *
+        100,
+        2
+    )
+
+
+    market_draw = round(
+        inverse_draw /
+        inverse_total *
+        100,
+        2
+    )
+
+
+    market_away = round(
+        inverse_away /
+        inverse_total *
+        100,
+        2
+    )
+
+
+    market_col1, market_col2, market_col3 = (
+        st.columns(3)
+    )
+
+
+    with market_col1:
+
+        st.metric(
+            "배당 이론 승확률",
+            f"{market_home:.2f}%"
+        )
+
+
+    with market_col2:
+
+        st.metric(
+            "배당 이론 무확률",
+            f"{market_draw:.2f}%"
+        )
+
+
+    with market_col3:
+
+        st.metric(
+            "배당 이론 패확률",
+            f"{market_away:.2f}%"
+        )
+
+
+    # =====================================================
+    # 실제 DB 결과와 이론확률 비교
+    # =====================================================
+
+    st.subheader(
+        "📊 배당확률 vs 실제 과거결과"
+    )
+
+
+    comparison = pd.DataFrame({
+
+        "구분":
+            ["승", "무", "패"],
+
+        "배당 이론확률":
+            [
+                f"{market_home:.2f}%",
+                f"{market_draw:.2f}%",
+                f"{market_away:.2f}%"
+            ],
+
+        "과거 실제 확률":
+            [
+                f"{home_percent:.2f}%",
+                f"{draw_percent:.2f}%",
+                f"{away_percent:.2f}%"
+            ],
+
+        "실제 경기수":
+            [
+                home_count,
+                draw_count,
+                away_count
+            ]
+
+    })
+
+
+    st.dataframe(
+        comparison,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+    # =====================================================
+    # 유사 과거 경기
+    # =====================================================
+
+    st.subheader(
+        "📋 유사 배당 과거 경기"
+    )
+
+
+    display_columns = [
+
+        "schedule_id",
+
+        "match_date",
+
+        "home_team",
+
+        "away_team",
+
+        "initial_home",
+
+        "initial_draw",
+
+        "initial_away",
+
+        "result"
+
+    ]
+
+
+    available_columns = [
+
+        column
+
+        for column in display_columns
+
+        if column in similar.columns
+
+    ]
+
+
+    history_display = similar[
+        available_columns
+    ].copy()
+
+
+    history_display = (
+        history_display
+        .sort_values(
+            "match_date",
+            ascending=False
+        )
+        .head(100)
+    )
+
+
+    history_display.columns = [
+
+        "경기ID",
+        "날짜",
+        "홈팀",
+        "원정팀",
+        "승배당",
+        "무배당",
+        "패배당",
+        "실제결과"
+
+    ][:len(
+        history_display.columns
+    )]
+
+
+    st.dataframe(
+        history_display,
+        use_container_width=True,
+        hide_index=True
+    )
 
     with col1:
 
