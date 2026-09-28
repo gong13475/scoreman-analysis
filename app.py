@@ -926,7 +926,7 @@ if matches:
                 match["result"],
 
             "출처":
-                match["source"]
+                match.get("source", "Scoreman")
 
         })
 
