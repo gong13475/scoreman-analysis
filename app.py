@@ -478,3 +478,176 @@ if st.button("스코어맨 경기 구조 분석"):
         st.error(
             f"오류: {e}"
     )
+# ==========================================
+# 실제 배당 원본 확인
+# ==========================================
+
+import requests
+from bs4 import BeautifulSoup
+
+
+st.divider()
+
+st.subheader("실제 스코어맨 배당 원본 분석")
+
+
+if st.button("초기/최종 배당 원본 확인"):
+
+    url = (
+        "https://www.scoreman123.com/"
+        "match/data-2929675"
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Linux; Android 10) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/120.0 "
+            "Mobile Safari/537.36"
+        )
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=30
+        )
+
+        st.write(
+            "HTTP 상태:",
+            response.status_code
+        )
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+        html = response.text
+
+
+        # ==================================
+        # 배당 관련 키워드
+        # ==================================
+
+        keywords = [
+            "Bet365",
+            "Pinnacle",
+            "Macauslot",
+            "Crown",
+            "18Bet",
+            "First Odds",
+            "firstOdds",
+            "initial",
+            "Initial",
+            "初盘",
+            "终盘",
+            "初始",
+            "即时",
+            "Final",
+            "final"
+        ]
+
+
+        st.subheader(
+            "배당 관련 원본 위치"
+        )
+
+
+        # ==================================
+        # 키워드 주변 HTML 표시
+        # ==================================
+
+        for keyword in keywords:
+
+            position = html.find(
+                keyword
+            )
+
+            if position == -1:
+
+                continue
+
+
+            st.write(
+                f"### {keyword}"
+            )
+
+
+            start = max(
+                0,
+                position - 1500
+            )
+
+
+            end = min(
+                len(html),
+                position + 3000
+            )
+
+
+            context = html[
+                start:end
+            ]
+
+
+            st.code(
+                context,
+                language="html"
+            )
+
+
+        # ==================================
+        # 페이지 텍스트
+        # ==================================
+
+        text = soup.get_text(
+            " ",
+            strip=True
+        )
+
+
+        st.subheader(
+            "배당 페이지 텍스트"
+        )
+
+
+        # 배당이라는 단어 주변 표시
+
+        position = text.find(
+            "배당"
+        )
+
+
+        if position >= 0:
+
+            start = max(
+                0,
+                position - 2000
+            )
+
+            end = min(
+                len(text),
+                position + 5000
+            )
+
+            st.text(
+                text[start:end]
+            )
+
+        else:
+
+            st.warning(
+                "배당 텍스트 위치를 찾지 못했습니다."
+            )
+
+
+    except Exception as e:
+
+        st.error(
+            f"오류: {e}"
+        )
