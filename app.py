@@ -1076,3 +1076,283 @@ except Exception as e:
     st.code(
         str(e)
     )
+# =========================================================
+# 과거 경기 DB 구축
+# =========================================================
+
+st.divider()
+
+st.header("🗄️ 과거 스코어맨 DB 구축")
+
+st.caption(
+    "경기 ID 범위를 입력하여 완료된 경기의 결과와 1X2 배당을 DB에 저장합니다."
+)
+
+
+# ---------------------------------------------------------
+# build_database 불러오기
+# ---------------------------------------------------------
+
+try:
+
+    from build_database import build_database_progress
+
+except Exception as e:
+
+    st.error(
+        "build_database.py를 불러오지 못했습니다."
+    )
+
+    st.code(
+        str(e)
+    )
+
+    st.stop()
+
+
+# ---------------------------------------------------------
+# 경기 ID 입력
+# ---------------------------------------------------------
+
+col1, col2 = st.columns(2)
+
+
+with col1:
+
+    history_start_id = st.number_input(
+        "시작 경기 ID",
+        min_value=1,
+        value=2716480,
+        step=1
+    )
+
+
+with col2:
+
+    history_end_id = st.number_input(
+        "마지막 경기 ID",
+        min_value=1,
+        value=2716500,
+        step=1
+    )
+
+
+# ---------------------------------------------------------
+# 예상 수집 개수
+# ---------------------------------------------------------
+
+total_ids = (
+    history_end_id -
+    history_start_id +
+    1
+)
+
+
+if total_ids > 0:
+
+    st.info(
+        f"수집 대상 ID: {total_ids}개"
+    )
+
+
+# ---------------------------------------------------------
+# 너무 많은 ID 방지
+# ---------------------------------------------------------
+
+if total_ids > 1000:
+
+    st.warning(
+        "⚠️ 한 번에 1,000개 이상 수집하지 않는 것을 권장합니다."
+    )
+
+
+# ---------------------------------------------------------
+# 수집 버튼
+# ---------------------------------------------------------
+
+if st.button(
+    "📥 과거 경기 DB 수집",
+    type="primary",
+    use_container_width=True
+):
+
+    # -----------------------------------------------------
+    # ID 검사
+    # -----------------------------------------------------
+
+    if history_end_id < history_start_id:
+
+        st.error(
+            "마지막 경기 ID가 시작 경기 ID보다 작습니다."
+        )
+
+        st.stop()
+
+
+    # -----------------------------------------------------
+    # 진행률
+    # -----------------------------------------------------
+
+    progress = st.progress(
+        0
+    )
+
+
+    # -----------------------------------------------------
+    # 로그 표시
+    # -----------------------------------------------------
+
+    log_box = st.empty()
+
+    logs = []
+
+
+    def update_progress(value):
+
+        value = min(
+            max(
+                float(value),
+                0.0
+            ),
+            1.0
+        )
+
+        progress.progress(
+            value
+        )
+
+
+    def update_log(message):
+
+        logs.append(
+            message
+        )
+
+        # 최근 30개만 화면에 표시
+        log_box.code(
+            "\n".join(
+                logs[-30:]
+            ),
+            language="text"
+        )
+
+
+    # -----------------------------------------------------
+    # DB 수집
+    # -----------------------------------------------------
+
+    with st.spinner(
+        "스코어맨 과거 경기 데이터를 수집하고 있습니다..."
+    ):
+
+        try:
+
+            result = build_database_progress(
+
+                history_start_id,
+
+                history_end_id,
+
+                progress_callback=
+                    update_progress,
+
+                log_callback=
+                    update_log,
+
+                delay=0.5
+
+            )
+
+        except Exception as e:
+
+            st.error(
+                "과거 DB 수집 중 오류가 발생했습니다."
+            )
+
+            st.code(
+                str(e)
+            )
+
+            st.stop()
+
+
+    # -----------------------------------------------------
+    # 완료
+    # -----------------------------------------------------
+
+    progress.progress(
+        1.0
+    )
+
+
+    st.success(
+        "✅ 과거 DB 수집이 완료되었습니다."
+    )
+
+
+    # -----------------------------------------------------
+    # 결과
+    # -----------------------------------------------------
+
+    col1, col2, col3 = st.columns(3)
+
+
+    with col1:
+
+        st.metric(
+            "저장 성공 경기",
+            result.get(
+                "success",
+                0
+            )
+        )
+
+
+    with col2:
+
+        st.metric(
+            "실패 / 건너뜀",
+            result.get(
+                "failed",
+                0
+            )
+        )
+
+
+    with col3:
+
+        st.metric(
+            "저장 배당 업체",
+            result.get(
+                "odds",
+                0
+            )
+        )
+
+
+    # -----------------------------------------------------
+    # 현재 DB
+    # -----------------------------------------------------
+
+    st.subheader(
+        "📊 현재 DB 현황"
+    )
+
+
+    col1, col2 = st.columns(2)
+
+
+    with col1:
+
+        st.metric(
+            "전체 경기",
+            database.get_match_count()
+        )
+
+
+    with col2:
+
+        st.metric(
+            "전체 배당",
+            database.get_odds_count()
+    )
