@@ -651,3 +651,151 @@ if st.button("초기/최종 배당 원본 확인"):
         st.error(
             f"오류: {e}"
         )
+# ==========================================
+# 스코어맨 배당 JavaScript 분석
+# ==========================================
+
+import re
+
+
+st.divider()
+
+st.subheader(
+    "스코어맨 배당 요청 분석"
+)
+
+
+if st.button(
+    "배당 요청 주소 찾기"
+):
+
+    url = (
+        "https://www.scoreman123.com/"
+        "match/data-2929675"
+    )
+
+    headers = {
+
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Linux; Android 10) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/120.0 "
+            "Mobile Safari/537.36"
+        )
+    }
+
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=30
+        )
+
+
+        html = response.text
+
+
+        # ==================================
+        # callOddsDetailWin 위치
+        # ==================================
+
+        keyword = (
+            "callOddsDetailWin"
+        )
+
+
+        positions = [
+            m.start()
+            for m in re.finditer(
+                keyword,
+                html
+            )
+        ]
+
+
+        st.write(
+            "callOddsDetailWin 발견:",
+            len(positions)
+        )
+
+
+        # ==================================
+        # 함수 주변 HTML
+        # ==================================
+
+        for index, position in enumerate(
+            positions[:5]
+        ):
+
+            st.write(
+                f"### 발견 {index + 1}"
+            )
+
+
+            start = max(
+                0,
+                position - 1000
+            )
+
+
+            end = min(
+                len(html),
+                position + 5000
+            )
+
+
+            st.code(
+                html[start:end],
+                language="html"
+            )
+
+
+        # ==================================
+        # JavaScript 파일
+        # ==================================
+
+        scripts = re.findall(
+
+            r'<script[^>]+src=["\']'
+            r'([^"\']+)',
+
+            html,
+
+            re.I
+
+        )
+
+
+        st.write(
+            "JavaScript 파일:",
+            len(scripts)
+        )
+
+
+        for script in scripts:
+
+            lower = script.lower()
+
+
+            if (
+                "odds" in lower
+                or
+                "match" in lower
+                or
+                "data" in lower
+            ):
+
+                st.code(
+                    script
+                )
+
+
+    except Exception as e:
+
+        st.error(
+            f"오류: {e}"
+        )
