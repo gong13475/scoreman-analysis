@@ -1,12 +1,8 @@
 import sqlite3
-import os
 import pandas as pd
+import numpy as np
 
-
-DB_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "scoreman_test.db"
-)
+from database import DB_FILE
 
 
 # =========================================================
@@ -15,48 +11,74 @@ DB_PATH = os.path.join(
 
 def get_connection():
 
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(
+        DB_FILE
+    )
+
+    return conn
 
 
 # =========================================================
-# 전체 경기 + 배당 데이터
+# 전체 분석 데이터
 # =========================================================
 
 def get_all_analysis_data():
 
     conn = get_connection()
 
-    try:
-
-        query = """
+    query = """
         SELECT
+
             m.schedule_id,
+
+            m.match_date,
+
             m.home_team,
+
             m.away_team,
+
             m.home_score,
+
             m.away_score,
+
             m.result,
 
+            m.source,
+
             o.company_id,
+
             o.company_name,
 
-            o.euro_f_home AS initial_home,
-            o.euro_f_draw AS initial_draw,
-            o.euro_f_away AS initial_away,
+            o.initial_home,
 
-            o.euro_l_home AS final_home,
-            o.euro_l_draw AS final_draw,
-            o.euro_l_away AS final_away
+            o.initial_draw,
+
+            o.initial_away,
+
+            o.final_home,
+
+            o.final_draw,
+
+            o.final_away
 
         FROM matches m
 
         INNER JOIN odds o
-        ON m.schedule_id = o.schedule_id
 
-        ORDER BY m.id DESC
-        """
+            ON m.schedule_id = o.schedule_id
 
-        return pd.read_sql_query(
+        WHERE
+
+            m.result IN ('승', '무', '패')
+
+        ORDER BY
+
+            m.match_date DESC
+    """
+
+    try:
+
+        df = pd.read_sql_query(
             query,
             conn
         )
@@ -66,252 +88,354 @@ def get_all_analysis_data():
         conn.close()
 
 
-# =========================================================
-# 배당 평균
-# =========================================================
-
-def calculate_average_odds(df):
-
     if df.empty:
-        return None
 
-    columns = [
+        return df
+
+
+    # -----------------------------------------------------
+    # 숫자 변환
+    # -----------------------------------------------------
+
+    number_columns = [
+
         "initial_home",
         "initial_draw",
         "initial_away",
+
         "final_home",
         "final_draw",
-        "final_away"
+        "final_away",
+
+        "home_score",
+        "away_score"
+
     ]
 
-    result = {}
+    for column in number_columns:
 
-    for column in columns:
+        if column in df.columns:
 
-        result[column] = round(
-            pd.to_numeric(
+            df[column] = pd.to_numeric(
                 df[column],
                 errors="coerce"
-            ).mean(),
-            3
-        )
-
-    return result
+            )
 
 
-# =========================================================
-# 배당 변동
-# =========================================================
+    # -----------------------------------------------------
+    # 올바른 1X2 배당만 사용
+    # -----------------------------------------------------
 
-def calculate_odds_change(df):
+    df = df[
+        (df["initial_home"] > 1) &
+        (df["initial_draw"] > 1) &
+        (df["initial_away"] > 1)
+    ].copy()
+
 
     if df.empty:
-        return None
 
-    result = {}
+        return df
 
-    for side in [
-        "home",
-        "draw",
-        "away"
-    ]:
 
-        initial = pd.to_numeric(
-            df[f"initial_{side}"],
-            errors="coerce"
-        ).mean()
+    # -----------------------------------------------------
+    # 배당 기반 확률
+    # -----------------------------------------------------
 
-        final = pd.to_numeric(
-            df[f"final_{side}"],
-            errors="coerce"
-        ).mean()
+    inverse_home = 1 / df["initial_home"]
 
-        result[side] = round(
-            final - initial,
-            3
-        )
+    inverse_draw = 1 / df["initial_draw"]
 
-    return result
+    inverse_away = 1 / df["initial_away"]
+
+    total = (
+        inverse_home +
+        inverse_draw +
+        inverse_away
+    )
+
+
+    df["승확률"] = (
+        inverse_home /
+        total *
+        100
+    ).round(2)
+
+
+    df["무확률"] = (
+        inverse_draw /
+        total *
+        100
+    ).round(2)
+
+
+    df["패확률"] = (
+        inverse_away /
+        total *
+        100
+    ).round(2)
+
+
+    # -----------------------------------------------------
+    # 가장 낮은 배당 = 배당상 우세 결과
+    # -----------------------------------------------------
+
+    df["배당예상"] = np.select(
+
+        [
+
+            (
+                df["initial_home"] <=
+                df["initial_draw"]
+            )
+            &
+            (
+                df["initial_home"] <=
+                df["initial_away"]
+            ),
+
+            (
+                df["initial_draw"] <
+                df["initial_home"]
+            )
+            &
+            (
+                df["initial_draw"] <=
+                df["initial_away"]
+            )
+
+        ],
+
+        [
+
+            "승",
+
+            "무"
+
+        ],
+
+        default="패"
+
+    )
+
+
+    # -----------------------------------------------------
+    # 적중 여부
+    # -----------------------------------------------------
+
+    df["적중"] = (
+
+        df["배당예상"] ==
+        df["result"]
+
+    )
+
+
+    # -----------------------------------------------------
+    # 배당구간
+    # -----------------------------------------------------
+
+    df["승배당구간"] = df[
+        "initial_home"
+    ].apply(
+        get_odds_range
+    )
+
+
+    df["무배당구간"] = df[
+        "initial_draw"
+    ].apply(
+        get_odds_range
+    )
+
+
+    df["패배당구간"] = df[
+        "initial_away"
+    ].apply(
+        get_odds_range
+    )
+
+
+    return df
 
 
 # =========================================================
-# 결과 통계
+# 배당 구간
+# =========================================================
+
+def get_odds_range(odds):
+
+    if pd.isna(odds):
+
+        return "-"
+
+
+    odds = float(odds)
+
+
+    if odds < 1.20:
+
+        return "1.01~1.19"
+
+    elif odds < 1.30:
+
+        return "1.20~1.29"
+
+    elif odds < 1.40:
+
+        return "1.30~1.39"
+
+    elif odds < 1.50:
+
+        return "1.40~1.49"
+
+    elif odds < 1.60:
+
+        return "1.50~1.59"
+
+    elif odds < 1.70:
+
+        return "1.60~1.69"
+
+    elif odds < 1.80:
+
+        return "1.70~1.79"
+
+    elif odds < 1.90:
+
+        return "1.80~1.89"
+
+    elif odds < 2.00:
+
+        return "1.90~1.99"
+
+    elif odds < 2.10:
+
+        return "2.00~2.09"
+
+    elif odds < 2.20:
+
+        return "2.10~2.19"
+
+    elif odds < 2.30:
+
+        return "2.20~2.29"
+
+    elif odds < 2.40:
+
+        return "2.30~2.39"
+
+    elif odds < 2.50:
+
+        return "2.40~2.49"
+
+    elif odds < 2.75:
+
+        return "2.50~2.74"
+
+    elif odds < 3.00:
+
+        return "2.75~2.99"
+
+    elif odds < 3.50:
+
+        return "3.00~3.49"
+
+    elif odds < 4.00:
+
+        return "3.50~3.99"
+
+    elif odds < 5.00:
+
+        return "4.00~4.99"
+
+    elif odds < 7.00:
+
+        return "5.00~6.99"
+
+    else:
+
+        return "7.00+"
+
+
+# =========================================================
+# 전체 승무패 통계
 # =========================================================
 
 def calculate_result_stats(df):
 
-    if df.empty:
+    result_order = [
+        "승",
+        "무",
+        "패"
+    ]
+
+
+    if df is None or df.empty:
 
         return {
+
             "승": {
                 "count": 0,
                 "percent": 0
             },
+
             "무": {
                 "count": 0,
                 "percent": 0
             },
+
             "패": {
                 "count": 0,
                 "percent": 0
             }
+
         }
 
-    total = len(df)
 
-    result = {}
+    result_series = (
+        df["result"]
+        .dropna()
+        .astype(str)
+    )
 
-    for value in ["승", "무", "패"]:
+
+    total = len(result_series)
+
+
+    stats = {}
+
+
+    for result in result_order:
 
         count = int(
-            (df["result"] == value).sum()
+            (
+                result_series ==
+                result
+            ).sum()
         )
+
 
         percent = round(
             count / total * 100,
-            1
-        ) if total > 0 else 0
+            2
+        ) if total else 0
 
-        result[value] = {
+
+        stats[result] = {
+
             "count": count,
+
             "percent": percent
+
         }
 
-    return result
+
+    return stats
 
 
 # =========================================================
-# 초기 승배당 구간 통계
-# =========================================================
-
-def get_odds_range_stats(
-    df,
-    side="home",
-    min_odds=1.50,
-    max_odds=1.60
-):
-
-    if df.empty:
-
-        return {
-            "total": 0,
-            "승": 0,
-            "무": 0,
-            "패": 0
-        }
-
-    column = f"initial_{side}"
-
-    temp = df.copy()
-
-    temp[column] = pd.to_numeric(
-        temp[column],
-        errors="coerce"
-    )
-
-    temp = temp[
-        (temp[column] >= min_odds) &
-        (temp[column] < max_odds)
-    ]
-
-    total = len(temp)
-
-    if total == 0:
-
-        return {
-            "total": 0,
-            "승": 0,
-            "무": 0,
-            "패": 0
-        }
-
-    return {
-        "total": total,
-
-        "승": round(
-            (temp["result"] == "승").sum()
-            / total * 100,
-            1
-        ),
-
-        "무": round(
-            (temp["result"] == "무").sum()
-            / total * 100,
-            1
-        ),
-
-        "패": round(
-            (temp["result"] == "패").sum()
-            / total * 100,
-            1
-        )
-    }
-
-
-# =========================================================
-# 업체별 통계
-# =========================================================
-
-def get_company_stats(df):
-
-    if df.empty:
-
-        return pd.DataFrame()
-
-    result = []
-
-    for company, group in df.groupby(
-        "company_name"
-    ):
-
-        total = len(group)
-
-        wins = int(
-            (group["result"] == "승").sum()
-        )
-
-        draws = int(
-            (group["result"] == "무").sum()
-        )
-
-        losses = int(
-            (group["result"] == "패").sum()
-        )
-
-        result.append({
-
-            "업체": company,
-
-            "경기수": total,
-
-            "승": wins,
-
-            "무": draws,
-
-            "패": losses,
-
-            "승률": round(
-                wins / total * 100,
-                1
-            ) if total else 0,
-
-            "무율": round(
-                draws / total * 100,
-                1
-            ) if total else 0,
-
-            "패율": round(
-                losses / total * 100,
-                1
-            ) if total else 0
-
-        })
-
-    return pd.DataFrame(result)
-
-
-# =========================================================
-# 배당구간 전체 통계
+# 배당구간별 통계
 # =========================================================
 
 def make_odds_range_table(
@@ -319,55 +443,496 @@ def make_odds_range_table(
     side="home"
 ):
 
-    ranges = [
-        (1.00, 1.19),
-        (1.20, 1.29),
-        (1.30, 1.39),
-        (1.40, 1.49),
-        (1.50, 1.59),
-        (1.60, 1.69),
-        (1.70, 1.79),
-        (1.80, 1.89),
-        (1.90, 1.99),
-        (2.00, 2.19),
-        (2.20, 2.49),
-        (2.50, 2.99),
-        (3.00, 3.49),
-        (3.50, 3.99),
-        (4.00, 4.99),
-        (5.00, 6.99),
-        (7.00, 9.99),
-        (10.00, 999.0)
+    if df is None or df.empty:
+
+        return pd.DataFrame()
+
+
+    column_map = {
+
+        "home":
+            "initial_home",
+
+        "draw":
+            "initial_draw",
+
+        "away":
+            "initial_away"
+
+    }
+
+
+    result_map = {
+
+        "home":
+            "승",
+
+        "draw":
+            "무",
+
+        "away":
+            "패"
+
+    }
+
+
+    if side not in column_map:
+
+        raise ValueError(
+            "side는 home/draw/away만 가능합니다."
+        )
+
+
+    odds_column = column_map[
+        side
     ]
+
+    target_result = result_map[
+        side
+    ]
+
+
+    temp = df.copy()
+
+
+    temp["배당구간"] = temp[
+        odds_column
+    ].apply(
+        get_odds_range
+    )
+
 
     rows = []
 
-    for minimum, maximum in ranges:
 
-        stats = get_odds_range_stats(
-            df,
-            side=side,
-            min_odds=minimum,
-            max_odds=maximum
+    # -----------------------------------------------------
+    # 배당구간 정렬
+    # -----------------------------------------------------
+
+    ranges = [
+
+        "1.01~1.19",
+        "1.20~1.29",
+        "1.30~1.39",
+        "1.40~1.49",
+        "1.50~1.59",
+        "1.60~1.69",
+        "1.70~1.79",
+        "1.80~1.89",
+        "1.90~1.99",
+        "2.00~2.09",
+        "2.10~2.19",
+        "2.20~2.29",
+        "2.30~2.39",
+        "2.40~2.49",
+        "2.50~2.74",
+        "2.75~2.99",
+        "3.00~3.49",
+        "3.50~3.99",
+        "4.00~4.99",
+        "5.00~6.99",
+        "7.00+"
+
+    ]
+
+
+    for odds_range in ranges:
+
+        group = temp[
+            temp["배당구간"] ==
+            odds_range
+        ]
+
+
+        count = len(group)
+
+
+        if count == 0:
+
+            continue
+
+
+        win_count = int(
+            (
+                group["result"] ==
+                target_result
+            ).sum()
         )
+
+
+        lose_count = count - win_count
+
+
+        percent = round(
+            win_count /
+            count *
+            100,
+            2
+        )
+
+
+        # -------------------------------------------------
+        # 승/무/패 실제 결과 분포
+        # -------------------------------------------------
+
+        home_count = int(
+            (
+                group["result"] ==
+                "승"
+            ).sum()
+        )
+
+
+        draw_count = int(
+            (
+                group["result"] ==
+                "무"
+            ).sum()
+        )
+
+
+        away_count = int(
+            (
+                group["result"] ==
+                "패"
+            ).sum()
+        )
+
 
         rows.append({
 
             "배당구간":
-                f"{minimum:.2f} ~ {maximum:.2f}",
+                odds_range,
 
             "경기수":
-                stats["total"],
+                count,
 
-            "승%":
-                stats["승"],
+            f"{target_result} 적중":
+                win_count,
 
-            "무%":
-                stats["무"],
+            f"{target_result} 적중률":
+                f"{percent:.2f}% ({win_count}경기)",
 
-            "패%":
-                stats["패"]
+            "승":
+                home_count,
+
+            "무":
+                draw_count,
+
+            "패":
+                away_count
 
         })
 
+
     return pd.DataFrame(rows)
+
+
+# =========================================================
+# 배당업체별 통계
+# =========================================================
+
+def get_company_stats(df):
+
+    if df is None or df.empty:
+
+        return pd.DataFrame()
+
+
+    rows = []
+
+
+    for company, group in df.groupby(
+        "company_name",
+        dropna=False
+    ):
+
+        company = (
+            str(company)
+            if company
+            else "알 수 없음"
+        )
+
+
+        total = len(group)
+
+
+        home_count = int(
+            (
+                group["result"] ==
+                "승"
+            ).sum()
+        )
+
+
+        draw_count = int(
+            (
+                group["result"] ==
+                "무"
+            ).sum()
+        )
+
+
+        away_count = int(
+            (
+                group["result"] ==
+                "패"
+            ).sum()
+        )
+
+
+        home_percent = round(
+            home_count /
+            total *
+            100,
+            2
+        ) if total else 0
+
+
+        draw_percent = round(
+            draw_count /
+            total *
+            100,
+            2
+        ) if total else 0
+
+
+        away_percent = round(
+            away_count /
+            total *
+            100,
+            2
+        ) if total else 0
+
+
+        # ---------------------------------------------
+        # 배당상 예상 적중
+        # ---------------------------------------------
+
+        if "적중" in group.columns:
+
+            hit_count = int(
+                group["적중"].sum()
+            )
+
+        else:
+
+            hit_count = 0
+
+
+        hit_percent = round(
+            hit_count /
+            total *
+            100,
+            2
+        ) if total else 0
+
+
+        rows.append({
+
+            "배당업체":
+                company,
+
+            "경기수":
+                total,
+
+            "승":
+                f"{home_percent:.2f}% ({home_count}경기)",
+
+            "무":
+                f"{draw_percent:.2f}% ({draw_count}경기)",
+
+            "패":
+                f"{away_percent:.2f}% ({away_count}경기)",
+
+            "배당상 예상 적중":
+                f"{hit_percent:.2f}% ({hit_count}경기)"
+
+        })
+
+
+    result = pd.DataFrame(rows)
+
+
+    if not result.empty:
+
+        result = result.sort_values(
+            "경기수",
+            ascending=False
+        )
+
+
+    return result
+
+
+# =========================================================
+# 특정 배당구간 승무패 통계
+# =========================================================
+
+def get_range_result_stats(
+    df,
+    odds_column,
+    min_odds,
+    max_odds
+):
+
+    if df is None or df.empty:
+
+        return {
+
+            "경기수": 0,
+
+            "승": 0,
+
+            "무": 0,
+
+            "패": 0
+
+        }
+
+
+    group = df[
+        (df[odds_column] >= min_odds)
+        &
+        (df[odds_column] <= max_odds)
+    ]
+
+
+    total = len(group)
+
+
+    if total == 0:
+
+        return {
+
+            "경기수": 0,
+
+            "승": 0,
+
+            "무": 0,
+
+            "패": 0
+
+        }
+
+
+    return {
+
+        "경기수":
+            total,
+
+        "승":
+            int(
+                (
+                    group["result"] ==
+                    "승"
+                ).sum()
+            ),
+
+        "무":
+            int(
+                (
+                    group["result"] ==
+                    "무"
+                ).sum()
+            ),
+
+        "패":
+            int(
+                (
+                    group["result"] ==
+                    "패"
+                ).sum()
+            )
+
+    }
+
+
+# =========================================================
+# 데이터 요약
+# =========================================================
+
+def get_summary(df):
+
+    if df is None or df.empty:
+
+        return {
+
+            "경기수": 0,
+
+            "업체수": 0,
+
+            "승": 0,
+
+            "무": 0,
+
+            "패": 0
+
+        }
+
+
+    return {
+
+        "경기수":
+            len(df),
+
+        "업체수":
+            df["company_name"]
+            .nunique(),
+
+        "승":
+            int(
+                (
+                    df["result"] ==
+                    "승"
+                ).sum()
+            ),
+
+        "무":
+            int(
+                (
+                    df["result"] ==
+                    "무"
+                ).sum()
+            ),
+
+        "패":
+            int(
+                (
+                    df["result"] ==
+                    "패"
+                ).sum()
+            )
+
+    }
+
+
+# =========================================================
+# 실행 테스트
+# =========================================================
+
+if __name__ == "__main__":
+
+    df = get_all_analysis_data()
+
+    print(
+        "분석 데이터:",
+        len(df)
+    )
+
+    if not df.empty:
+
+        print(
+            calculate_result_stats(df)
+        )
+
+        print(
+            make_odds_range_table(
+                df,
+                side="home"
+            )
+        )
+
+        print(
+            get_company_stats(df)
+    )
