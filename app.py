@@ -2002,3 +2002,742 @@ if st.button(
             "전체 배당",
             database.get_odds_count()
     )
+# =========================================================
+# 🔥 고급 배당 분석
+# =========================================================
+
+st.divider()
+
+st.header("🔥 고급 승무패 배당 분석")
+
+st.caption(
+    "초기배당 → 최종배당 변동 + 업체별 의견 + 역배 가능성을 종합 분석합니다."
+)
+
+
+# =========================================================
+# 분석 데이터 불러오기
+# =========================================================
+
+try:
+
+    advanced_df = analysis.get_all_analysis_data()
+
+except Exception as e:
+
+    st.error("고급 분석 데이터를 불러오지 못했습니다.")
+    st.code(str(e))
+    advanced_df = pd.DataFrame()
+
+
+if advanced_df.empty:
+
+    st.info(
+        "고급 분석을 위해 과거 경기 데이터를 먼저 수집하세요."
+    )
+
+else:
+
+    # =====================================================
+    # 경기별 중복 제거
+    # =====================================================
+
+    unique_games = (
+        advanced_df
+        .drop_duplicates(
+            subset=["schedule_id"]
+        )
+        .copy()
+    )
+
+
+    # =====================================================
+    # 초기 → 최종 배당 변동
+    # =====================================================
+
+    unique_games["승변동"] = (
+        unique_games["final_home"]
+        -
+        unique_games["initial_home"]
+    ).round(2)
+
+
+    unique_games["무변동"] = (
+        unique_games["final_draw"]
+        -
+        unique_games["initial_draw"]
+    ).round(2)
+
+
+    unique_games["패변동"] = (
+        unique_games["final_away"]
+        -
+        unique_games["initial_away"]
+    ).round(2)
+
+
+    # =====================================================
+    # 배당 하락 / 상승
+    # =====================================================
+
+    unique_games["승변동방향"] = np.select(
+
+        [
+            unique_games["승변동"] < -0.03,
+            unique_games["승변동"] > 0.03
+        ],
+
+        [
+            "하락",
+            "상승"
+        ],
+
+        default="유지"
+    )
+
+
+    unique_games["무변동방향"] = np.select(
+
+        [
+            unique_games["무변동"] < -0.03,
+            unique_games["무변동"] > 0.03
+        ],
+
+        [
+            "하락",
+            "상승"
+        ],
+
+        default="유지"
+    )
+
+
+    unique_games["패변동방향"] = np.select(
+
+        [
+            unique_games["패변동"] < -0.03,
+            unique_games["패변동"] > 0.03
+        ],
+
+        [
+            "하락",
+            "상승"
+        ],
+
+        default="유지"
+    )
+
+
+    # =====================================================
+    # 변동 통계
+    # =====================================================
+
+    st.subheader(
+        "📉 초기 → 최종 배당 변동"
+    )
+
+
+    movement_rows = []
+
+
+    for side, column, result_name in [
+
+        ("승", "승변동방향", "승"),
+        ("무", "무변동방향", "무"),
+        ("패", "패변동방향", "패")
+
+    ]:
+
+        total = len(
+            unique_games
+        )
+
+
+        down = int(
+            (
+                unique_games[column]
+                ==
+                "하락"
+            ).sum()
+        )
+
+
+        same = int(
+            (
+                unique_games[column]
+                ==
+                "유지"
+            ).sum()
+        )
+
+
+        up = int(
+            (
+                unique_games[column]
+                ==
+                "상승"
+            ).sum()
+        )
+
+
+        movement_rows.append({
+
+            "대상":
+                side,
+
+            "배당 하락":
+                f"{down / total * 100:.2f}% ({down}경기)",
+
+            "유지":
+                f"{same / total * 100:.2f}% ({same}경기)",
+
+            "배당 상승":
+                f"{up / total * 100:.2f}% ({up}경기)"
+
+        })
+
+
+    st.dataframe(
+
+        pd.DataFrame(
+            movement_rows
+        ),
+
+        use_container_width=True,
+
+        hide_index=True
+
+    )
+
+
+    # =====================================================
+    # 실제 결과와 배당 변동 관계
+    # =====================================================
+
+    st.subheader(
+        "🎯 배당 하락 후 실제 결과"
+    )
+
+
+    movement_result_rows = []
+
+
+    for column, target_result, name in [
+
+        ("승변동방향", "승", "승배당 하락"),
+
+        ("무변동방향", "무", "무배당 하락"),
+
+        ("패변동방향", "패", "패배당 하락")
+
+    ]:
+
+
+        group = unique_games[
+            unique_games[column]
+            ==
+            "하락"
+        ]
+
+
+        total = len(
+            group
+        )
+
+
+        if total == 0:
+
+            continue
+
+
+        hit = int(
+            (
+                group["result"]
+                ==
+                target_result
+            ).sum()
+        )
+
+
+        movement_result_rows.append({
+
+            "구분":
+                name,
+
+            "경기수":
+                total,
+
+            "해당 결과":
+                target_result,
+
+            "적중":
+                hit,
+
+            "적중률":
+                f"{hit / total * 100:.2f}%"
+
+        })
+
+
+    if movement_result_rows:
+
+        st.dataframe(
+
+            pd.DataFrame(
+                movement_result_rows
+            ),
+
+            use_container_width=True,
+
+            hide_index=True
+
+        )
+
+
+    # =====================================================
+    # 업체별 의견 분석
+    # =====================================================
+
+    st.subheader(
+        "🏢 업체별 배당 의견 일치도"
+    )
+
+
+    company_games = []
+
+
+    for schedule_id, group in advanced_df.groupby(
+        "schedule_id"
+    ):
+
+
+        company_predictions = []
+
+
+        for _, row in group.iterrows():
+
+            odds = [
+
+                row["initial_home"],
+                row["initial_draw"],
+                row["initial_away"]
+
+            ]
+
+
+            if any(
+                pd.isna(x) or x <= 0
+                for x in odds
+            ):
+
+                continue
+
+
+            prediction = [
+
+                1 / odds[0],
+                1 / odds[1],
+                1 / odds[2]
+
+            ]
+
+
+            prediction_index = int(
+                np.argmax(
+                    prediction
+                )
+            )
+
+
+            prediction_result = [
+
+                "승",
+                "무",
+                "패"
+
+            ][prediction_index]
+
+
+            company_predictions.append(
+                prediction_result
+            )
+
+
+        if not company_predictions:
+
+            continue
+
+
+        counts = {
+
+            "승":
+                company_predictions.count("승"),
+
+            "무":
+                company_predictions.count("무"),
+
+            "패":
+                company_predictions.count("패")
+
+        }
+
+
+        total = len(
+            company_predictions
+        )
+
+
+        strongest = max(
+            counts,
+            key=counts.get
+        )
+
+
+        agreement = round(
+
+            counts[strongest]
+            /
+            total
+            *
+            100,
+
+            2
+
+        )
+
+
+        actual = group.iloc[0]["result"]
+
+
+        company_games.append({
+
+            "schedule_id":
+                schedule_id,
+
+            "업체수":
+                total,
+
+            "최다의견":
+                strongest,
+
+            "일치업체":
+                counts[strongest],
+
+            "일치율":
+                agreement,
+
+            "실제결과":
+                actual,
+
+            "일치적중":
+                strongest == actual
+
+        })
+
+
+    company_df = pd.DataFrame(
+        company_games
+    )
+
+
+    if not company_df.empty:
+
+        # ---------------------------------------------
+        # 전체 업체 일치도
+        # ---------------------------------------------
+
+        agreement_rows = []
+
+
+        for result in [
+            "승",
+            "무",
+            "패"
+        ]:
+
+            group = company_df[
+                company_df["최다의견"]
+                ==
+                result
+            ]
+
+
+            total = len(
+                group
+            )
+
+
+            if total == 0:
+
+                continue
+
+
+            hit = int(
+                group["일치적중"]
+                .sum()
+            )
+
+
+            agreement_rows.append({
+
+                "업체 최다의견":
+                    result,
+
+                "경기수":
+                    total,
+
+                "실제 적중":
+                    hit,
+
+                "적중률":
+                    f"{hit / total * 100:.2f}%"
+
+            })
+
+
+        if agreement_rows:
+
+            st.dataframe(
+
+                pd.DataFrame(
+                    agreement_rows
+                ),
+
+                use_container_width=True,
+
+                hide_index=True
+
+            )
+
+
+    # =====================================================
+    # 역배 가능성 분석
+    # =====================================================
+
+    st.subheader(
+        "⚠️ 역배 가능성 분석"
+    )
+
+
+    upset_rows = []
+
+
+    for _, row in advanced_df.iterrows():
+
+        if any(
+
+            pd.isna(row.get(x))
+            or row.get(x) <= 0
+
+            for x in [
+
+                "initial_home",
+                "initial_draw",
+                "initial_away"
+
+            ]
+
+        ):
+
+            continue
+
+
+        odds = {
+
+            "승":
+                row["initial_home"],
+
+            "무":
+                row["initial_draw"],
+
+            "패":
+                row["initial_away"]
+
+        }
+
+
+        favorite = min(
+            odds,
+            key=odds.get
+        )
+
+
+        actual = row["result"]
+
+
+        if actual != favorite:
+
+            upset_rows.append({
+
+                "경기ID":
+                    row["schedule_id"],
+
+                "홈팀":
+                    row["home_team"],
+
+                "원정팀":
+                    row["away_team"],
+
+                "승배당":
+                    row["initial_home"],
+
+                "무배당":
+                    row["initial_draw"],
+
+                "패배당":
+                    row["initial_away"],
+
+                "예상":
+                    favorite,
+
+                "실제결과":
+                    actual
+
+            })
+
+
+    upset_df = pd.DataFrame(
+        upset_rows
+    )
+
+
+    if upset_df.empty:
+
+        st.info(
+            "현재 DB에서는 확인되는 역배 경기가 없습니다."
+        )
+
+    else:
+
+        st.write(
+            f"역배 발생 경기: **{len(upset_df)}경기**"
+        )
+
+
+        st.dataframe(
+
+            upset_df
+            .drop_duplicates(
+                subset=["경기ID"]
+            )
+            .head(100),
+
+            use_container_width=True,
+
+            hide_index=True
+
+        )
+
+
+    # =====================================================
+    # 종합 배당 분석
+    # =====================================================
+
+    st.subheader(
+        "🏆 종합 배당 분석"
+    )
+
+
+    summary = []
+
+
+    for result in [
+        "승",
+        "무",
+        "패"
+    ]:
+
+
+        # 배당상 가장 낮은 배당
+        favorite_games = unique_games.copy()
+
+
+        favorite_games["예상"] = favorite_games.apply(
+
+            lambda x:
+
+                "승"
+                if x["initial_home"]
+                ==
+                min(
+                    x["initial_home"],
+                    x["initial_draw"],
+                    x["initial_away"]
+                )
+
+                else (
+
+                    "무"
+                    if x["initial_draw"]
+                    ==
+                    min(
+                        x["initial_home"],
+                        x["initial_draw"],
+                        x["initial_away"]
+                    )
+
+                    else "패"
+
+                ),
+
+            axis=1
+
+        )
+
+
+        group = favorite_games[
+            favorite_games["예상"]
+            ==
+            result
+        ]
+
+
+        total = len(
+            group
+        )
+
+
+        if total == 0:
+
+            continue
+
+
+        hit = int(
+            (
+                group["result"]
+                ==
+                result
+            ).sum()
+        )
+
+
+        summary.append({
+
+            "예상":
+                result,
+
+            "경기수":
+                total,
+
+            "실제적중":
+                hit,
+
+            "적중률":
+                f"{hit / total * 100:.2f}%"
+
+        })
+
+
+    if summary:
+
+        st.dataframe(
+
+            pd.DataFrame(
+                summary
+            ),
+
+            use_container_width=True,
+
+            hide_index=True
+
+)
