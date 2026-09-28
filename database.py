@@ -549,3 +549,63 @@ def get_database_stats():
         "odds": get_odds_count()
 
     }
+def get_all_matches():
+
+    conn = get_connection()
+
+    try:
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT *
+            FROM matches
+            ORDER BY id DESC
+        """)
+
+        rows = cur.fetchall()
+
+        columns = [
+            column[0]
+            for column in cur.description
+        ]
+
+        return [
+            dict(zip(columns, row))
+            for row in rows
+        ]
+
+    finally:
+
+        conn.close()
+
+
+def get_all_odds():
+
+    conn = get_connection()
+
+    try:
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT *
+            FROM odds
+            ORDER BY id DESC
+        """)
+
+        rows = cur.fetchall()
+
+        columns = [
+            column[0]
+            for column in cur.description
+        ]
+
+        return [
+            dict(zip(columns, row))
+            for row in rows
+        ]
+
+    finally:
+
+        conn.close()
