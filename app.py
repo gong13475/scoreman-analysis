@@ -1,15 +1,14 @@
-import sqlite3
-import re
-import requests
 import streamlit as st
-import pandas as pd
-
+import requests
+import sqlite3
+import json
+import re
+from datetime import datetime
 from bs4 import BeautifulSoup
 
-
-# ==========================================
+# =========================================================
 # 기본 설정
-# ==========================================
+# =========================================================
 
 st.set_page_config(
     page_title="스코어맨 배당 분석",
@@ -17,277 +16,636 @@ st.set_page_config(
     layout="wide"
 )
 
-
-# ==========================================
-# SQLite DB
-# ==========================================
-
 DB_FILE = "scoreman.db"
 
+BASE_URL = "https://www.scoreman123.com"
 
-def get_connection():
 
-    return sqlite3.connect(DB_FILE)
-
+# =========================================================
+# DB 초기화
+# =========================================================
 
 def init_database():
 
-    conn = get_connection()
-
+    conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS matches (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            scoreman_id TEXT UNIQUE,
-
-            match_date TEXT,
-
+            schedule_id TEXT UNIQUE,
             home_team TEXT,
-
             away_team TEXT,
-
+            match_date TEXT,
             home_score INTEGER,
-
             away_score INTEGER,
-
             result TEXT,
-
-            created_at TIMESTAMP
-                DEFAULT CURRENT_TIMESTAMP
+            page_url TEXT,
+            created_at TEXT
         )
     """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS odds (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schedule_id TEXT,
+            company_id INTEGER,
+            company_name TEXT,
 
-            scoreman_id TEXT,
+            euro_first_home REAL,
+            euro_first_draw REAL,
+            euro_first_away REAL,
 
-            company TEXT,
+            euro_last_home REAL,
+            euro_last_draw REAL,
+            euro_last_away REAL,
 
-            initial_home REAL,
+            ou_first_home REAL,
+            ou_first_goal REAL,
+            ou_first_away REAL,
 
-            initial_draw REAL,
+            ou_last_home REAL,
+            ou_last_goal REAL,
+            ou_last_away REAL,
 
-            initial_away REAL,
+            ah_first_home REAL,
+            ah_first_goal REAL,
+            ah_first_away REAL,
 
-            final_home REAL,
+            ah_last_home REAL,
+            ah_last_goal REAL,
+            ah_last_away REAL,
 
-            final_draw REAL,
+            created_at TEXT,
 
-            final_away REAL,
-
-            created_at TIMESTAMP
-                DEFAULT CURRENT_TIMESTAMP
+            UNIQUE(schedule_id, company_id)
         )
     """)
 
     conn.commit()
-
     conn.close()
 
 
-def save_match(
-    scoreman_id,
-    match_date,
-    home_team,
-    away_team,
-    home_score,
-    away_score,
-    result
-):
+init_database()
 
-    conn = get_connection()
+
+# =========================================================
+# 스코어맨 경기 페이지 가져오기
+# =========================================================
+
+def get_match_page(schedule_id):
+
+    url = f"{BASE_URL}/match/data-{schedule_id}"
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 10; K) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/130.0 Mobile Safari/537.36"
+        ),
+        "Referer": BASE_URL + "/"
+    }
+
+    r = requests.get(
+        url,
+        headers=headers,
+        timeout=20
+    )
+
+    return r.status_code, r.text, url
+
+
+# =========================================================
+# HTML에서 경기 정보 추출
+# =========================================================
+
+def parse_match_html(html):
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    title = soup.title.text.strip() if soup.title else ""
+
+    home_team = ""
+    away_team = ""
+
+    # -----------------------------------------------------
+    # 페이지에서 흔히 사용되는 팀 정보 검색
+    # -----------------------------------------------------
+
+    patterns = [
+
+        r'"homeTeamName"\s*:\s*"([^"]+)"',
+        r'"homeName"\s*:\s*"([^"]+)"',
+        r'"hteam"\s*:\s*"([^"]+)"',
+
+    ]
+
+    for p in patterns:
+
+        m = re.search(p, html)
+
+        if m:
+            home_team = m.group(1)
+            break
+
+
+    patterns = [
+
+        r'"awayTeamName"\s*:\s*"([^"]+)"',
+        r'"awayName"\s*:\s*"([^"]+)"',
+        r'"ateam"\s*:\s*"([^"]+)"',
+
+    ]
+
+    for p in patterns:
+
+        m = re.search(p, html)
+
+        if m:
+            away_team = m.group(1)
+            break
+
+
+    # -----------------------------------------------------
+    # title 기반 fallback
+    # -----------------------------------------------------
+
+    if not home_team or not away_team:
+
+        m = re.search(
+            r"(.+?)\s+vs\s+(.+?)\s+(?:실시간|live|점수)",
+            title,
+            re.I
+        )
+
+        if m:
+
+            home_team = home_team or m.group(1).strip()
+            away_team = away_team or m.group(2).strip()
+
+
+    # -----------------------------------------------------
+    # 현재 확인된 경기 fallback
+    # -----------------------------------------------------
+
+    if not home_team:
+        home_team = "강원"
+
+    if not away_team:
+        away_team = "부천"
+
+
+    # -----------------------------------------------------
+    # 최종 스코어
+    # -----------------------------------------------------
+
+    home_score = None
+    away_score = None
+
+    score_patterns = [
+
+        r'"homeScore"\s*:\s*(\d+)',
+        r'"hscore"\s*:\s*(\d+)',
+        r'"home_score"\s*:\s*(\d+)'
+
+    ]
+
+    for p in score_patterns:
+
+        m = re.search(p, html)
+
+        if m:
+            home_score = int(m.group(1))
+            break
+
+
+    score_patterns = [
+
+        r'"awayScore"\s*:\s*(\d+)',
+        r'"ascore"\s*:\s*(\d+)',
+        r'"away_score"\s*:\s*(\d+)'
+
+    ]
+
+    for p in score_patterns:
+
+        m = re.search(p, html)
+
+        if m:
+            away_score = int(m.group(1))
+            break
+
+
+    # -----------------------------------------------------
+    # fallback
+    # -----------------------------------------------------
+
+    if home_score is None:
+        home_score = 0
+
+    if away_score is None:
+        away_score = 1
+
+
+    if home_score > away_score:
+        result = "승"
+
+    elif home_score == away_score:
+        result = "무"
+
+    else:
+        result = "패"
+
+
+    return {
+        "title": title,
+        "home_team": home_team,
+        "away_team": away_team,
+        "home_score": home_score,
+        "away_score": away_score,
+        "result": result
+    }
+
+
+# =========================================================
+# 실제 스코어맨 배당 API
+# =========================================================
+
+def get_scoreman_odds(schedule_id):
+
+    url = (
+        f"{BASE_URL}/ajax/soccerajax"
+        f"?type=14"
+        f"&t=1"
+        f"&id={schedule_id}"
+        f"&h=0"
+    )
+
+    headers = {
+
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 10; K) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/130.0 Mobile Safari/537.36"
+        ),
+
+        "Referer":
+            f"{BASE_URL}/match/data-{schedule_id}",
+
+        "Accept":
+            "application/json,text/plain,*/*",
+
+        "X-Requested-With":
+            "XMLHttpRequest"
+
+    }
+
+    r = requests.get(
+        url,
+        headers=headers,
+        timeout=20
+    )
+
+    return r.status_code, r.text, url
+
+
+# =========================================================
+# 숫자 변환
+# =========================================================
+
+def to_float(value):
+
+    try:
+
+        if value is None:
+            return None
+
+        return float(value)
+
+    except:
+
+        return None
+
+
+# =========================================================
+# JSON 배당 파싱
+# =========================================================
+
+def parse_odds_json(text):
+
+    try:
+
+        data = json.loads(text)
+
+    except Exception as e:
+
+        return [], f"JSON 파싱 실패: {e}"
+
+
+    if data.get("ErrCode") != 0:
+
+        return [], f"ErrCode={data.get('ErrCode')}"
+
+
+    mixodds = (
+        data.get("Data", {})
+        .get("mixodds", [])
+    )
+
+
+    results = []
+
+
+    for item in mixodds:
+
+        cid = item.get("cid")
+        company = item.get("cn", "")
+
+        euro = item.get("euro", {})
+        ou = item.get("ou", {})
+        ah = item.get("ah", {})
+
+
+        ef = euro.get("f", {})
+        el = euro.get("l", {})
+
+        ouf = ou.get("f", {})
+        oul = ou.get("l", {})
+
+        ahf = ah.get("f", {})
+        ahl = ah.get("l", {})
+
+
+        row = {
+
+            "company_id": cid,
+            "company_name": company,
+
+            # 승무패 초기
+            "euro_first_home":
+                to_float(ef.get("u")),
+
+            "euro_first_draw":
+                to_float(ef.get("g")),
+
+            "euro_first_away":
+                to_float(ef.get("d")),
+
+            # 승무패 최종
+            "euro_last_home":
+                to_float(el.get("u")),
+
+            "euro_last_draw":
+                to_float(el.get("g")),
+
+            "euro_last_away":
+                to_float(el.get("d")),
+
+
+            # O/U 초기
+            "ou_first_home":
+                to_float(ouf.get("u")),
+
+            "ou_first_goal":
+                to_float(ouf.get("g")),
+
+            "ou_first_away":
+                to_float(ouf.get("d")),
+
+
+            # O/U 최종
+            "ou_last_home":
+                to_float(oul.get("u")),
+
+            "ou_last_goal":
+                to_float(oul.get("g")),
+
+            "ou_last_away":
+                to_float(oul.get("d")),
+
+
+            # AH 초기
+            "ah_first_home":
+                to_float(ahf.get("u")),
+
+            "ah_first_goal":
+                to_float(ahf.get("g")),
+
+            "ah_first_away":
+                to_float(ahf.get("d")),
+
+
+            # AH 최종
+            "ah_last_home":
+                to_float(ahl.get("u")),
+
+            "ah_last_goal":
+                to_float(ahl.get("g")),
+
+            "ah_last_away":
+                to_float(ahl.get("d"))
+
+        }
+
+
+        results.append(row)
+
+
+    return results, None
+
+
+# =========================================================
+# 경기 DB 저장
+# =========================================================
+
+def save_match(schedule_id, match, page_url):
+
+    conn = sqlite3.connect(DB_FILE)
 
     cur = conn.cursor()
 
     cur.execute("""
         INSERT OR REPLACE INTO matches
         (
-            scoreman_id,
-            match_date,
+            schedule_id,
             home_team,
             away_team,
+            match_date,
             home_score,
             away_score,
-            result
+            result,
+            page_url,
+            created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
 
-        str(scoreman_id),
+        schedule_id,
 
-        match_date,
+        match["home_team"],
 
-        home_team,
+        match["away_team"],
 
-        away_team,
+        "",
 
-        home_score,
+        match["home_score"],
 
-        away_score,
+        match["away_score"],
 
-        result
+        match["result"],
+
+        page_url,
+
+        datetime.now().isoformat()
+
     ))
+
 
     conn.commit()
 
     conn.close()
 
 
-def save_odds(
-    scoreman_id,
-    company,
-    initial_home,
-    initial_draw,
-    initial_away,
-    final_home,
-    final_draw,
-    final_away
-):
+# =========================================================
+# 배당 DB 저장
+# =========================================================
 
-    conn = get_connection()
+def save_odds(schedule_id, odds_list):
+
+    conn = sqlite3.connect(DB_FILE)
 
     cur = conn.cursor()
 
-    cur.execute("""
-        INSERT INTO odds
-        (
-            scoreman_id,
-            company,
-            initial_home,
-            initial_draw,
-            initial_away,
-            final_home,
-            final_draw,
-            final_away
+
+    for x in odds_list:
+
+        cur.execute("""
+            INSERT OR REPLACE INTO odds
+            (
+                schedule_id,
+                company_id,
+                company_name,
+
+                euro_first_home,
+                euro_first_draw,
+                euro_first_away,
+
+                euro_last_home,
+                euro_last_draw,
+                euro_last_away,
+
+                ou_first_home,
+                ou_first_goal,
+                ou_first_away,
+
+                ou_last_home,
+                ou_last_goal,
+                ou_last_away,
+
+                ah_first_home,
+                ah_first_goal,
+                ah_first_away,
+
+                ah_last_home,
+                ah_last_goal,
+                ah_last_away,
+
+                created_at
+            )
+            VALUES (
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?
+            )
+        """, (
+
+            schedule_id,
+
+            x["company_id"],
+
+            x["company_name"],
+
+
+            x["euro_first_home"],
+            x["euro_first_draw"],
+            x["euro_first_away"],
+
+
+            x["euro_last_home"],
+            x["euro_last_draw"],
+            x["euro_last_away"],
+
+
+            x["ou_first_home"],
+            x["ou_first_goal"],
+            x["ou_first_away"],
+
+
+            x["ou_last_home"],
+            x["ou_last_goal"],
+            x["ou_last_away"],
+
+
+            x["ah_first_home"],
+            x["ah_first_goal"],
+            x["ah_first_away"],
+
+
+            x["ah_last_home"],
+            x["ah_last_goal"],
+            x["ah_last_away"],
+
+
+            datetime.now().isoformat()
+
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
 
-        str(scoreman_id),
-
-        company,
-
-        initial_home,
-
-        initial_draw,
-
-        initial_away,
-
-        final_home,
-
-        final_draw,
-
-        final_away
-    ))
 
     conn.commit()
 
     conn.close()
 
 
-def get_match_count():
+# =========================================================
+# DB 통계
+# =========================================================
 
-    conn = get_connection()
+def get_db_count():
+
+    conn = sqlite3.connect(DB_FILE)
 
     cur = conn.cursor()
+
 
     cur.execute(
         "SELECT COUNT(*) FROM matches"
     )
 
-    count = cur.fetchone()[0]
+    match_count = cur.fetchone()[0]
 
-    conn.close()
-
-    return count
-
-
-def get_odds_count():
-
-    conn = get_connection()
-
-    cur = conn.cursor()
 
     cur.execute(
         "SELECT COUNT(*) FROM odds"
     )
 
-    count = cur.fetchone()[0]
+    odds_count = cur.fetchone()[0]
+
 
     conn.close()
 
-    return count
+    return match_count, odds_count
 
 
-def get_matches():
-
-    conn = get_connection()
-
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT
-            scoreman_id,
-            match_date,
-            home_team,
-            away_team,
-            home_score,
-            away_score,
-            result
-        FROM matches
-        ORDER BY id DESC
-    """)
-
-    rows = cur.fetchall()
-
-    conn.close()
-
-    return rows
-
-
-def get_odds():
-
-    conn = get_connection()
-
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT
-            scoreman_id,
-            company,
-            initial_home,
-            initial_draw,
-            initial_away,
-            final_home,
-            final_draw,
-            final_away
-        FROM odds
-        ORDER BY id DESC
-    """)
-
-    rows = cur.fetchall()
-
-    conn.close()
-
-    return rows
-
-
-# ==========================================
-# DB 생성
-# ==========================================
-
-init_database()
-
-
-# ==========================================
+# =========================================================
 # 화면
-# ==========================================
+# =========================================================
 
 st.title("⚽ 스코어맨 배당 분석")
 
@@ -296,807 +654,438 @@ st.caption(
 )
 
 
-# ==========================================
-# DB 현황
-# ==========================================
+match_count, odds_count = get_db_count()
 
-col1, col2 = st.columns(2)
 
-with col1:
+c1, c2 = st.columns(2)
 
+with c1:
     st.metric(
         "경기 데이터",
-        get_match_count()
+        match_count
     )
 
-
-with col2:
-
+with c2:
     st.metric(
         "배당 데이터",
-        get_odds_count()
+        odds_count
     )
 
 
 st.divider()
 
 
-# ==========================================
+# =========================================================
 # 경기 ID
-# ==========================================
+# =========================================================
 
 st.subheader("① 스코어맨 경기")
 
-match_id = st.text_input(
+schedule_id = st.text_input(
     "스코어맨 경기 ID",
     value="2929675"
-).strip()
-
-
-if not match_id:
-
-    st.warning(
-        "경기 ID를 입력하세요."
-    )
-
-    st.stop()
-
-
-match_url = (
-    "https://www.scoreman123.com/"
-    f"match/data-{match_id}"
 )
 
-
-st.write(
-    "경기 페이지:",
-    match_url
-)
-
-
-# ==========================================
-# HTTP 헤더
-# ==========================================
-
-headers = {
-
-    "User-Agent":
-        "Mozilla/5.0 "
-        "(Linux; Android 10) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/120.0 "
-        "Mobile Safari/537.36",
-
-    "Referer":
-        match_url,
-
-    "Accept":
-        "application/json,text/plain,*/*"
-
-}
-
-
-# ==========================================
-# 실행 버튼
-# ==========================================
 
 if st.button(
-    "스코어맨 경기 분석",
+    "🔎 실제 스코어맨 데이터 가져오기",
     type="primary"
 ):
 
+    if not schedule_id:
+
+        st.error("경기 ID를 입력하세요.")
+
+        st.stop()
+
+
+    # -----------------------------------------------------
+    # 경기 페이지
+    # -----------------------------------------------------
+
+    st.subheader("② 경기 페이지")
+
+
+    status, html, page_url = get_match_page(
+        schedule_id
+    )
+
+
+    st.write(
+        f"HTTP 상태: {status}"
+    )
+
+    st.write(
+        f"HTML 크기: {len(html):,}"
+    )
+
+
+    if status != 200:
+
+        st.error(
+            "스코어맨 경기 페이지를 가져오지 못했습니다."
+        )
+
+        st.stop()
+
+
+    match = parse_match_html(html)
+
+
+    st.write(
+        f"페이지 제목: {match['title']}"
+    )
+
+
+    # -----------------------------------------------------
+    # 경기 정보
+    # -----------------------------------------------------
+
+    st.subheader("③ 경기 정보")
+
+
+    a, b = st.columns(2)
+
+
+    with a:
+
+        st.write(
+            f"**홈팀:** {match['home_team']}"
+        )
+
+        st.write(
+            f"**원정팀:** {match['away_team']}"
+        )
+
+
+    with b:
+
+        st.write(
+            f"**최종 스코어:** "
+            f"{match['home_score']} - "
+            f"{match['away_score']}"
+        )
+
+        st.write(
+            f"**결과:** {match['result']}"
+        )
+
+
+    # -----------------------------------------------------
+    # 배당 API
+    # -----------------------------------------------------
+
+    st.subheader(
+        "④ 실제 스코어맨 배당 API"
+    )
+
+
+    api_status, api_text, api_url = \
+        get_scoreman_odds(schedule_id)
+
+
+    st.write(
+        f"요청 URL: {api_url}"
+    )
+
+    st.write(
+        f"API HTTP: {api_status}"
+    )
+
+    st.write(
+        f"API 응답 크기: {len(api_text):,}"
+    )
+
+
+    if api_status != 200:
+
+        st.error(
+            "배당 API 요청 실패"
+        )
+
+        st.stop()
+
+
+    # -----------------------------------------------------
+    # JSON 표시
+    # -----------------------------------------------------
+
+    st.subheader(
+        "🔍 실제 배당 JSON 원본"
+    )
+
+
     try:
 
-        # ======================================
-        # 경기 페이지
-        # ======================================
+        json_data = json.loads(api_text)
 
-        response = requests.get(
-
-            match_url,
-
-            headers=headers,
-
-            timeout=30
-
-        )
-
-
-        st.subheader(
-            "② 경기 페이지"
-        )
-
-
-        st.write(
-            "HTTP 상태:",
-            response.status_code
-        )
-
-
-        st.write(
-            "HTML 크기:",
-            len(response.text)
-        )
-
-
-        if response.status_code != 200:
-
-            st.error(
-                "스코어맨 접속 실패"
-            )
-
-            st.stop()
-
-
-        # ======================================
-        # HTML 분석
-        # ======================================
-
-        soup = BeautifulSoup(
-
-            response.text,
-
-            "html.parser"
-
-        )
-
-
-        html = response.text
-
-
-        page_text = soup.get_text(
-
-            " ",
-
-            strip=True
-
-        )
-
-
-        # ======================================
-        # 제목
-        # ======================================
-
-        title = ""
-
-        if soup.title:
-
-            title = soup.title.get_text(
-
-                " ",
-
-                strip=True
-
-            )
-
-
-        st.write(
-            "페이지 제목:",
-            title
-        )
-
-
-        # ======================================
-        # 팀명
-        # ======================================
-
-        home_team = ""
-
-        away_team = ""
-
-
-        title_match = re.search(
-
-            r"(.+?)\s+vs\s+(.+?)\s+실시간",
-
-            title
-
-        )
-
-
-        if title_match:
-
-            home_team = (
-                title_match
-                .group(1)
-                .strip()
-            )
-
-            away_team = (
-                title_match
-                .group(2)
-                .strip()
-            )
-
-
-        # ======================================
-        # 테스트 경기
-        # ======================================
-
-        home_score = None
-
-        away_score = None
-
-
-        if match_id == "2929675":
-
-            home_team = "강원"
-
-            away_team = "부천"
-
-            home_score = 0
-
-            away_score = 1
-
-
-        # ======================================
-        # 스코어 검색
-        # ======================================
-
-        if home_score is None:
-
-            patterns = [
-
-                r"(\d+)\s*-\s*(\d+)",
-
-                r"(\d+)\s*:\s*(\d+)"
-
-            ]
-
-
-            for pattern in patterns:
-
-                found = re.findall(
-
-                    pattern,
-
-                    page_text
-
-                )
-
-
-                for a, b in found:
-
-                    a = int(a)
-
-                    b = int(b)
-
-
-                    if a <= 20 and b <= 20:
-
-                        home_score = a
-
-                        away_score = b
-
-                        break
-
-
-                if home_score is not None:
-
-                    break
-
-
-        # ======================================
-        # 결과
-        # ======================================
-
-        result = ""
-
-
-        if (
-
-            home_score is not None
-
-            and
-
-            away_score is not None
-
+        with st.expander(
+            "JSON 열기"
         ):
 
-            if home_score > away_score:
+            st.json(json_data)
 
-                result = "승"
+    except:
 
-            elif home_score < away_score:
-
-                result = "패"
-
-            else:
-
-                result = "무"
+        st.code(api_text)
 
 
-        # ======================================
-        # 경기 정보
-        # ======================================
+    # -----------------------------------------------------
+    # 배당 파싱
+    # -----------------------------------------------------
 
-        st.subheader(
-            "③ 경기 정보"
-        )
-
-
-        st.write(
-            "홈팀:",
-            home_team
-        )
+    odds_list, error = parse_odds_json(
+        api_text
+    )
 
 
-        st.write(
-            "원정팀:",
-            away_team
-        )
+    if error:
+
+        st.error(error)
+
+        st.stop()
 
 
-        st.write(
-            "최종 스코어:",
-            f"{home_score} - {away_score}"
-        )
+    # -----------------------------------------------------
+    # DB 저장
+    # -----------------------------------------------------
+
+    save_match(
+        schedule_id,
+        match,
+        page_url
+    )
 
 
-        st.write(
-            "결과:",
-            result
-        )
+    save_odds(
+        schedule_id,
+        odds_list
+    )
 
 
-        # ======================================
-        # 스코어맨 실제 배당 API
-        # ======================================
-
-        st.subheader(
-            "④ 실제 스코어맨 배당 API"
-        )
+    st.success(
+        f"저장 완료: "
+        f"경기 1개 / 배당업체 {len(odds_list)}개"
+    )
 
 
-        api_url = (
-            "https://www.scoreman123.com/"
-            "ajax/soccerajax"
-        )
+    # -----------------------------------------------------
+    # 초기 / 최종 배당
+    # -----------------------------------------------------
+
+    st.subheader(
+        "⑤ 초기 / 최종 승무패 배당"
+    )
 
 
-        params = {
-
-            "type": "14",
-
-            "t": "1",
-
-            "id": match_id,
-
-            "h": "0"
-
-        }
+    table = []
 
 
-        st.write(
-            "요청 URL:"
-        )
+    for x in odds_list:
+
+        table.append({
+
+            "업체":
+                x["company_name"],
+
+            "초기 홈승":
+                x["euro_first_home"],
+
+            "초기 무":
+                x["euro_first_draw"],
+
+            "초기 원정승":
+                x["euro_first_away"],
+
+            "최종 홈승":
+                x["euro_last_home"],
+
+            "최종 무":
+                x["euro_last_draw"],
+
+            "최종 원정승":
+                x["euro_last_away"]
+
+        })
 
 
-        st.code(
-
-            api_url
-            + "?type=14&t=1&id="
-            + str(match_id)
-            + "&h=0"
-
-        )
+    st.dataframe(
+        table,
+        use_container_width=True,
+        hide_index=True
+    )
 
 
-        # ======================================
-        # API 요청
-        # ======================================
+    # -----------------------------------------------------
+    # 배당 변화
+    # -----------------------------------------------------
 
-        api_response = requests.get(
-
-            api_url,
-
-            params=params,
-
-            headers=headers,
-
-            timeout=30
-
-        )
+    st.subheader(
+        "⑥ 배당 변화"
+    )
 
 
-        st.write(
-
-            "API HTTP:",
-
-            api_response.status_code
-
-        )
+    change_table = []
 
 
-        st.write(
+    for x in odds_list:
 
-            "API 응답 크기:",
+        try:
 
-            len(api_response.text)
+            home_change = (
+                x["euro_last_home"]
+                -
+                x["euro_first_home"]
+            )
 
-        )
+        except:
 
-
-        # ======================================
-        # JSON
-        # ======================================
-
-        st.subheader(
-            "🔍 실제 배당 JSON 원본"
-        )
-
-
-        api_json = None
+            home_change = None
 
 
         try:
 
-            api_json = api_response.json()
-
-
-            st.json(
-                api_json
+            draw_change = (
+                x["euro_last_draw"]
+                -
+                x["euro_first_draw"]
             )
 
+        except:
 
-        except Exception:
+            draw_change = None
 
-            st.code(
 
-                api_response.text,
+        try:
 
-                language="json"
-
+            away_change = (
+                x["euro_last_away"]
+                -
+                x["euro_first_away"]
             )
 
+        except:
 
-        # ======================================
-        # 배당 추출
-        # ======================================
+            away_change = None
 
-        companies = []
 
+        change_table.append({
 
-        if isinstance(
+            "업체":
+                x["company_name"],
 
-            api_json,
+            "홈승 변화":
+                round(home_change, 3)
+                if home_change is not None
+                else None,
 
-            dict
+            "무 변화":
+                round(draw_change, 3)
+                if draw_change is not None
+                else None,
 
-        ):
+            "원정승 변화":
+                round(away_change, 3)
+                if away_change is not None
+                else None
 
-            data = api_json.get(
+        })
 
-                "Data",
 
-                {}
+    st.dataframe(
+        change_table,
+        use_container_width=True,
+        hide_index=True
+    )
 
-            )
 
+    # -----------------------------------------------------
+    # 결과
+    # -----------------------------------------------------
 
-            mixodds = data.get(
+    st.subheader(
+        "⑦ 실제 경기 결과"
+    )
 
-                "mixodds",
 
-                []
+    st.success(
 
-            )
+        f"{match['home_team']} "
+        f"{match['home_score']} - "
+        f"{match['away_score']} "
+        f"{match['away_team']}  → "
+        f"{match['result']}"
 
+    )
 
-            for item in mixodds:
 
-                cid = item.get(
-                    "cid"
-                )
-
-
-                euro = item.get(
-
-                    "euro",
-
-                    {}
-
-                )
-
-
-                first = euro.get(
-
-                    "f",
-
-                    {}
-
-                )
-
-
-                last = euro.get(
-
-                    "l",
-
-                    {}
-
-                )
-
-
-                companies.append({
-
-                    "cid": cid,
-
-                    "초기승": first.get(
-                        "u"
-                    ),
-
-                    "초기무": first.get(
-                        "g"
-                    ),
-
-                    "초기패": first.get(
-                        "d"
-                    ),
-
-                    "최종승": last.get(
-                        "u"
-                    ),
-
-                    "최종무": last.get(
-                        "g"
-                    ),
-
-                    "최종패": last.get(
-                        "d"
-                    )
-
-                })
-
-
-        # ======================================
-        # 배당 표시
-        # ======================================
-
-        st.subheader(
-            "⑤ 초기 / 최종 배당"
-        )
-
-
-        st.write(
-
-            "배당 업체:",
-
-            len(companies)
-
-        )
-
-
-        if companies:
-
-            odds_df = pd.DataFrame(
-
-                companies
-
-            )
-
-
-            st.dataframe(
-
-                odds_df,
-
-                use_container_width=True,
-
-                hide_index=True
-
-            )
-
-
-            # ==================================
-            # 배당 저장
-            # ==================================
-
-            saved = 0
-
-
-            for row in companies:
-
-                try:
-
-                    save_odds(
-
-                        match_id,
-
-                        str(row["cid"]),
-
-                        row["초기승"],
-
-                        row["초기무"],
-
-                        row["초기패"],
-
-                        row["최종승"],
-
-                        row["최종무"],
-
-                        row["최종패"]
-
-                    )
-
-
-                    saved += 1
-
-
-                except Exception as e:
-
-                    st.warning(
-
-                        f"배당 저장 실패: {e}"
-
-                    )
-
-
-            st.success(
-
-                f"{saved}개 배당 DB 저장 완료"
-
-            )
-
-
-        else:
-
-            st.warning(
-
-                "현재 API에서 mixodds를 찾지 못했습니다."
-
-            )
-
-
-        # ======================================
-        # 경기 저장
-        # ======================================
-
-        save_match(
-
-            match_id,
-
-            "",
-
-            home_team,
-
-            away_team,
-
-            home_score,
-
-            away_score,
-
-            result
-
-        )
-
-
-        st.success(
-
-            "경기 결과 DB 저장 완료"
-
-        )
-
-
-    except Exception as e:
-
-        st.error(
-
-            f"오류 발생: {e}"
-
-        )
-
-
-# ==========================================
-# DB 경기 결과
-# ==========================================
+# =========================================================
+# DB 확인
+# =========================================================
 
 st.divider()
 
-st.subheader(
-    "⑥ SQLite 경기 DB"
-)
+st.subheader("⑧ SQLite 저장 데이터")
+
+conn = sqlite3.connect(DB_FILE)
 
 
-matches = get_matches()
+try:
 
+    import pandas as pd
 
-if matches:
-
-    df_matches = pd.DataFrame(
-
-        matches,
-
-        columns=[
-
-            "경기ID",
-
-            "경기일",
-
-            "홈팀",
-
-            "원정팀",
-
-            "홈스코어",
-
-            "원정스코어",
-
-            "결과"
-
-        ]
-
+    df_match = pd.read_sql_query(
+        """
+        SELECT
+            schedule_id AS 경기ID,
+            home_team AS 홈팀,
+            away_team AS 원정팀,
+            home_score AS 홈점수,
+            away_score AS 원정점수,
+            result AS 결과
+        FROM matches
+        ORDER BY id DESC
+        """,
+        conn
     )
 
 
+    df_odds = pd.read_sql_query(
+        """
+        SELECT
+            schedule_id AS 경기ID,
+            company_name AS 업체,
+            euro_first_home AS 초기홈승,
+            euro_first_draw AS 초기무,
+            euro_first_away AS 초기원정승,
+            euro_last_home AS 최종홈승,
+            euro_last_draw AS 최종무,
+            euro_last_away AS 최종원정승
+        FROM odds
+        ORDER BY id DESC
+        """,
+        conn
+    )
+
+
+    st.write("경기 DB")
+
     st.dataframe(
-
-        df_matches,
-
+        df_match,
         use_container_width=True,
-
         hide_index=True
-
-    )
-
-else:
-
-    st.info(
-        "아직 저장된 경기 데이터가 없습니다."
     )
 
 
-# ==========================================
-# DB 배당 결과
-# ==========================================
-
-st.subheader(
-    "⑦ SQLite 배당 DB"
-)
-
-
-odds = get_odds()
-
-
-if odds:
-
-    df_odds = pd.DataFrame(
-
-        odds,
-
-        columns=[
-
-            "경기ID",
-
-            "업체",
-
-            "초기승",
-
-            "초기무",
-
-            "초기패",
-
-            "최종승",
-
-            "최종무",
-
-            "최종패"
-
-        ]
-
-    )
-
+    st.write("배당 DB")
 
     st.dataframe(
-
         df_odds,
-
         use_container_width=True,
-
         hide_index=True
-
     )
 
-else:
 
-    st.info(
-        "아직 저장된 배당 데이터가 없습니다."
-            )
+finally:
+
+    conn.close()
