@@ -987,3 +987,92 @@ if odds_rows:
         use_container_width=True,
         hide_index=True
             )
+st.divider()
+
+st.header("📊 과거 배당 승무패 분석")
+
+try:
+
+    analysis_df = analysis.get_all_analysis_data()
+
+    if analysis_df.empty:
+
+        st.info(
+            "아직 분석할 경기 데이터가 없습니다."
+        )
+
+    else:
+
+        st.subheader("📌 전체 결과")
+
+        stats = analysis.calculate_result_stats(
+            analysis_df
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+
+            st.metric(
+                "승",
+                f'{stats["승"]["percent"]}% '
+                f'({stats["승"]["count"]}경기)'
+            )
+
+        with col2:
+
+            st.metric(
+                "무",
+                f'{stats["무"]["percent"]}% '
+                f'({stats["무"]["count"]}경기)'
+            )
+
+        with col3:
+
+            st.metric(
+                "패",
+                f'{stats["패"]["percent"]}% '
+                f'({stats["패"]["count"]}경기)'
+            )
+
+
+        st.subheader(
+            "📈 초기 승배당 구간별 통계"
+        )
+
+        table = analysis.make_odds_range_table(
+            analysis_df,
+            side="home"
+        )
+
+        st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+        st.subheader(
+            "🏢 배당업체별 통계"
+        )
+
+        company_table = analysis.get_company_stats(
+            analysis_df
+        )
+
+        st.dataframe(
+            company_table,
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+except Exception as e:
+
+    st.error(
+        "분석 오류"
+    )
+
+    st.code(
+        str(e)
+    )
