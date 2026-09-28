@@ -1,58 +1,43 @@
 import sqlite3
 import os
-from datetime import datetime
 
-
-DB_FILE = "historical_odds.db"
+DB_FILE = "scoreman.db"
 
 
 def get_connection():
     return sqlite3.connect(DB_FILE)
 
 
-def init_db():
+def init_database():
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schedule_id TEXT UNIQUE,
-            sport TEXT,
-            league TEXT,
+            scoreman_id TEXT UNIQUE,
             match_date TEXT,
             home_team TEXT,
             away_team TEXT,
             home_score INTEGER,
             away_score INTEGER,
             result TEXT,
-            source TEXT,
-            created_at TEXT
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS odds (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schedule_id TEXT,
-            company_id INTEGER,
-            company_name TEXT,
-
+            scoreman_id TEXT,
+            company TEXT,
             initial_home REAL,
             initial_draw REAL,
             initial_away REAL,
-
             final_home REAL,
             final_draw REAL,
             final_away REAL,
-
-            result TEXT,
-            created_at TEXT,
-
-            UNIQUE(
-                schedule_id,
-                company_id
-            )
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -61,58 +46,37 @@ def init_db():
 
 
 def save_match(
-    schedule_id,
-    sport,
-    league,
+    scoreman_id,
     match_date,
     home_team,
     away_team,
     home_score,
     away_score,
-    result,
-    source="Scoreman"
+    result
 ):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO matches (
-            schedule_id,
-            sport,
-            league,
+        INSERT OR REPLACE INTO matches
+        (
+            scoreman_id,
             match_date,
             home_team,
             away_team,
             home_score,
             away_score,
-            result,
-            source,
-            created_at
+            result
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(schedule_id)
-        DO UPDATE SET
-            sport=excluded.sport,
-            league=excluded.league,
-            match_date=excluded.match_date,
-            home_team=excluded.home_team,
-            away_team=excluded.away_team,
-            home_score=excluded.home_score,
-            away_score=excluded.away_score,
-            result=excluded.result,
-            source=excluded.source
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
-        str(schedule_id),
-        sport,
-        league,
+        str(scoreman_id),
         match_date,
         home_team,
         away_team,
         home_score,
         away_score,
-        result,
-        source,
-        datetime.now().isoformat()
+        result
     ))
 
     conn.commit()
@@ -120,67 +84,40 @@ def save_match(
 
 
 def save_odds(
-    schedule_id,
-    company_id,
-    company_name,
+    scoreman_id,
+    company,
     initial_home,
     initial_draw,
     initial_away,
     final_home,
     final_draw,
-    final_away,
-    result
+    final_away
 ):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO odds (
-            schedule_id,
-            company_id,
-            company_name,
-
+        INSERT INTO odds
+        (
+            scoreman_id,
+            company,
             initial_home,
             initial_draw,
             initial_away,
-
             final_home,
             final_draw,
-            final_away,
-
-            result,
-            created_at
+            final_away
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(schedule_id, company_id)
-        DO UPDATE SET
-
-            company_name=excluded.company_name,
-
-            initial_home=excluded.initial_home,
-            initial_draw=excluded.initial_draw,
-            initial_away=excluded.initial_away,
-
-            final_home=excluded.final_home,
-            final_draw=excluded.final_draw,
-            final_away=excluded.final_away,
-
-            result=excluded.result
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        str(schedule_id),
-        company_id,
-        company_name,
-
+        str(scoreman_id),
+        company,
         initial_home,
         initial_draw,
         initial_away,
-
         final_home,
         final_draw,
-        final_away,
-
-        result,
-        datetime.now().isoformat()
+        final_away
     ))
 
     conn.commit()
@@ -191,11 +128,7 @@ def get_match_count():
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM matches
-    """)
-
+    cur.execute("SELECT COUNT(*) FROM matches")
     count = cur.fetchone()[0]
 
     conn.close()
@@ -207,11 +140,7 @@ def get_odds_count():
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM odds
-    """)
-
+    cur.execute("SELECT COUNT(*) FROM odds")
     count = cur.fetchone()[0]
 
     conn.close()
@@ -219,25 +148,22 @@ def get_odds_count():
     return count
 
 
-def get_all_matches():
+def get_matches():
     conn = get_connection()
 
     cur = conn.cursor()
 
     cur.execute("""
         SELECT
-            schedule_id,
-            sport,
-            league,
+            scoreman_id,
             match_date,
             home_team,
             away_team,
             home_score,
             away_score,
-            result,
-            source
+            result
         FROM matches
-        ORDER BY match_date DESC
+        ORDER BY id DESC
     """)
 
     rows = cur.fetchall()
@@ -247,28 +173,23 @@ def get_all_matches():
     return rows
 
 
-def get_all_odds():
+def get_odds():
     conn = get_connection()
 
     cur = conn.cursor()
 
     cur.execute("""
         SELECT
-            schedule_id,
-            company_id,
-            company_name,
-
+            scoreman_id,
+            company,
             initial_home,
             initial_draw,
             initial_away,
-
             final_home,
             final_draw,
-            final_away,
-
-            result
+            final_away
         FROM odds
-        ORDER BY schedule_id DESC, company_id
+        ORDER BY id DESC
     """)
 
     rows = cur.fetchall()
@@ -278,16 +199,5 @@ def get_all_odds():
     return rows
 
 
-def clear_database():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("DELETE FROM odds")
-    cur.execute("DELETE FROM matches")
-
-    conn.commit()
-    conn.close()
-
-
-# 프로그램 시작 시 DB 자동 생성
-init_db()
+# 프로그램 시작 시 DB 생성
+init_database()
