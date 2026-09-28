@@ -222,3 +222,31 @@ def get_database_stats():
         "matches": matches,
         "odds": odds
     }
+def get_match_count():
+
+    conn = get_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM matches")
+
+        return cur.fetchone()[0]
+
+    finally:
+        conn.close()
+
+
+def get_odds_count():
+
+    conn = get_connection()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM odds")
+
+        return cur.fetchone()[0]
+
+    finally:
+        conn.close()
