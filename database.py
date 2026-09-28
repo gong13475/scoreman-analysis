@@ -589,8 +589,22 @@ def get_all_odds():
         cur = conn.cursor()
 
         cur.execute("""
-            SELECT *
+            SELECT
+                id,
+                schedule_id,
+                company_id,
+                company_name,
+
+                euro_f_home AS initial_home,
+                euro_f_draw AS initial_draw,
+                euro_f_away AS initial_away,
+
+                euro_l_home AS final_home,
+                euro_l_draw AS final_draw,
+                euro_l_away AS final_away
+
             FROM odds
+
             ORDER BY id DESC
         """)
 
