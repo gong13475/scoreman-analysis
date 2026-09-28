@@ -252,3 +252,79 @@ st.info(
     "이 단계에서는 데이터를 DB에 저장하지 않습니다. "
     "먼저 실제 경기 링크와 페이지 구조를 확인합니다."
 ) 
+# ==========================================
+# 실제 스코어맨 경기 테스트
+# ==========================================
+
+import requests
+from bs4 import BeautifulSoup
+
+st.divider()
+
+st.subheader("실제 스코어맨 경기 테스트")
+
+if st.button("강원 vs 부천 데이터 가져오기"):
+
+    url = "https://www.scoreman123.com/match/data-2929675"
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Linux; Android 10) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/120.0 Mobile Safari/537.36"
+        )
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=30
+        )
+
+        st.write(
+            "HTTP 상태:",
+            response.status_code
+        )
+
+        st.write(
+            "페이지 크기:",
+            len(response.text)
+        )
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+        page_text = soup.get_text(
+            " ",
+            strip=True
+        )
+
+        st.subheader("가져온 경기 데이터")
+
+        st.text(
+            page_text[:8000]
+        )
+
+        if response.status_code == 200:
+
+            st.success(
+                "실제 스코어맨 경기 페이지 접속 성공"
+            )
+
+        else:
+
+            st.error(
+                "경기 페이지 접속 실패"
+            )
+
+    except Exception as e:
+
+        st.error(
+            f"오류 발생: {e}"
+        )
