@@ -560,7 +560,7 @@ st.subheader("① 스코어맨 경기")
 
 schedule_id = st.text_input(
     "스코어맨 경기 ID",
-    value="2929675"
+    value="2716490"
 )
 
 if schedule_id:
