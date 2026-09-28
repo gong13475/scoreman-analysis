@@ -1286,8 +1286,10 @@ if st.button(
 
 
     st.success(
+    "✅ 과거 DB 수집이 완료되었습니다."
+)
 # =========================================================
-# 과거 스코어맨 DB 구축
+# 과거 경기 DB 구축
 # =========================================================
 
 st.divider()
@@ -1295,29 +1297,51 @@ st.divider()
 st.header("🗄️ 과거 스코어맨 DB 구축")
 
 st.caption(
-    "경기 ID 범위의 완료된 경기만 확인하여 "
-    "실제 결과와 1X2 배당을 SQLite DB에 저장합니다."
+    "경기 ID 범위를 입력하여 완료된 경기의 결과와 1X2 배당을 DB에 저장합니다."
 )
 
 
 # =========================================================
-# ID 입력
+# build_database 불러오기
+# =========================================================
+
+try:
+
+    from build_database import build_database_progress
+
+except Exception as e:
+
+    st.error(
+        "build_database.py를 불러오지 못했습니다."
+    )
+
+    st.code(
+        str(e)
+    )
+
+    st.stop()
+
+
+# =========================================================
+# 경기 ID 입력
 # =========================================================
 
 col1, col2 = st.columns(2)
 
+
 with col1:
 
-    start_id = st.number_input(
+    history_start_id = st.number_input(
         "시작 경기 ID",
         min_value=1,
         value=2716480,
         step=1
     )
 
+
 with col2:
 
-    end_id = st.number_input(
+    history_end_id = st.number_input(
         "마지막 경기 ID",
         min_value=1,
         value=2716580,
@@ -1325,35 +1349,59 @@ with col2:
     )
 
 
-if end_id < start_id:
+# =========================================================
+# 수집 대상 개수
+# =========================================================
+
+total_ids = (
+    history_end_id
+    - history_start_id
+    + 1
+)
+
+
+if total_ids <= 0:
 
     st.error(
-        "마지막 경기 ID는 시작 경기 ID보다 커야 합니다."
+        "마지막 경기 ID는 시작 경기 ID보다 크거나 같아야 합니다."
     )
 
 else:
 
-    total_ids = end_id - start_id + 1
-
     st.info(
-        f"수집 대상 ID: **{total_ids:,}개**"
+        f"수집 대상 ID: {total_ids}개"
     )
 
 
 # =========================================================
-# 수집 버튼
+# 너무 많은 ID 방지
+# =========================================================
+
+if total_ids > 1000:
+
+    st.warning(
+        "⚠️ 한 번에 1,000개 이상 수집하지 않는 것을 권장합니다."
+    )
+
+
+# =========================================================
+# DB 수집 버튼
 # =========================================================
 
 if st.button(
-    "🚀 과거 DB 수집 시작",
+    "📥 과거 경기 DB 수집",
     type="primary",
     use_container_width=True
 ):
 
-    if end_id < start_id:
+    # -----------------------------------------------------
+    # ID 검사
+    # -----------------------------------------------------
+
+    if history_end_id < history_start_id:
 
         st.error(
-            "ID 범위를 확인하세요."
+            "마지막 경기 ID가 시작 경기 ID보다 작습니다."
         )
 
         st.stop()
@@ -1367,435 +1415,190 @@ if st.button(
         0
     )
 
-    status_box = st.empty()
-
-    result_box = st.empty()
-
 
     # -----------------------------------------------------
-    # 통계
+    # 로그
     # -----------------------------------------------------
 
-    success_count = 0
+    log_box = st.empty()
 
-    skip_count = 0
-
-    fail_count = 0
-
-    odds_count = 0
+    logs = []
 
 
-    # -----------------------------------------------------
-    # 이미 저장된 경기 확인
-    # -----------------------------------------------------
+    def update_progress(value):
 
-    try:
+        try:
 
-        existing_matches = (
-            database.get_all_matches()
-        )
+            value = float(value)
 
-        existing_ids = set()
+        except Exception:
 
-        for row in existing_matches:
-
-            existing_ids.add(
-                str(
-                    row["schedule_id"]
-                )
-            )
-
-    except Exception:
-
-        existing_ids = set()
+            value = 0.0
 
 
-    # -----------------------------------------------------
-    # ID 순차 수집
-    # -----------------------------------------------------
-
-    for index, schedule_id in enumerate(
-        range(
-            start_id,
-            end_id + 1
-        ),
-        start=1
-    ):
-
-        schedule_id = str(
-            schedule_id
-        )
-
-
-        progress_value = (
-            index /
-            total_ids
+        value = min(
+            max(
+                value,
+                0.0
+            ),
+            1.0
         )
 
 
         progress.progress(
-            progress_value
+            value
         )
 
 
-        status_box.info(
-            f"수집 중: **{schedule_id}** "
-            f"({index:,} / {total_ids:,})"
+    def update_log(message):
+
+        logs.append(
+            str(message)
         )
 
 
-        # =================================================
-        # 이미 DB에 존재
-        # =================================================
-
-        if schedule_id in existing_ids:
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"이미 저장됨"
-            )
-
-            continue
+        # 최근 50개만 표시
+        log_box.code(
+            "\n".join(
+                logs[-50:]
+            ),
+            language="text"
+        )
 
 
-        # =================================================
-        # 경기 페이지
-        # =================================================
+    # -----------------------------------------------------
+    # 과거 DB 수집
+    # -----------------------------------------------------
+
+    with st.spinner(
+        "스코어맨 과거 경기 데이터를 수집하고 있습니다..."
+    ):
 
         try:
 
-            response = get_match_page(
-                schedule_id
+            result = build_database_progress(
+
+                int(history_start_id),
+
+                int(history_end_id),
+
+                progress_callback=update_progress,
+
+                log_callback=update_log,
+
+                delay=0.5
+
             )
 
         except Exception as e:
 
-            fail_count += 1
-
-            result_box.write(
-                f"❌ ID {schedule_id} "
-                f"요청 오류: {e}"
+            st.error(
+                "❌ 과거 DB 수집 중 오류가 발생했습니다."
             )
 
-            continue
-
-
-        # -------------------------------------------------
-        # 404
-        # -------------------------------------------------
-
-        if response is None:
-
-            fail_count += 1
-
-            result_box.write(
-                f"❌ ID {schedule_id} "
-                f"응답 없음"
+            st.code(
+                str(e)
             )
 
-            continue
+            st.stop()
 
 
-        if response.status_code == 404:
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"404 / 경기 없음"
-            )
-
-            continue
-
-
-        if response.status_code != 200:
-
-            fail_count += 1
-
-            result_box.write(
-                f"❌ ID {schedule_id} "
-                f"HTTP {response.status_code}"
-            )
-
-            continue
-
-
-        # =================================================
-        # 경기 정보
-        # =================================================
-
-        try:
-
-            match = parse_match_info(
-                response.text,
-                schedule_id
-            )
-
-        except Exception as e:
-
-            fail_count += 1
-
-            result_box.write(
-                f"❌ ID {schedule_id} "
-                f"경기정보 파싱 실패"
-            )
-
-            continue
-
-
-        # =================================================
-        # 팀 이름 확인
-        # =================================================
-
-        if not match["home_team"]:
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"홈팀 확인 불가"
-            )
-
-            continue
-
-
-        if not match["away_team"]:
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"원정팀 확인 불가"
-            )
-
-            continue
-
-
-        # =================================================
-        # 실제 경기 결과 확인
-        # =================================================
-
-        if (
-
-            match["home_score"] is None
-
-            or
-
-            match["away_score"] is None
-
-            or
-
-            not match["result"]
-
-        ):
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"미완료 경기"
-            )
-
-            continue
-
-
-        # =================================================
-        # 배당 API
-        # =================================================
-
-        try:
-
-            api_url, api_response = (
-                get_scoreman_odds(
-                    schedule_id
-                )
-            )
-
-        except Exception as e:
-
-            fail_count += 1
-
-            result_box.write(
-                f"❌ ID {schedule_id} "
-                f"배당 요청 오류"
-            )
-
-            continue
-
-
-        if api_response is None:
-
-            fail_count += 1
-
-            continue
-
-
-        if api_response.status_code != 200:
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"배당 API 오류"
-            )
-
-            continue
-
-
-        # =================================================
-        # JSON
-        # =================================================
-
-        try:
-
-            odds_json = (
-                api_response.json()
-            )
-
-        except Exception:
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"배당 JSON 오류"
-            )
-
-            continue
-
-
-        # =================================================
-        # 배당 파싱
-        # =================================================
-
-        try:
-
-            odds_list = parse_odds_json(
-                odds_json
-            )
-
-        except Exception:
-
-            odds_list = []
-
-
-        # -------------------------------------------------
-        # 배당 없음
-        # -------------------------------------------------
-
-        if not odds_list:
-
-            skip_count += 1
-
-            result_box.write(
-                f"⏭️ ID {schedule_id} "
-                f"배당 없음"
-            )
-
-            continue
-
-
-        # =================================================
-        # DB 저장
-        # =================================================
-
-        try:
-
-            save_to_database(
-                match,
-                odds_list
-            )
-
-            success_count += 1
-
-            odds_count += len(
-                odds_list
-            )
-
-            existing_ids.add(
-                schedule_id
-            )
-
-
-            result_box.write(
-                f"✅ ID {schedule_id} "
-                f"저장 완료 / "
-                f"배당업체 {len(odds_list)}개"
-            )
-
-        except Exception as e:
-
-            fail_count += 1
-
-            result_box.write(
-                f"❌ ID {schedule_id} "
-                f"DB 저장 실패: {e}"
-            )
-
-
-    # =====================================================
-    # 완료
-    # =====================================================
+    # -----------------------------------------------------
+    # 진행률 완료
+    # -----------------------------------------------------
 
     progress.progress(
         1.0
     )
 
 
-    status_box.success(
+    # -----------------------------------------------------
+    # 결과값 안전하게 처리
+    # -----------------------------------------------------
+
+    if not isinstance(
+        result,
+        dict
+    ):
+
+        result = {}
+
+
+    success_count = int(
+        result.get(
+            "success",
+            0
+        )
+        or 0
+    )
+
+
+    failed_count = int(
+        result.get(
+            "failed",
+            0
+        )
+        or 0
+    )
+
+
+    odds_count = int(
+        result.get(
+            "odds",
+            0
+        )
+        or 0
+    )
+
+
+    # -----------------------------------------------------
+    # 완료 메시지
+    # -----------------------------------------------------
+
+    st.success(
         "✅ 과거 DB 수집이 완료되었습니다."
     )
 
 
-    st.success(
-        "수집 작업이 정상적으로 종료되었습니다."
+    # -----------------------------------------------------
+    # 수집 결과
+    # -----------------------------------------------------
+
+    st.subheader(
+        "📊 수집 결과"
     )
 
 
-    # =====================================================
-    # 결과
-    # =====================================================
-
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
 
     with col1:
 
         st.metric(
             "저장 성공 경기",
-            f"{success_count:,}"
+            success_count
         )
 
 
     with col2:
 
         st.metric(
-            "건너뜀",
-            f"{skip_count:,}"
+            "실패 / 건너뜀",
+            failed_count
         )
 
 
     with col3:
 
         st.metric(
-            "실패",
-            f"{fail_count:,}"
-        )
-
-
-    with col4:
-
-        st.metric(
             "저장 배당 업체",
-            f"{odds_count:,}"
+            odds_count
         )
 
 
-    # =====================================================
-    # 현재 DB
-    # =====================================================
+    # -----------------------------------------------------
+    # 현재 DB 현황
+    # -----------------------------------------------------
 
     st.subheader(
         "📊 현재 DB 현황"
@@ -1819,6 +1622,19 @@ if st.button(
             "전체 배당",
             database.get_odds_count()
         )
+
+
+    # -----------------------------------------------------
+    # 추가 안내
+    # -----------------------------------------------------
+
+    st.info(
+        "💡 DB 수집이 끝났습니다. "
+        "아래 '배당 입력 → 과거 경기 자동 분석'에서 "
+        "승/무/패 배당을 입력하면 과거 경기 결과를 분석할 수 있습니다."
+    )
+
+
 # =========================================================
 # 사용자 배당 입력 분석
 # =========================================================
