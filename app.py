@@ -3,10 +3,14 @@ import requests
 import sqlite3
 import json
 import re
+import pandas as pd
+import numpy as np
+
 from datetime import datetime
 
 import database
 import analysis
+
 
 
 # =========================================================
@@ -1335,7 +1339,8 @@ with col1:
         "시작 경기 ID",
         min_value=1,
         value=2716480,
-        step=1
+        step=1,
+        key="history_start_id"
     )
 
 
@@ -1345,7 +1350,8 @@ with col2:
         "마지막 경기 ID",
         min_value=1,
         value=2716580,
-        step=1
+        step=1,
+        key="history_end_id"
     )
 
 
@@ -1354,8 +1360,8 @@ with col2:
 # =========================================================
 
 total_ids = (
-    history_end_id
-    - history_start_id
+    int(history_end_id)
+    - int(history_start_id)
     + 1
 )
 
@@ -1391,7 +1397,8 @@ if total_ids > 1000:
 if st.button(
     "📥 과거 경기 DB 수집",
     type="primary",
-    use_container_width=True
+    use_container_width=True,
+    key="history_collect_button"
 ):
 
     # -----------------------------------------------------
@@ -1411,9 +1418,7 @@ if st.button(
     # 진행률
     # -----------------------------------------------------
 
-    progress = st.progress(
-        0
-    )
+    progress = st.progress(0)
 
 
     # -----------------------------------------------------
@@ -1437,17 +1442,12 @@ if st.button(
 
 
         value = min(
-            max(
-                value,
-                0.0
-            ),
+            max(value, 0.0),
             1.0
         )
 
 
-        progress.progress(
-            value
-        )
+        progress.progress(value)
 
 
     def update_log(message):
@@ -1457,7 +1457,6 @@ if st.button(
         )
 
 
-        # 최근 50개만 표시
         log_box.code(
             "\n".join(
                 logs[-50:]
@@ -1507,9 +1506,7 @@ if st.button(
     # 진행률 완료
     # -----------------------------------------------------
 
-    progress.progress(
-        1.0
-    )
+    progress.progress(1.0)
 
 
     # -----------------------------------------------------
@@ -1569,10 +1566,10 @@ if st.button(
     )
 
 
-    col1, col2, col3 = st.columns(3)
+    result_col1, result_col2, result_col3 = st.columns(3)
 
 
-    with col1:
+    with result_col1:
 
         st.metric(
             "저장 성공 경기",
@@ -1580,7 +1577,7 @@ if st.button(
         )
 
 
-    with col2:
+    with result_col2:
 
         st.metric(
             "실패 / 건너뜀",
@@ -1588,7 +1585,7 @@ if st.button(
         )
 
 
-    with col3:
+    with result_col3:
 
         st.metric(
             "저장 배당 업체",
@@ -1605,10 +1602,10 @@ if st.button(
     )
 
 
-    col1, col2 = st.columns(2)
+    db_col1, db_col2 = st.columns(2)
 
 
-    with col1:
+    with db_col1:
 
         st.metric(
             "전체 경기",
@@ -1616,7 +1613,7 @@ if st.button(
         )
 
 
-    with col2:
+    with db_col2:
 
         st.metric(
             "전체 배당",
@@ -1624,17 +1621,11 @@ if st.button(
         )
 
 
-    # -----------------------------------------------------
-    # 추가 안내
-    # -----------------------------------------------------
-
     st.info(
         "💡 DB 수집이 끝났습니다. "
         "아래 '배당 입력 → 과거 경기 자동 분석'에서 "
         "승/무/패 배당을 입력하면 과거 경기 결과를 분석할 수 있습니다."
-    )
-
-
+            )
 # =========================================================
 # 사용자 배당 입력 분석
 # =========================================================
@@ -2282,21 +2273,7 @@ if st.button(
         use_container_width=True,
         hide_index=True
     )
-
-    with col1:
-
-        st.metric(
-            "전체 경기",
-            database.get_match_count()
-        )
-
-
-    with col2:
-
-        st.metric(
-            "전체 배당",
-            database.get_odds_count()
-    )
+    
 # =========================================================
 # 🔥 고급 배당 분석
 # =========================================================
