@@ -1,14 +1,17 @@
+# ==========================================
+# app.py
+# 스코어맨 경기 / 배당 데이터 분석
+# ==========================================
+
 import streamlit as st
 import requests
-import re
-import sqlite3
-
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+import re
+import json
 
 
 # ==========================================
-# 페이지 설정
+# 기본 설정
 # ==========================================
 
 st.set_page_config(
@@ -19,22 +22,8 @@ st.set_page_config(
 
 
 # ==========================================
-# 기본 설정
+# HTTP 헤더
 # ==========================================
-
-SCOREMAN_URL = (
-    "https://www.scoreman123.com/"
-    "match/data-2929675"
-)
-
-SUMMARY_JS = (
-    "https://www.scoreman123.com/"
-    "scripts/soccer/summary"
-    "?v=w3EZghaJjq5VC2gU04EO10nrVNDVtsWwUUiY8uZJFxM1"
-)
-
-DB_FILE = "historical_odds.db"
-
 
 HEADERS = {
     "User-Agent": (
@@ -44,158 +33,61 @@ HEADERS = {
         "(KHTML, like Gecko) "
         "Chrome/120.0 "
         "Mobile Safari/537.36"
-    )
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
 }
-
-
-# ==========================================
-# DB 생성
-# ==========================================
-
-def create_database():
-
-    conn = sqlite3.connect(
-        DB_FILE
-    )
-
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS matches (
-
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            scoreman_id TEXT UNIQUE,
-
-            home_team TEXT,
-
-            away_team TEXT,
-
-            match_date TEXT,
-
-            final_score TEXT,
-
-            result TEXT,
-
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-
-        )
-    """)
-
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS odds (
-
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            match_id INTEGER,
-
-            company TEXT,
-
-            market TEXT,
-
-            initial_home REAL,
-
-            initial_draw REAL,
-
-            initial_away REAL,
-
-            final_home REAL,
-
-            final_draw REAL,
-
-            final_away REAL,
-
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-
-        )
-    """)
-
-
-    conn.commit()
-
-    conn.close()
-
-
-create_database()
-
-
-# ==========================================
-# DB 현황
-# ==========================================
-
-def get_db_count(table):
-
-    conn = sqlite3.connect(
-        DB_FILE
-    )
-
-    cur = conn.cursor()
-
-    cur.execute(
-        f"SELECT COUNT(*) FROM {table}"
-    )
-
-    count = cur.fetchone()[0]
-
-    conn.close()
-
-    return count
-
-
-col1, col2 = st.columns(2)
-
-
-with col1:
-
-    st.metric(
-        "경기 데이터",
-        get_db_count("matches")
-    )
-
-
-with col2:
-
-    st.metric(
-        "배당 데이터",
-        get_db_count("odds")
-    )
 
 
 # ==========================================
 # 제목
 # ==========================================
 
-st.title(
-    "⚽ 스코어맨 배당 분석"
-)
-
+st.title("⚽ 스코어맨 배당 분석")
 
 st.info(
-    "현재 단계에서는 실제 배당 요청 구조를 확인합니다. "
-    "배당 요청 주소가 확인된 뒤 초기/최종 배당을 DB에 저장합니다."
+    "현재 단계에서는 실제 스코어맨 경기 페이지와 "
+    "배당 요청 구조를 확인합니다."
 )
 
 
 # ==========================================
-# 실제 경기 페이지 확인
+# 경기 ID 입력
 # ==========================================
 
-st.divider()
+st.subheader("📌 스코어맨 경기")
 
-st.subheader(
-    "실제 스코어맨 경기 페이지"
+match_id = st.text_input(
+    "스코어맨 경기 ID",
+    value="2929675"
 )
 
 
-if st.button(
-    "경기 페이지 확인"
-):
+# ==========================================
+# 경기 URL
+# ==========================================
+
+match_url = (
+    "https://www.scoreman123.com/"
+    f"match/data-{match_id}"
+)
+
+
+st.write(
+    "경기 페이지:",
+    match_url
+)
+
+
+# ==========================================
+# 경기 페이지 가져오기
+# ==========================================
+
+if st.button("① 실제 스코어맨 경기 확인"):
 
     try:
 
         response = requests.get(
-            SCOREMAN_URL,
+            match_url,
             headers=HEADERS,
             timeout=30
         )
@@ -210,570 +102,508 @@ if st.button(
             len(response.text)
         )
 
+        if response.status_code == 200:
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
+            soup = BeautifulSoup(
+                response.text,
+                "html.parser"
+            )
+
+            st.success(
+                "실제 스코어맨 경기 페이지 접속 성공"
+            )
+
+            # ------------------------------
+            # 제목
+            # ------------------------------
+
+            title = soup.title
+
+            if title:
+
+                st.write(
+                    "페이지 제목:",
+                    title.get_text(
+                        strip=True
+                    )
+                )
+
+            # ------------------------------
+            # 경기 팀 찾기
+            # ------------------------------
+
+            html = response.text
+
+            st.subheader(
+                "경기 정보 확인"
+            )
+
+            for keyword in [
+                "강원",
+                "부천"
+            ]:
+
+                count = html.count(
+                    keyword
+                )
+
+                st.write(
+                    f"{keyword}: {count}회"
+                )
+
+            # ------------------------------
+            # 경기 결과
+            # ------------------------------
+
+            for score in [
+                "0-3",
+                "0 : 3",
+                "3-0",
+                "3 : 0"
+            ]:
+
+                count = html.count(
+                    score
+                )
+
+                if count:
+
+                    st.write(
+                        f"{score}: {count}회"
+                    )
+
+        else:
+
+            st.error(
+                "스코어맨 페이지 접속 실패"
+            )
+
+    except Exception as e:
+
+        st.error(
+            f"오류: {e}"
         )
 
 
-        if soup.title:
+# ==========================================
+# 실제 배당 JavaScript 분석
+# ==========================================
 
-            st.write(
-                "페이지 제목:",
-                soup.title.get_text(
-                    " ",
-                    strip=True
-                )
-            )
+st.divider()
 
+st.subheader(
+    "🔎 실제 스코어맨 배당 JavaScript 분석"
+)
+
+
+if st.button(
+    "② 배당 JavaScript 분석"
+):
+
+    try:
+
+        response = requests.get(
+            match_url,
+            headers=HEADERS,
+            timeout=30
+        )
 
         html = response.text
 
-
-        for word in [
-            "강원",
-            "부천",
-            "2929675",
-            "Bet365",
-            "Pinnacle"
-        ]:
-
-            st.write(
-                word,
-                ":",
-                html.count(word),
-                "회"
-            )
-
-
-    except Exception as e:
-
-        st.error(
-            str(e)
-        )
-
-
-# ==========================================
-# 핵심 JS 분석
-# ==========================================
-
-st.divider()
-
-st.subheader(
-    "🔎 실제 배당 JavaScript 분석"
-)
-
-
-if st.button(
-    "실제 배당 요청 구조 찾기"
-):
-
-    try:
-
-        # ==================================
-        # summary JS 다운로드
-        # ==================================
-
-        response = requests.get(
-            SUMMARY_JS,
-            headers=HEADERS,
-            timeout=30
-        )
-
-
         st.write(
-            "JS HTTP 상태:",
+            "HTTP 상태:",
             response.status_code
         )
 
+        st.write(
+            "HTML 크기:",
+            len(html)
+        )
+
+        # ------------------------------
+        # script 태그
+        # ------------------------------
+
+        soup = BeautifulSoup(
+            html,
+            "html.parser"
+        )
+
+        scripts = soup.find_all(
+            "script"
+        )
 
         st.write(
-            "JS 크기:",
-            len(response.text)
+            "스크립트 개수:",
+            len(scripts)
         )
 
-
-        js = response.text
-
-
-        if not js:
-
-            st.error(
-                "JavaScript 내용을 가져오지 못했습니다."
-            )
-
-            st.stop()
-
-
-        st.success(
-            "summary JavaScript 다운로드 성공"
-        )
-
-
-        # ==================================
-        # 찾을 키워드
-        # ==================================
+        # ------------------------------
+        # 키워드
+        # ------------------------------
 
         keywords = [
-
             "callOddsDetailWin",
-
             "_oddsDetailWin",
-
             "_oddsDetailWin.open",
-
             "loadOddsData",
-
+            "loadThreeMixCompOdds",
             "oddsDetail",
-
             "OddsDetail",
-
-            "ajax",
-
             "$.ajax",
-
             "$.get",
-
-            "$.post",
-
-            "fetch(",
-
             "XMLHttpRequest",
-
-            "odds",
-
-            "Odds"
-
+            "soccerajax"
         ]
-
-
-        # ==================================
-        # 키워드 발견 횟수
-        # ==================================
-
-        st.subheader(
-            "키워드 발견"
-        )
-
 
         for keyword in keywords:
 
-            count = js.count(
+            count = html.count(
                 keyword
             )
 
-            if count > 0:
+            if count:
 
                 st.write(
-                    f"**{keyword}** : "
-                    f"{count}회"
+                    f"{keyword}: {count}회"
                 )
 
+        # ------------------------------
+        # soccerajax 위치
+        # ------------------------------
 
-        # ==================================
-        # callOddsDetailWin
-        # ==================================
+        positions = []
 
-        if "callOddsDetailWin" in js:
+        start = 0
 
-            position = js.find(
-                "callOddsDetailWin"
+        while True:
+
+            pos = html.find(
+                "soccerajax",
+                start
             )
 
+            if pos == -1:
+
+                break
+
+            positions.append(
+                pos
+            )
+
+            start = (
+                pos + 1
+            )
+
+        st.write(
+            "soccerajax 발견:",
+            len(positions)
+        )
+
+        # ------------------------------
+        # 주변 코드
+        # ------------------------------
+
+        for i, pos in enumerate(
+            positions[:10],
+            1
+        ):
 
             st.subheader(
-                "callOddsDetailWin"
+                f"배당 요청 구조 {i}"
             )
 
-
-            start = max(
-                0,
-                position - 3000
-            )
-
-
-            end = min(
-                len(js),
-                position + 10000
-            )
-
-
-            st.code(
-                js[start:end],
-                language="javascript"
-            )
-
-
-        # ==================================
-        # _oddsDetailWin.open
-        # ==================================
-
-        if "_oddsDetailWin.open" in js:
-
-            position = js.find(
-                "_oddsDetailWin.open"
-            )
-
-
-            st.subheader(
-                "_oddsDetailWin.open"
-            )
-
-
-            start = max(
-                0,
-                position - 5000
-            )
-
-
-            end = min(
-                len(js),
-                position + 15000
-            )
-
-
-            st.code(
-                js[start:end],
-                language="javascript"
-            )
-
-
-        # ==================================
-        # loadOddsData
-        # ==================================
-
-        if "loadOddsData" in js:
-
-            positions = [
-
-                m.start()
-
-                for m in re.finditer(
-                    "loadOddsData",
-                    js
+            context = html[
+                max(
+                    0,
+                    pos - 1500
+                ):
+                min(
+                    len(html),
+                    pos + 2500
                 )
-
             ]
 
-
-            st.subheader(
-                "loadOddsData"
-            )
-
-
-            for position in positions[:5]:
-
-                start = max(
-                    0,
-                    position - 5000
-                )
-
-
-                end = min(
-                    len(js),
-                    position + 15000
-                )
-
-
-                st.code(
-                    js[start:end],
-                    language="javascript"
-                )
-
-
-        # ==================================
-        # AJAX / FETCH 주변 검색
-        # ==================================
-
-        st.subheader(
-            "🌐 실제 요청 후보"
-        )
-
-
-        request_patterns = [
-
-            r'\$\.ajax\s*\(',
-
-            r'\$\.get\s*\(',
-
-            r'\$\.post\s*\(',
-
-            r'fetch\s*\(',
-
-            r'XMLHttpRequest',
-
-            r'url\s*:',
-
-            r'url\s*='
-
-        ]
-
-
-        found_request = False
-
-
-        for pattern in request_patterns:
-
-            matches = list(
-                re.finditer(
-                    pattern,
-                    js,
-                    re.I
-                )
-            )
-
-
-            for match in matches[:10]:
-
-                found_request = True
-
-                position = match.start()
-
-
-                start = max(
-                    0,
-                    position - 2000
-                )
-
-
-                end = min(
-                    len(js),
-                    position + 6000
-                )
-
-
-                st.code(
-                    js[start:end],
-                    language="javascript"
-                )
-
-
-        if not found_request:
-
-            st.warning(
-                "AJAX/fetch 요청 패턴을 찾지 못했습니다."
-            )
-
-
-        # ==================================
-        # URL 문자열 후보
-        # ==================================
-
-        st.subheader(
-            "URL 후보"
-        )
-
-
-        urls = re.findall(
-
-            r'["\']([^"\']+)["\']',
-
-            js
-
-        )
-
-
-        unique_urls = []
-
-
-        for value in urls:
-
-            lower = value.lower()
-
-
-            if any(
-                word in lower
-                for word in [
-                    "odds",
-                    "ajax",
-                    "api",
-                    "match",
-                    "data",
-                    "soccer"
-                ]
-            ):
-
-                if value not in unique_urls:
-
-                    unique_urls.append(
-                        value
-                    )
-
-
-        for value in unique_urls[:100]:
-
             st.code(
-                value
+                context,
+                language="javascript"
             )
-
 
     except Exception as e:
 
         st.error(
-            f"분석 오류: {e}"
+            f"오류: {e}"
         )
 
 
 # ==========================================
-# 실제 배당 HTML 구조
+# 실제 배당 요청 파라미터 찾기
 # ==========================================
 
 st.divider()
 
 st.subheader(
-    "📊 배당 HTML 구조"
+    "🎯 실제 배당 요청 파라미터 찾기"
 )
 
 
 if st.button(
-    "Bet365 배당 구조 확인"
+    "③ 실제 배당 요청값 찾기"
 ):
 
     try:
 
         response = requests.get(
-            SCOREMAN_URL,
+            match_url,
             headers=HEADERS,
             timeout=30
         )
 
+        html = response.text
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
+        st.write(
+            "HTTP 상태:",
+            response.status_code
         )
 
-
-        # Bet365 찾기
-
-        company = soup.find(
-            string=lambda x:
-            x and "Bet365" in x
+        st.write(
+            "HTML 크기:",
+            len(html)
         )
 
+        # ==================================
+        # JavaScript 변수 찾기
+        # ==================================
 
-        if company:
+        patterns = {
 
-            parent = company.parent
+            "_scheduleID": [
+                r'_scheduleID\s*=\s*[\'"]?(\d+)',
+                r'_scheduleID\s*:\s*[\'"]?(\d+)',
+                r'scheduleID\s*=\s*[\'"]?(\d+)',
+                r'scheduleID\s*:\s*[\'"]?(\d+)'
+            ],
 
+            "_oLiveType": [
+                r'_oLiveType\s*=\s*[\'"]?(\d+)',
+                r'_oLiveType\s*:\s*[\'"]?(\d+)'
+            ],
 
-            row = parent.find_parent(
-                "tr"
-            )
+            "_subType": [
+                r'_subType\s*=\s*[\'"]?(\d+)',
+                r'_subType\s*:\s*[\'"]?(\d+)'
+            ],
 
+            "_halfTime": [
+                r'_halfTime\s*=\s*[\'"]?(\d+)',
+                r'_halfTime\s*:\s*[\'"]?(\d+)'
+            ]
 
-            if row:
+        }
 
-                st.code(
-                    row.prettify(),
-                    language="html"
+        for name, pattern_list in patterns.items():
+
+            found = []
+
+            for pattern in pattern_list:
+
+                matches = re.findall(
+                    pattern,
+                    html,
+                    re.IGNORECASE
                 )
 
+                if matches:
 
-                st.success(
-                    "Bet365 배당 행 발견"
-                )
-
-
-                # span ID 출력
-
-                spans = row.find_all(
-                    "span"
-                )
-
-
-                st.subheader(
-                    "배당 span ID"
-                )
-
-
-                for span in spans:
-
-                    span_id = span.get(
-                        "id"
+                    found.extend(
+                        matches
                     )
 
+            # 중복 제거
 
-                    if span_id:
+            found = list(
+                dict.fromkeys(
+                    found
+                )
+            )
 
-                        st.write(
-                            span_id,
-                            "=",
-                            span.get_text(
-                                strip=True
-                            )
-                        )
+            if found:
 
+                st.success(
+                    f"{name} → {found[:20]}"
+                )
+
+            else:
+
+                st.warning(
+                    f"{name} → 찾지 못함"
+                )
+
+        # ==================================
+        # soccerajax 요청문 찾기
+        # ==================================
+
+        ajax_patterns = [
+
+            r'/ajax/soccerajax\?[^"\']+',
+
+            r'ajax/soccerajax\?[^"\']+',
+
+            r'url\s*:\s*["\']([^"\']*soccerajax[^"\']*)'
+
+        ]
+
+        all_urls = []
+
+        for pattern in ajax_patterns:
+
+            matches = re.findall(
+                pattern,
+                html,
+                re.IGNORECASE
+            )
+
+            all_urls.extend(
+                matches
+            )
+
+        all_urls = list(
+            dict.fromkeys(
+                all_urls
+            )
+        )
+
+        st.subheader(
+            "🌐 발견된 배당 API 주소"
+        )
+
+        if all_urls:
+
+            for url in all_urls:
+
+                st.code(
+                    url
+                )
 
         else:
 
             st.warning(
-                "Bet365를 찾지 못했습니다."
+                "HTML에서 직접적인 API URL을 찾지 못했습니다."
             )
 
+        # ==================================
+        # soccerajax 주변 코드
+        # ==================================
+
+        positions = []
+
+        start = 0
+
+        while True:
+
+            pos = html.find(
+                "/ajax/soccerajax",
+                start
+            )
+
+            if pos == -1:
+
+                break
+
+            positions.append(
+                pos
+            )
+
+            start = pos + 1
+
+        for i, pos in enumerate(
+            positions[:5],
+            1
+        ):
+
+            st.subheader(
+                f"실제 요청 코드 {i}"
+            )
+
+            context = html[
+                max(
+                    0,
+                    pos - 1000
+                ):
+                min(
+                    len(html),
+                    pos + 2000
+                )
+            ]
+
+            st.code(
+                context,
+                language="javascript"
+            )
 
     except Exception as e:
 
         st.error(
-            str(e)
+            f"오류: {e}"
         )
 
 
 # ==========================================
-# 향후 DB 저장 안내
+# 직접 배당 API 테스트
 # ==========================================
 
 st.divider()
 
 st.subheader(
-    "📁 최종 DB 구조"
-)
-
-
-st.code(
-"""
-historical_odds.db
-
-matches
---------------------------------
-scoreman_id
-home_team
-away_team
-match_date
-final_score
-result
-
-
-odds
---------------------------------
-match_id
-company
-market
-initial_home
-initial_draw
-initial_away
-final_home
-final_draw
-final_away
-""",
-    language="text"
+    "🧪 스코어맨 배당 API 직접 테스트"
 )
 
 
 st.caption(
-    "현재는 구조 분석 단계입니다. "
-    "실제 배당 요청 주소 확인 후 자동 저장 기능을 연결합니다."
+    "위 ③번에서 확인된 실제 값을 입력한 뒤 테스트합니다."
 )
-# ==========================================
-# 스코어맨 실제 배당 API 테스트
-# ==========================================
 
-st.divider()
 
-st.subheader("🎯 스코어맨 실제 배당 API 테스트")
+col1, col2 = st.columns(2)
 
-if st.button("실제 배당 JSON 가져오기"):
+with col1:
+
+    api_type = st.number_input(
+        "type",
+        min_value=0,
+        max_value=100,
+        value=14,
+        step=1
+    )
+
+    api_t = st.number_input(
+        "t",
+        min_value=0,
+        max_value=100,
+        value=1,
+        step=1
+    )
+
+
+with col2:
+
+    api_id = st.text_input(
+        "id",
+        value=str(match_id)
+    )
+
+    api_h = st.number_input(
+        "h",
+        min_value=0,
+        max_value=10,
+        value=0,
+        step=1
+    )
+
+
+if st.button(
+    "④ 실제 배당 JSON 가져오기"
+):
 
     api_url = (
         "https://www.scoreman123.com/"
@@ -781,10 +611,15 @@ if st.button("실제 배당 JSON 가져오기"):
     )
 
     params = {
-        "type": 14,
-        "t": 1,
-        "id": 2929675,
-        "h": 0
+
+        "type": api_type,
+
+        "t": api_t,
+
+        "id": api_id,
+
+        "h": api_h
+
     }
 
     try:
@@ -811,13 +646,136 @@ if st.button("실제 배당 JSON 가져오기"):
             len(response.text)
         )
 
-        st.code(
-            response.text[:20000],
-            language="json"
-        )
+        # ------------------------------
+        # JSON 검사
+        # ------------------------------
+
+        try:
+
+            data = response.json()
+
+            st.subheader(
+                "JSON 응답"
+            )
+
+            st.json(
+                data
+            )
+
+            # --------------------------
+            # code 확인
+            # --------------------------
+
+            if (
+                isinstance(data, dict)
+                and data.get("code") == 1002
+            ):
+
+                st.warning(
+                    "code 1002가 반환되었습니다. "
+                    "type/t/h 조합이 실제 요청값과 "
+                    "다를 가능성이 있습니다."
+                )
+
+            # --------------------------
+            # ErrCode 확인
+            # --------------------------
+
+            if (
+                isinstance(data, dict)
+                and data.get("ErrCode") == 0
+            ):
+
+                st.success(
+                    "배당 데이터 응답 성공"
+                )
+
+                if (
+                    "Data" in data
+                    and isinstance(
+                        data["Data"],
+                        dict
+                    )
+                ):
+
+                    mixodds = data[
+                        "Data"
+                    ].get(
+                        "mixodds",
+                        []
+                    )
+
+                    st.write(
+                        "mixodds 건수:",
+                        len(mixodds)
+                    )
+
+                    if mixodds:
+
+                        st.dataframe(
+                            mixodds,
+                            use_container_width=True
+                        )
+
+        except Exception:
+
+            st.code(
+                response.text,
+                language="json"
+            )
 
     except Exception as e:
 
         st.error(
             f"오류: {e}"
+        )
+
+
+# ==========================================
+# 배당 구조 설명
+# ==========================================
+
+st.divider()
+
+st.subheader(
+    "📊 현재 확인된 스코어맨 배당 구조"
+)
+
+st.code(
+"""
+스코어맨
+   │
+   ├── 경기 페이지
+   │      └── /match/data-경기ID
+   │
+   └── 배당 API
+          └── /ajax/soccerajax
+                  │
+                  ├── type
+                  ├── t
+                  ├── id
+                  └── h
+                        │
+                        ▼
+                   Data.mixodds
+                        │
+                        ├── cid
+                        │
+                        ├── ah
+                        │
+                        ├── euro
+                        │     ├── f = 최초
+                        │     ├── l = 현재/최종
+                        │     └── r = 진행
+                        │
+                        └── ou
+""",
+language="text"
+)
+
+
+st.success(
+    "현재는 스코어맨 실제 요청 구조를 확인하는 단계입니다. "
+    "API가 정상적으로 확인되면 다음 단계에서 "
+    "초기배당 + 최종배당 + 경기결과를 DB에 자동 저장하도록 연결합니다."
         )
