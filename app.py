@@ -7,22 +7,18 @@ import scoreman_crawler
 
 
 # =========================================================
-# 페이지 설정
+# 기본 설정
 # =========================================================
 
 st.set_page_config(
 
-    page_title="스코어맨 배당 분석",
+    page_title="전종목 해외배당 분석",
 
     page_icon="⚽",
 
     layout="wide"
 )
 
-
-# =========================================================
-# DB 생성
-# =========================================================
 
 database.create_database()
 
@@ -32,11 +28,11 @@ database.create_database()
 # =========================================================
 
 st.title(
-    "⚽ 스코어맨 배당 분석"
+    "⚽ 전종목 해외배당 분석"
 )
 
 st.caption(
-    "배당 → 확률 → 실제 결과 → 전체 승무패 통계"
+    "자동수집 · 해외업체 · 배당확률 · 실제결과 · 부족확률"
 )
 
 
@@ -44,14 +40,19 @@ st.caption(
 # 사이드바
 # =========================================================
 
+st.sidebar.header(
+    "⚙️ 분석 설정"
+)
+
+
 menu = st.sidebar.radio(
 
     "메뉴",
 
     [
-        "배당 직접입력",
+        "자동수집",
 
-        "스코어맨 경기수집",
+        "배당 직접입력",
 
         "전체 경기분석",
 
@@ -61,20 +62,202 @@ menu = st.sidebar.radio(
 
 
 # =========================================================
-# 1. 배당 직접 입력
+# 해외업체 선택
 # =========================================================
 
-if menu == "배당 직접입력":
+st.sidebar.subheader(
+    "🌎 해외업체 선택"
+)
+
+
+selected_bookmakers = st.sidebar.multiselect(
+
+    "업체",
+
+    scoreman_crawler.BOOKMAKERS,
+
+    default=[
+        "마카오"
+    ]
+)
+
+
+# =========================================================
+# 자동수집
+# =========================================================
+
+if menu == "자동수집":
 
     st.header(
-        "🎯 배당 직접 입력"
+        "📥 경기 자동수집"
     )
 
-    col1, col2, col3 = st.columns(3)
+    st.write(
+        "스코어맨에서 경기 데이터를 가져와 DB에 저장합니다."
+    )
 
-    with col1:
+    st.write(
+        "선택 업체:"
+    )
 
-        home_team = st.text_input(
+    if selected_bookmakers:
+
+        st.write(
+            ", ".join(
+                selected_bookmakers
+            )
+        )
+
+    else:
+
+        st.warning(
+            "해외업체를 하나 이상 선택하세요."
+        )
+
+
+    st.subheader(
+        "🏆 종목"
+    )
+
+    sport = st.selectbox(
+
+        "종목 선택",
+
+        [
+            "축구"
+        ]
+    )
+
+
+    st.subheader(
+        "📅 수집 범위"
+    )
+
+    period = st.selectbox(
+
+        "기간",
+
+        [
+            "현재 페이지",
+
+            "오늘",
+
+            "내일",
+
+            "최근 7일"
+        ]
+    )
+
+
+    url = st.text_input(
+
+        "스코어맨 URL",
+
+        value=scoreman_crawler.SCOREMAN_URL
+    )
+
+
+    if st.button(
+
+        "🚀 자동수집 시작",
+
+        use_container_width=True
+    ):
+
+        if not selected_bookmakers:
+
+            st.error(
+                "해외업체를 하나 이상 선택하세요."
+            )
+
+        else:
+
+            with st.spinner(
+                "경기 데이터를 수집하는 중..."
+            ):
+
+                try:
+
+                    result = (
+                        scoreman_crawler
+                        .auto_collect(
+                            url=url,
+                            selected_bookmakers=
+                                selected_bookmakers
+                        )
+                    )
+
+                    st.success(
+                        f'수집 경기 '
+                        f'{result["found"]:,}개'
+                    )
+
+                    st.success(
+                        f'새로 저장된 경기 '
+                        f'{result["saved"]:,}개'
+                    )
+
+                    if result["found"] == 0:
+
+                        st.warning(
+                            "경기를 찾지 못했습니다. "
+                            "스코어맨 HTML 구조를 확인해야 합니다."
+                        )
+
+                except Exception as e:
+
+                    st.error(
+                        "자동수집 오류"
+                    )
+
+                    st.code(
+                        str(e)
+                    )
+
+
+    status = (
+        database.get_database_status()
+    )
+
+
+    st.divider()
+
+
+    c1, c2 = st.columns(2)
+
+
+    with c1:
+
+        st.metric(
+            "DB 전체 경기",
+            f'{status["matches"]:,}'
+        )
+
+
+    with c2:
+
+        st.metric(
+            "저장 업체 수",
+            f'{status["bookmakers"]:,}'
+        )
+
+
+# =========================================================
+# 배당 직접입력
+# =========================================================
+
+elif menu == "배당 직접입력":
+
+    st.header(
+        "🎯 배당 직접입력"
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+
+    with c1:
+
+        home = st.text_input(
             "홈팀"
         )
 
@@ -85,9 +268,10 @@ if menu == "배당 직접입력":
             step=0.01
         )
 
-    with col2:
 
-        away_team = st.text_input(
+    with c2:
+
+        away = st.text_input(
             "원정팀"
         )
 
@@ -98,7 +282,8 @@ if menu == "배당 직접입력":
             step=0.01
         )
 
-    with col3:
+
+    with c3:
 
         st.write("")
 
@@ -109,9 +294,10 @@ if menu == "배당 직접입력":
             step=0.01
         )
 
+
     result = st.selectbox(
 
-        "실제 경기 결과",
+        "실제 결과",
 
         [
             "",
@@ -123,32 +309,22 @@ if menu == "배당 직접입력":
 
 
     if st.button(
-        "🔎 분석하기",
+
+        "🔎 분석",
+
         use_container_width=True
     ):
 
         match = {
 
-            "source":
+            "bookmaker":
                 "직접입력",
 
-            "sport":
-                "축구",
-
-            "league":
-                "",
-
-            "match_date":
-                "",
-
-            "match_time":
-                "",
-
             "home_team":
-                home_team,
+                home,
 
             "away_team":
-                away_team,
+                away,
 
             "home_odds":
                 home_odds,
@@ -163,15 +339,11 @@ if menu == "배당 직접입력":
                 result
         }
 
-        result_data = (
+
+        data = (
             analysis.analyze_match(
                 match
             )
-        )
-
-
-        st.subheader(
-            "📊 분석 결과"
         )
 
 
@@ -181,29 +353,29 @@ if menu == "배당 직접입력":
         with c1:
 
             st.metric(
-                "승",
-                f'{result_data["승확률"]:.2f}%'
+                "승확률",
+                f'{data["승확률"]:.2f}%'
             )
 
 
         with c2:
 
             st.metric(
-                "무",
-                f'{result_data["무확률"]:.2f}%'
+                "무확률",
+                f'{data["무확률"]:.2f}%'
             )
 
 
         with c3:
 
             st.metric(
-                "패",
-                f'{result_data["패확률"]:.2f}%'
+                "패확률",
+                f'{data["패확률"]:.2f}%'
             )
 
 
         st.success(
-            f'추천 : **{result_data["추천"]}**'
+            f'추천 : **{data["추천"]}**'
         )
 
 
@@ -214,88 +386,36 @@ if menu == "배당 직접입력":
             )
 
             st.warning(
-                f'실제 결과 예상확률 : '
-                f'**{result_data["결과확률"]:.2f}%**'
+                f'결과 예상확률 : '
+                f'{data["결과확률"]:.2f}%'
             )
 
             st.warning(
                 f'부족확률 : '
-                f'**{result_data["부족확률"]:.2f}%**'
+                f'{data["부족확률"]:.2f}%'
             )
 
 
 # =========================================================
-# 2. 스코어맨 경기 수집
-# =========================================================
-
-elif menu == "스코어맨 경기수집":
-
-    st.header(
-        "🌐 스코어맨 경기 수집"
-    )
-
-    st.write(
-        "현재 설정된 스코어맨 리그 페이지에서 "
-        "경기와 배당을 가져옵니다."
-    )
-
-    if st.button(
-        "📥 경기 수집 시작",
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "스코어맨에서 경기 데이터를 가져오는 중..."
-        ):
-
-            try:
-
-                matches = (
-                    scoreman_crawler
-                    .crawl_scoreman()
-                )
-
-                if matches:
-
-                    st.success(
-                        f"{len(matches)}개 경기 확인"
-                    )
-
-                else:
-
-                    st.warning(
-                        "경기를 찾지 못했습니다."
-                    )
-
-            except Exception as e:
-
-                st.error(
-                    "수집 중 오류가 발생했습니다."
-                )
-
-                st.code(
-                    str(e)
-                )
-
-
-# =========================================================
-# 3. 전체 경기 분석
+# 전체 경기분석
 # =========================================================
 
 elif menu == "전체 경기분석":
 
     st.header(
-        "📊 전체 경기 분석"
+        "📊 전체 경기 승무패 분석"
     )
+
 
     matches = database.get_matches(
         limit=10000
     )
 
+
     if not matches:
 
         st.warning(
-            "DB에 저장된 경기가 없습니다."
+            "DB에 경기 데이터가 없습니다."
         )
 
         st.stop()
@@ -308,7 +428,7 @@ elif menu == "전체 경기분석":
     )
 
 
-    statistics = (
+    stats = (
         analysis.calculate_statistics(
             analyzed
         )
@@ -316,11 +436,11 @@ elif menu == "전체 경기분석":
 
 
     # -----------------------------------------------------
-    # 전체 경기
+    # 전체 경기수
     # -----------------------------------------------------
 
     st.subheader(
-        "📌 전체 경기 결과"
+        "📌 전체 경기"
     )
 
 
@@ -331,7 +451,7 @@ elif menu == "전체 경기분석":
 
         st.metric(
             "전체 경기",
-            f'{statistics["전체경기"]:,}경기'
+            f'{stats["전체경기"]:,}경기'
         )
 
 
@@ -339,7 +459,7 @@ elif menu == "전체 경기분석":
 
         st.metric(
             "승",
-            f'{statistics["승"]["건수"]:,}건'
+            f'{stats["승"]["건수"]:,}건'
         )
 
 
@@ -347,7 +467,7 @@ elif menu == "전체 경기분석":
 
         st.metric(
             "무",
-            f'{statistics["무"]["건수"]:,}건'
+            f'{stats["무"]["건수"]:,}건'
         )
 
 
@@ -355,30 +475,26 @@ elif menu == "전체 경기분석":
 
         st.metric(
             "패",
-            f'{statistics["패"]["건수"]:,}건'
+            f'{stats["패"]["건수"]:,}건'
         )
 
 
-    # -----------------------------------------------------
-    # 결과 확인 경기
-    # -----------------------------------------------------
-
     st.write(
-        f'실제 결과 확인 경기 : '
-        f'**{statistics["결과확인경기"]:,}경기**'
+        f'실제 결과 확인 : '
+        f'**{stats["결과확인경기"]:,}경기**'
     )
 
 
     # -----------------------------------------------------
-    # 전체 통계표
+    # 전체 통계
     # -----------------------------------------------------
 
     st.subheader(
-        "📈 배당 예상확률 대비 실제 결과"
+        "📈 예상확률 대비 실제 결과"
     )
 
 
-    summary_df = pd.DataFrame({
+    summary = pd.DataFrame({
 
         "구분": [
             "승",
@@ -386,59 +502,47 @@ elif menu == "전체 경기분석":
             "패"
         ],
 
-        "실제 경기수": [
+        "경기수": [
 
-            statistics[
-                "승"
-            ][
-                "건수"
-            ],
+            stats["승"]["건수"],
 
-            statistics[
-                "무"
-            ][
-                "건수"
-            ],
+            stats["무"]["건수"],
 
-            statistics[
-                "패"
-            ][
-                "건수"
-            ]
+            stats["패"]["건수"]
         ],
 
-        "실제 발생률": [
+        "실제발생률": [
 
-            f'{statistics["승"]["실제비율"]:.2f}%',
+            f'{stats["승"]["실제비율"]:.2f}%',
 
-            f'{statistics["무"]["실제비율"]:.2f}%',
+            f'{stats["무"]["실제비율"]:.2f}%',
 
-            f'{statistics["패"]["실제비율"]:.2f}%'
+            f'{stats["패"]["실제비율"]:.2f}%'
         ],
 
-        "배당 예상확률": [
+        "배당예상확률": [
 
-            f'{statistics["승"]["예상확률"]:.2f}%',
+            f'{stats["승"]["예상확률"]:.2f}%',
 
-            f'{statistics["무"]["예상확률"]:.2f}%',
+            f'{stats["무"]["예상확률"]:.2f}%',
 
-            f'{statistics["패"]["예상확률"]:.2f}%'
+            f'{stats["패"]["예상확률"]:.2f}%'
         ],
 
         "부족/초과": [
 
-            f'{statistics["승"]["차이"]:+.2f}%',
+            f'{stats["승"]["차이"]:+.2f}%',
 
-            f'{statistics["무"]["차이"]:+.2f}%',
+            f'{stats["무"]["차이"]:+.2f}%',
 
-            f'{statistics["패"]["차이"]:+.2f}%'
+            f'{stats["패"]["차이"]:+.2f}%'
         ]
     })
 
 
     st.dataframe(
 
-        summary_df,
+        summary,
 
         use_container_width=True,
 
@@ -447,11 +551,11 @@ elif menu == "전체 경기분석":
 
 
     # -----------------------------------------------------
-    # 부족 / 초과
+    # 부족/초과
     # -----------------------------------------------------
 
     st.subheader(
-        "⚠️ 부족 / 초과 결과"
+        "⚠️ 부족한 결과"
     )
 
 
@@ -461,50 +565,43 @@ elif menu == "전체 경기분석":
         "패"
     ]:
 
-        data = statistics[
+        data = stats[
             outcome
         ]
 
-        difference = data[
+        diff = data[
             "차이"
         ]
 
 
-        if difference < 0:
+        if diff < 0:
 
             st.error(
 
-                f'🔴 {outcome} : '
-                f'예상 {data["예상확률"]:.2f}% → '
-                f'실제 {data["실제비율"]:.2f}% → '
-                f'**{abs(difference):.2f}% 부족**'
+                f'🔴 {outcome} '
+                f'{abs(diff):.2f}% 부족 '
+                f'| 예상 {data["예상확률"]:.2f}% '
+                f'| 실제 {data["실제비율"]:.2f}%'
             )
 
 
-        elif difference > 0:
+        elif diff > 0:
 
             st.success(
 
-                f'🟢 {outcome} : '
-                f'예상 {data["예상확률"]:.2f}% → '
-                f'실제 {data["실제비율"]:.2f}% → '
-                f'**+{difference:.2f}% 초과**'
-            )
-
-
-        else:
-
-            st.info(
-                f'⚪ {outcome} : 차이 없음'
+                f'🟢 {outcome} '
+                f'+{diff:.2f}% 초과 '
+                f'| 예상 {data["예상확률"]:.2f}% '
+                f'| 실제 {data["실제비율"]:.2f}%'
             )
 
 
     # -----------------------------------------------------
-    # 경기별
+    # 경기별 결과
     # -----------------------------------------------------
 
     st.subheader(
-        "⚽ 경기별 분석"
+        "⚽ 전체 경기 상세"
     )
 
 
@@ -556,14 +653,9 @@ elif menu == "전체 경기분석":
         })
 
 
-    display_df = pd.DataFrame(
-        display
-    )
-
-
     st.dataframe(
 
-        display_df,
+        pd.DataFrame(display),
 
         use_container_width=True,
 
@@ -572,13 +664,13 @@ elif menu == "전체 경기분석":
 
 
 # =========================================================
-# 4. DB 조회
+# DB 조회
 # =========================================================
 
 elif menu == "DB 조회":
 
     st.header(
-        "🗄️ DB 경기 데이터"
+        "🗄️ 저장된 경기 데이터"
     )
 
 
@@ -588,9 +680,7 @@ elif menu == "DB 조회":
 
 
     st.metric(
-
-        "저장 경기",
-
+        "전체 DB 경기",
         f'{status["matches"]:,}경기'
     )
 
@@ -618,5 +708,5 @@ elif menu == "DB 조회":
     else:
 
         st.info(
-            "DB에 데이터가 없습니다."
+            "DB 데이터가 없습니다."
         )
