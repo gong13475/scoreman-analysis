@@ -1,5 +1,4 @@
 import streamlit as st
-import time
 import database
 import crawler
 import analysis
@@ -33,59 +32,12 @@ if "crawl_log" not in st.session_state:
 if "crawl_result" not in st.session_state:
     st.session_state.crawl_result = None
 
-if "crawl_running" not in st.session_state:
-    st.session_state.crawl_running = False
-
-
-# =========================================================
-# 로그 함수
-# =========================================================
-
-def add_log(message):
-
-    message = str(message)
-
-    if st.session_state.crawl_log:
-
-        st.session_state.crawl_log += "\n"
-
-    st.session_state.crawl_log += message
-
-    log_box.code(
-        st.session_state.crawl_log,
-        language="text"
-    )
-
-
-# =========================================================
-# 진행률
-# =========================================================
-
-def update_progress(value):
-
-    try:
-
-        value = float(value)
-
-        progress_bar.progress(
-            min(
-                max(value, 0.0),
-                1.0
-            )
-        )
-
-    except Exception:
-
-        pass
-
 
 # =========================================================
 # 제목
 # =========================================================
 
-st.title(
-    "⚽ 스코어맨 배당 분석"
-)
+st.title("⚽ 스코어맨 배당 분석")
 
 st.caption(
     "스코어맨 전체 경기 DB + 업체별 최종배당 완전일치 검색"
@@ -97,37 +49,41 @@ st.caption(
 # =========================================================
 
 try:
-
     match_count = database.get_match_count()
-
 except Exception:
-
     match_count = 0
 
-
 try:
-
     odds_count = database.get_odds_count()
-
 except Exception:
-
     odds_count = 0
 
+try:
+    company_count = len(
+        database.get_company_names()
+    )
+except Exception:
+    company_count = 0
 
-col1, col2 = st.columns(2)
 
-with col1:
+c1, c2, c3 = st.columns(3)
 
+with c1:
     st.metric(
         "저장 경기",
         f"{match_count:,}"
     )
 
-with col2:
-
+with c2:
     st.metric(
         "저장 배당",
         f"{odds_count:,}"
+    )
+
+with c3:
+    st.metric(
+        "업체 수",
+        f"{company_count:,}"
     )
 
 
@@ -135,7 +91,7 @@ st.divider()
 
 
 # =========================================================
-# 경기 DB 자동 수집
+# 크롤링
 # =========================================================
 
 st.header(
@@ -148,9 +104,9 @@ st.write(
 )
 
 
-col1, col2 = st.columns(2)
+c1, c2 = st.columns(2)
 
-with col1:
+with c1:
 
     start_id = st.number_input(
         "시작 경기 ID",
@@ -160,8 +116,7 @@ with col1:
         format="%d"
     )
 
-
-with col2:
+with c2:
 
     end_id = st.number_input(
         "마지막 경기 ID",
@@ -176,10 +131,8 @@ if end_id >= start_id:
 
     total_ids = (
         int(end_id)
-        -
-        int(start_id)
-        +
-        1
+        - int(start_id)
+        + 1
     )
 
 else:
@@ -203,17 +156,14 @@ delay = st.number_input(
 
 
 # =========================================================
-# 크롤링 시작
+# 크롤링 실행
 # =========================================================
 
-start_button = st.button(
+if st.button(
     "🚀 DB 수집 시작",
     type="primary",
     use_container_width=True
-)
-
-
-if start_button:
+):
 
     if end_id < start_id:
 
@@ -223,7 +173,6 @@ if start_button:
 
     else:
 
-        st.session_state.crawl_running = True
         st.session_state.crawl_log = ""
         st.session_state.crawl_result = None
 
@@ -232,14 +181,41 @@ if start_button:
         )
 
         log_box = st.empty()
+        progress_bar = st.progress(0)
 
-        progress_bar = st.progress(
-            0
-        )
+        def add_log(message):
 
-        # -------------------------------------------------
-        # 시작 로그
-        # -------------------------------------------------
+            message = str(message)
+
+            if st.session_state.crawl_log:
+
+                st.session_state.crawl_log += "\n"
+
+            st.session_state.crawl_log += message
+
+            log_box.code(
+                st.session_state.crawl_log,
+                language="text"
+            )
+
+        def update_progress(value):
+
+            try:
+
+                progress_bar.progress(
+                    min(
+                        max(
+                            float(value),
+                            0.0
+                        ),
+                        1.0
+                    )
+                )
+
+            except Exception:
+
+                pass
+
 
         add_log(
             "========================================"
@@ -262,9 +238,6 @@ if start_button:
             "========================================"
         )
 
-        # -------------------------------------------------
-        # 실제 수집
-        # -------------------------------------------------
 
         try:
 
@@ -283,15 +256,9 @@ if start_button:
                 delay=float(delay)
             )
 
-            st.session_state.crawl_result = (
-                result
-            )
+            st.session_state.crawl_result = result
 
-            st.session_state.crawl_running = False
-
-            # -------------------------------------------------
-            # 완료 로그
-            # -------------------------------------------------
+            progress_bar.progress(1.0)
 
             add_log(
                 "========================================"
@@ -330,51 +297,37 @@ if start_button:
                 "========================================"
             )
 
-            progress_bar.progress(
-                1.0
-            )
-
             st.success(
                 "✅ DB 수집 완료"
             )
 
-            # -------------------------------------------------
-            # 결과 요약
-            # -------------------------------------------------
+            c1, c2, c3, c4 = st.columns(4)
 
-            r1, r2, r3, r4 = st.columns(4)
-
-            with r1:
-
+            with c1:
                 st.metric(
                     "전체 검색",
                     f"{result.get('total', 0):,}"
                 )
 
-            with r2:
-
+            with c2:
                 st.metric(
                     "신규 저장",
                     f"{result.get('success', 0):,}"
                 )
 
-            with r3:
-
+            with c3:
                 st.metric(
                     "기존 경기",
                     f"{result.get('exists', 0):,}"
                 )
 
-            with r4:
-
+            with c4:
                 st.metric(
                     "저장 배당",
                     f"{result.get('odds', 0):,}"
                 )
 
         except Exception as e:
-
-            st.session_state.crawl_running = False
 
             add_log(
                 "========================================"
@@ -394,7 +347,7 @@ if start_button:
 
 
 # =========================================================
-# 이전 크롤링 로그 표시
+# 기존 로그
 # =========================================================
 
 elif st.session_state.crawl_log:
@@ -410,7 +363,7 @@ elif st.session_state.crawl_log:
 
 
 # =========================================================
-# 저장된 전체 경기
+# 저장된 경기
 # =========================================================
 
 st.divider()
@@ -445,92 +398,33 @@ else:
         f"총 {len(matches):,}경기가 저장되어 있습니다."
     )
 
-    # -----------------------------------------------------
-    # DataFrame용 데이터
-    # -----------------------------------------------------
-
     table_data = []
 
     for row in matches:
 
-        try:
-
-            schedule_id = row["schedule_id"]
-
-        except Exception:
-
-            schedule_id = ""
-
-        try:
-
-            match_date = row["match_date"]
-
-        except Exception:
-
-            match_date = ""
-
-        try:
-
-            home_team = row["home_team"]
-
-        except Exception:
-
-            home_team = ""
-
-        try:
-
-            away_team = row["away_team"]
-
-        except Exception:
-
-            away_team = ""
-
-        try:
-
-            home_score = row["home_score"]
-
-        except Exception:
-
-            home_score = ""
-
-        try:
-
-            away_score = row["away_score"]
-
-        except Exception:
-
-            away_score = ""
-
-        try:
-
-            result = row["result"]
-
-        except Exception:
-
-            result = ""
-
         table_data.append({
 
             "경기 ID":
-                schedule_id,
+                row["schedule_id"],
 
             "경기일":
-                match_date,
+                row["match_date"],
 
             "홈팀":
-                home_team,
+                row["home_team"],
 
             "원정팀":
-                away_team,
+                row["away_team"],
 
             "홈":
-                home_score,
+                row["home_score"],
 
             "원정":
-                away_score,
+                row["away_score"],
 
             "결과":
-                result
+                row["result"]
+
         })
 
     st.dataframe(
@@ -541,7 +435,7 @@ else:
 
 
 # =========================================================
-# 업체별 최종배당 검색
+# 업체搜索
 # =========================================================
 
 st.divider()
@@ -551,40 +445,42 @@ st.header(
 )
 
 st.write(
-    "여러 업체를 선택한 뒤 각 업체의 최종배당을 입력하세요. "
-    "입력한 배당이 DB의 같은 업체 데이터와 모두 일치하는 "
+    "여러 업체를 선택한 뒤 각 업체의 최종 승/무/패 배당만 "
+    "입력하세요. 선택한 업체의 배당이 모두 일치하는 "
     "경기만 검색합니다."
 )
 
 
 # =========================================================
-# 업체 목록
+# ★ 업체 전체 목록
 # =========================================================
-
-try:
-
-    companies = (
-        analysis.get_company_list()
-    )
-
-except Exception as e:
-
-    companies = []
-
-    st.error(
-        f"업체 목록을 불러오지 못했습니다: {e}"
-    )
-
 
 st.subheader(
     "🔎 검색할 업체 선택"
 )
 
 
+try:
+
+    companies = database.get_company_names()
+
+except Exception as e:
+
+    companies = []
+
+    st.error(
+        f"업체 목록 조회 오류: {e}"
+    )
+
+
+# ---------------------------------------------------------
+# 업체 전체 표시
+# ---------------------------------------------------------
+
 if companies:
 
-    st.caption(
-        f"검색 가능 업체: {len(companies)}개"
+    st.success(
+        f"DB에서 총 {len(companies):,}개 업체를 찾았습니다."
     )
 
     selected_companies = st.multiselect(
@@ -596,7 +492,7 @@ if companies:
         default=[],
 
         placeholder=
-            "여러 업체를 선택하세요"
+            "검색할 업체를 모두 선택하세요"
     )
 
 else:
@@ -604,12 +500,12 @@ else:
     selected_companies = []
 
     st.warning(
-        "DB에서 업체 목록을 찾지 못했습니다."
+        "DB에 저장된 업체가 없습니다."
     )
 
 
 # =========================================================
-# 선택 업체 최종배당 입력
+# 최종배당 입력
 # =========================================================
 
 input_odds = {}
@@ -621,7 +517,15 @@ if selected_companies:
         "💰 선택 업체 최종배당 입력"
     )
 
-    for company in selected_companies:
+    st.caption(
+        "초기배당은 사용하지 않습니다. "
+        "최종 승 / 무 / 패만 입력합니다."
+    )
+
+
+    for index, company in enumerate(
+        selected_companies
+    ):
 
         st.markdown(
             f"### 🏢 {company}"
@@ -630,17 +534,20 @@ if selected_companies:
         c1, c2, c3 = st.columns(3)
 
         safe_key = (
-            str(company)
+            str(index)
+            + "_"
+            + str(company)
             .replace(" ", "_")
             .replace(".", "_")
             .replace("/", "_")
         )
 
+
         with c1:
 
             final_home = st.number_input(
 
-                f"{company} 최종 승",
+                "최종 승",
 
                 min_value=0.01,
 
@@ -654,11 +561,12 @@ if selected_companies:
                     f"final_home_{safe_key}"
             )
 
+
         with c2:
 
             final_draw = st.number_input(
 
-                f"{company} 최종 무",
+                "최종 무",
 
                 min_value=0.01,
 
@@ -672,11 +580,12 @@ if selected_companies:
                     f"final_draw_{safe_key}"
             )
 
+
         with c3:
 
             final_away = st.number_input(
 
-                f"{company} 최종 패",
+                "최종 패",
 
                 min_value=0.01,
 
@@ -690,6 +599,7 @@ if selected_companies:
                     f"final_away_{safe_key}"
             )
 
+
         input_odds[company] = {
 
             "home":
@@ -701,6 +611,7 @@ if selected_companies:
             "away":
                 final_away
         }
+
 
         st.divider()
 
@@ -724,6 +635,7 @@ if selected_companies:
                 input_odds
             )
 
+
             if not result.get(
                 "success",
                 False
@@ -743,12 +655,14 @@ if selected_companies:
                     []
                 )
 
+
                 if not results:
 
                     st.warning(
-                        "입력한 모든 업체의 최종배당과 "
+                        "선택한 모든 업체의 최종배당과 "
                         "완전히 일치하는 경기가 없습니다."
                     )
+
 
                 else:
 
@@ -757,29 +671,22 @@ if selected_companies:
                         f"{len(results):,}경기를 찾았습니다."
                     )
 
+
                     for index, row in enumerate(
                         results,
                         start=1
                     ):
 
-                        home_team = row.get(
-                            "home_team",
-                            ""
-                        )
-
-                        away_team = row.get(
-                            "away_team",
-                            ""
-                        )
-
                         st.markdown(
                             f"### {index}. "
-                            f"{home_team} "
+                            f"{row.get('home_team', '')} "
                             f"vs "
-                            f"{away_team}"
+                            f"{row.get('away_team', '')}"
                         )
 
-                        c1, c2, c3 = st.columns(3)
+
+                        c1, c2, c3, c4 = st.columns(4)
+
 
                         with c1:
 
@@ -794,7 +701,22 @@ if selected_companies:
                                 )
                             )
 
+
                         with c2:
+
+                            st.write(
+                                "**경기일**"
+                            )
+
+                            st.write(
+                                row.get(
+                                    "match_date",
+                                    ""
+                                )
+                            )
+
+
+                        with c3:
 
                             st.write(
                                 "**스코어**"
@@ -806,7 +728,8 @@ if selected_companies:
                                 f"{row.get('away_score', '-')}"
                             )
 
-                        with c3:
+
+                        with c4:
 
                             st.write(
                                 "**결과**"
@@ -819,6 +742,7 @@ if selected_companies:
                                 )
                             )
 
+
                         # ---------------------------------
                         # 업체별 배당
                         # ---------------------------------
@@ -828,13 +752,13 @@ if selected_companies:
                             {}
                         )
 
+
                         for company in selected_companies:
 
-                            odds = (
-                                company_odds.get(
-                                    company
-                                )
+                            odds = company_odds.get(
+                                company
                             )
+
 
                             if odds:
 
@@ -845,13 +769,16 @@ if selected_companies:
                                     f"패 {odds.get('away')}"
                                 )
 
+
                         st.divider()
+
 
         except Exception as e:
 
             st.error(
                 f"검색 오류: {e}"
             )
+
 
 else:
 
@@ -861,7 +788,7 @@ else:
 
 
 # =========================================================
-# 저장된 업체별 배당
+# DB 배당 데이터
 # =========================================================
 
 st.divider()
@@ -881,9 +808,7 @@ if show_odds:
 
     try:
 
-        odds_rows = (
-            database.get_all_odds()
-        )
+        odds_rows = database.get_all_odds()
 
     except Exception as e:
 
@@ -892,6 +817,7 @@ if show_odds:
         st.error(
             f"배당 DB 조회 오류: {e}"
         )
+
 
     if not odds_rows:
 
@@ -905,58 +831,25 @@ if show_odds:
 
         for row in odds_rows:
 
-            try:
-                schedule_id = row[
-                    "schedule_id"
-                ]
-            except Exception:
-                schedule_id = ""
-
-            try:
-                company_name = row[
-                    "company_name"
-                ]
-            except Exception:
-                company_name = ""
-
-            try:
-                final_home = row[
-                    "final_home"
-                ]
-            except Exception:
-                final_home = ""
-
-            try:
-                final_draw = row[
-                    "final_draw"
-                ]
-            except Exception:
-                final_draw = ""
-
-            try:
-                final_away = row[
-                    "final_away"
-                ]
-            except Exception:
-                final_away = ""
-
             table_data.append({
 
                 "경기 ID":
-                    schedule_id,
+                    row["schedule_id"],
 
                 "업체":
-                    company_name,
+                    row["company_name"],
 
                 "최종 승":
-                    final_home,
+                    row["final_home"],
 
                 "최종 무":
-                    final_draw,
+                    row["final_draw"],
 
                 "최종 패":
-                    final_away
+                    row["final_away"]
+
             })
+
 
         st.dataframe(
             table_data,
@@ -1001,7 +894,7 @@ except Exception:
 try:
 
     final_companies = (
-        analysis.get_company_list()
+        database.get_company_names()
     )
 
 except Exception:
@@ -1011,6 +904,7 @@ except Exception:
 
 c1, c2, c3 = st.columns(3)
 
+
 with c1:
 
     st.metric(
@@ -1018,12 +912,14 @@ with c1:
         f"{final_match_count:,}"
     )
 
+
 with c2:
 
     st.metric(
         "전체 배당",
         f"{final_odds_count:,}"
     )
+
 
 with c3:
 
@@ -1034,7 +930,7 @@ with c3:
 
 
 # =========================================================
-# 업체 목록 확인
+# 업체 전체 목록
 # =========================================================
 
 with st.expander(
@@ -1065,4 +961,4 @@ with st.expander(
 
 st.success(
     "✅ 프로그램 정상 작동"
-    )
+            )
