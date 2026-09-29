@@ -1,3 +1,5 @@
+# analysis.py
+
 import database
 
 
@@ -6,68 +8,182 @@ import database
 # =========================================================
 
 def get_company_list():
+    """
+    DB에 실제 저장된 모든 업체명을 반환합니다.
+    """
+
+    try:
+
+        companies = database.get_company_names()
+
+        if not companies:
+            return []
+
+        # 중복 제거 + 정렬
+        result = sorted(
+            set(
+                str(company).strip()
+                for company in companies
+                if company
+                and str(company).strip()
+            ),
+            key=lambda x: x.lower()
+        )
+
+        return result
+
+    except Exception as e:
+
+        print(
+            f"[업체 목록 오류] {e}",
+            flush=True
+        )
+
+        return []
+
+
+# =========================================================
+# 업체별 저장 개수
+# =========================================================
+
+def get_company_counts():
+    """
+    업체별 최종배당 저장 개수를 반환합니다.
+
+    예:
+    {
+        "Bet365": 100,
+        "WilliamHill": 80,
+        "10Bet": 50
+    }
+    """
 
     database.init_database()
 
-    companies = database.get_company_names()
+    conn = database.get_connection()
 
-    # -----------------------------------------------------
-    # DB에 실제 저장된 업체가 우선
-    # -----------------------------------------------------
+    try:
 
-    result = list(
-        companies
-    )
+        rows = conn.execute(
+            """
+            SELECT
+                company_name,
+                COUNT(*) AS count
+            FROM odds
+            WHERE
+                company_name IS NOT NULL
+                AND TRIM(company_name) <> ''
+            GROUP BY
+                company_name
+            ORDER BY
+                company_name
+            """
+        ).fetchall()
 
-    # -----------------------------------------------------
-    # 요청한 주요 업체가 아직 DB에 없어도
-    # 선택창에서 보이도록 추가
-    #
-    # 실제 데이터가 없으면 검색 결과는 나오지 않음.
-    # 크롤링 후 실제 업체명이 DB에 저장되면
-    # 중복 없이 정리됨.
-    # -----------------------------------------------------
+        result = {}
 
-    preferred_companies = [
+        for row in rows:
 
-        "Bet365",
-        "William Hill",
-        "10Bet"
+            company = str(
+                row["company_name"]
+            ).strip()
 
-    ]
+            if not company:
+                continue
 
-    existing_normalized = set()
-
-    for company in result:
-
-        existing_normalized.add(
-            normalize_company_name(
-                company
+            result[company] = int(
+                row["count"]
             )
+
+        return result
+
+    finally:
+
+        conn.close()
+
+
+# =========================================================
+# 특정 업체 저장 개수
+# =========================================================
+
+def get_company_count(company_name):
+
+    database.init_database()
+
+    conn = database.get_connection()
+
+    try:
+
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS count
+            FROM odds
+            WHERE
+                LOWER(TRIM(company_name))
+                =
+                LOWER(TRIM(?))
+            """,
+            (
+                str(company_name),
+            )
+        ).fetchone()
+
+        if row is None:
+            return 0
+
+        return int(
+            row["count"]
         )
 
-    for company in preferred_companies:
+    finally:
 
-        normalized = (
-            normalize_company_name(
-                company
-            )
-        )
+        conn.close()
 
-        if normalized not in existing_normalized:
 
-            result.append(
-                company
-            )
+# =========================================================
+# 선택 업체 저장 개수
+# =========================================================
 
-            existing_normalized.add(
-                normalized
-            )
+def get_selected_company_counts(
+    companies
+):
 
-    return sorted(
-        result,
-        key=lambda x: str(x).lower()
+    if not companies:
+        return {}
+
+    counts = (
+        get_company_counts()
     )
+
+    result = {}
+
+    for company in companies:
+
+        company = str(
+            company
+        ).strip()
+
+        if not company:
+            continue
+
+        # 대소문자 차이까지 대응
+        count = 0
+
+        for db_company, db_count in counts.items():
+
+            if (
+                db_company.strip().lower()
+                ==
+                company.lower()
+            ):
+
+                count = db_count
+                break
+
+        result[company] = count
+
+    return result
 
 
 # =========================================================
@@ -75,102 +191,130 @@ def get_company_list():
 # =========================================================
 
 def normalize_company_name(
-    name
+    company_name
 ):
 
-    if name is None:
+    if company_name is None:
         return ""
 
-    value = str(
-        name
-    ).strip().lower()
-
-    value = value.replace(
-        " ",
-        ""
+    return (
+        str(company_name)
+        .strip()
+        .lower()
     )
-
-    value = value.replace(
-        "_",
-        ""
-    )
-
-    value = value.replace(
-        "-",
-        ""
-    )
-
-    value = value.replace(
-        ".",
-        ""
-    )
-
-    return value
 
 
 # =========================================================
-# 입력값 검증
+# 배당값 정규화
 # =========================================================
 
-def validate_company_odds(
+def normalize_odds(
+    odds
+):
+
+    if not isinstance(
+        odds,
+        dict
+    ):
+        return None
+
+    try:
+
+        home = float(
+            odds["home"]
+        )
+
+        draw = float(
+            odds["draw"]
+        )
+
+        away = float(
+            odds["away"]
+        )
+
+    except Exception:
+
+        return None
+
+    return {
+
+        "home": home,
+
+        "draw": draw,
+
+        "away": away
+    }
+
+
+# =========================================================
+# 검색 조건 생성
+# =========================================================
+
+def build_company_odds(
     selected_companies,
     input_odds
 ):
 
     if not selected_companies:
+        return {}
 
-        return False, "업체를 하나 이상 선택하세요."
+    if not isinstance(
+        input_odds,
+        dict
+    ):
+        return {}
 
-    if not input_odds:
-
-        return False, "배당값을 입력하세요."
+    company_odds = {}
 
     for company in selected_companies:
 
-        if company not in input_odds:
+        company_name = str(
+            company
+        ).strip()
 
-            return False, (
-                f"{company} 배당값이 없습니다."
+        if not company_name:
+            continue
+
+        odds = input_odds.get(
+            company
+        )
+
+        if odds is None:
+
+            # 대소문자 차이 대응
+            target = normalize_company_name(
+                company
             )
 
-        odds = input_odds[company]
+            for key, value in input_odds.items():
 
-        for key in [
-            "home",
-            "draw",
-            "away"
-        ]:
-
-            if key not in odds:
-
-                return False, (
-                    f"{company}의 {key} 배당값이 없습니다."
-                )
-
-            try:
-
-                value = float(
-                    odds[key]
-                )
-
-                if value <= 0:
-
-                    return False, (
-                        f"{company} 배당값은 "
-                        f"0보다 커야 합니다."
+                if (
+                    normalize_company_name(
+                        key
                     )
+                    ==
+                    target
+                ):
 
-            except Exception:
+                    odds = value
+                    break
 
-                return False, (
-                    f"{company} 배당값이 올바르지 않습니다."
-                )
+        normalized = normalize_odds(
+            odds
+        )
 
-    return True, ""
+        if normalized is None:
+            continue
+
+        company_odds[
+            company_name
+        ] = normalized
+
+    return company_odds
 
 
 # =========================================================
-# 검색
+# 최종배당 검색
 # =========================================================
 
 def run_search(
@@ -178,159 +322,424 @@ def run_search(
     input_odds
 ):
 
-    valid, message = (
-        validate_company_odds(
-            selected_companies,
-            input_odds
-        )
-    )
-
-    if not valid:
-
-        return {
-
-            "success":
-                False,
-
-            "message":
-                message,
-
-            "results":
-                []
-        }
-
-    # -----------------------------------------------------
-    # DB 검색용
-    # -----------------------------------------------------
-
-    company_odds = {}
-
-    for company in selected_companies:
-
-        odds = input_odds[company]
-
-        company_odds[company] = {
-
-            "home":
-                float(
-                    odds["home"]
-                ),
-
-            "draw":
-                float(
-                    odds["draw"]
-                ),
-
-            "away":
-                float(
-                    odds["away"]
-                )
-        }
-
     try:
 
-        matches = (
+        # -------------------------------------------------
+        # 업체 확인
+        # -------------------------------------------------
+
+        if not selected_companies:
+
+            return {
+
+                "success": False,
+
+                "message":
+                    "검색할 업체를 하나 이상 선택하세요.",
+
+                "results": []
+            }
+
+        # -------------------------------------------------
+        # 검색 조건
+        # -------------------------------------------------
+
+        company_odds = (
+            build_company_odds(
+                selected_companies,
+                input_odds
+            )
+        )
+
+        if not company_odds:
+
+            return {
+
+                "success": False,
+
+                "message":
+                    "검색할 최종배당 값이 없습니다.",
+
+                "results": []
+            }
+
+        # -------------------------------------------------
+        # DB 완전일치 검색
+        # -------------------------------------------------
+
+        rows = (
             database.search_multiple_final_odds(
                 company_odds
             )
         )
 
+        results = []
+
+        # -------------------------------------------------
+        # 검색 결과에 업체별 배당 붙이기
+        # -------------------------------------------------
+
+        for row in rows:
+
+            item = dict(
+                row
+            )
+
+            item[
+                "company_odds"
+            ] = {}
+
+            match_odds = (
+                database.get_match_final_odds(
+                    row["schedule_id"]
+                )
+            )
+
+            for odds_row in match_odds:
+
+                company_name = str(
+                    odds_row["company_name"]
+                ).strip()
+
+                item[
+                    "company_odds"
+                ][company_name] = {
+
+                    "home":
+                        odds_row[
+                            "final_home"
+                        ],
+
+                    "draw":
+                        odds_row[
+                            "final_draw"
+                        ],
+
+                    "away":
+                        odds_row[
+                            "final_away"
+                        ]
+                }
+
+            results.append(
+                item
+            )
+
+        return {
+
+            "success": True,
+
+            "message":
+                f"{len(results):,}경기 검색 완료",
+
+            "results": results,
+
+            "count":
+                len(results),
+
+            "companies":
+                list(company_odds.keys())
+        }
+
     except Exception as e:
 
         return {
 
-            "success":
-                False,
+            "success": False,
 
             "message":
-                str(e),
+                f"검색 오류: {e}",
 
-            "results":
-                []
+            "results": []
         }
 
-    results = []
 
-    # -----------------------------------------------------
-    # 검색 결과에 업체별 배당 추가
-    # -----------------------------------------------------
+# =========================================================
+# 단일 업체 검색
+# =========================================================
 
-    for match in matches:
+def search_company(
+    company_name,
+    home,
+    draw,
+    away
+):
 
-        item = dict(
-            match
-        )
-
-        item["company_odds"] = {}
+    try:
 
         rows = (
-            database.get_match_final_odds(
-                match["schedule_id"]
+            database.search_final_odds(
+                company_name=company_name,
+                final_home=home,
+                final_draw=draw,
+                final_away=away
             )
         )
 
-        # 정규화 업체명 -> 실제 DB 업체명
-        normalized_selected = {}
-
-        for company in selected_companies:
-
-            normalized_selected[
-                normalize_company_name(
-                    company
-                )
-            ] = company
+        results = []
 
         for row in rows:
 
-            actual_name = row[
-                "company_name"
-            ]
+            item = dict(
+                row
+            )
 
-            normalized = (
-                normalize_company_name(
-                    actual_name
+            results.append(
+                item
+            )
+
+        return results
+
+    except Exception as e:
+
+        print(
+            f"[단일 업체 검색 오류] {e}",
+            flush=True
+        )
+
+        return []
+
+
+# =========================================================
+# 여러 업체 검색
+# =========================================================
+
+def search_companies(
+    company_odds
+):
+
+    try:
+
+        if not company_odds:
+            return []
+
+        normalized = {}
+
+        for company, odds in (
+            company_odds.items()
+        ):
+
+            value = normalize_odds(
+                odds
+            )
+
+            if value is None:
+                continue
+
+            normalized[
+                str(company).strip()
+            ] = value
+
+        if not normalized:
+            return []
+
+        rows = (
+            database.search_multiple_final_odds(
+                normalized
+            )
+        )
+
+        results = []
+
+        for row in rows:
+
+            item = dict(
+                row
+            )
+
+            item[
+                "company_odds"
+            ] = {}
+
+            odds_rows = (
+                database.get_match_final_odds(
+                    row["schedule_id"]
                 )
             )
 
-            selected_name = (
-                normalized_selected.get(
-                    normalized
-                )
-            )
+            for odds_row in odds_rows:
 
-            if selected_name:
+                name = str(
+                    odds_row[
+                        "company_name"
+                    ]
+                ).strip()
 
                 item[
                     "company_odds"
-                ][
-                    selected_name
-                ] = {
+                ][name] = {
 
                     "home":
-                        row["final_home"],
+                        odds_row[
+                            "final_home"
+                        ],
 
                     "draw":
-                        row["final_draw"],
+                        odds_row[
+                            "final_draw"
+                        ],
 
                     "away":
-                        row["final_away"]
+                        odds_row[
+                            "final_away"
+                        ]
                 }
 
-        results.append(
-            item
+            results.append(
+                item
+            )
+
+        return results
+
+    except Exception as e:
+
+        print(
+            f"[다중 업체 검색 오류] {e}",
+            flush=True
         )
 
-    return {
+        return []
 
-        "success":
-            True,
 
-        "message":
-            "",
+# =========================================================
+# 전체 업체 + 저장 개수
+# =========================================================
 
-        "results":
-            results
-    }
+def get_company_summary():
+
+    counts = (
+        get_company_counts()
+    )
+
+    result = []
+
+    for company in sorted(
+        counts.keys(),
+        key=lambda x: x.lower()
+    ):
+
+        result.append({
+
+            "company_name":
+                company,
+
+            "count":
+                counts[company]
+        })
+
+    return result
+
+
+# =========================================================
+# 업체별 저장 경기 수
+# =========================================================
+
+def get_company_match_count(
+    company_name
+):
+
+    database.init_database()
+
+    conn = database.get_connection()
+
+    try:
+
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(
+                    DISTINCT schedule_id
+                ) AS count
+            FROM odds
+            WHERE
+                LOWER(
+                    TRIM(company_name)
+                )
+                =
+                LOWER(
+                    TRIM(?)
+                )
+            """,
+            (
+                str(company_name),
+            )
+        ).fetchone()
+
+        if row is None:
+            return 0
+
+        return int(
+            row["count"]
+        )
+
+    finally:
+
+        conn.close()
+
+
+# =========================================================
+# 업체별 저장 현황
+# =========================================================
+
+def get_company_statistics():
+
+    database.init_database()
+
+    conn = database.get_connection()
+
+    try:
+
+        rows = conn.execute(
+            """
+            SELECT
+
+                company_name,
+
+                COUNT(*) AS odds_count,
+
+                COUNT(
+                    DISTINCT schedule_id
+                ) AS match_count
+
+            FROM odds
+
+            WHERE
+                company_name IS NOT NULL
+                AND TRIM(company_name) <> ''
+
+            GROUP BY
+                company_name
+
+            ORDER BY
+                company_name
+            """
+        ).fetchall()
+
+        result = []
+
+        for row in rows:
+
+            result.append({
+
+                "company_name":
+                    row["company_name"],
+
+                "odds_count":
+                    int(
+                        row["odds_count"]
+                    ),
+
+                "match_count":
+                    int(
+                        row["match_count"]
+                    )
+            })
+
+        return result
+
+    finally:
+
+        conn.close()
 
 
 # =========================================================
@@ -342,12 +751,49 @@ if __name__ == "__main__":
     database.init_database()
 
     print(
+        "========================================"
+    )
+
+    print(
+        "Scoreman Analysis"
+    )
+
+    print(
+        "최종배당 분석"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
         "업체 목록"
     )
 
-    for company in get_company_list():
+    companies = (
+        get_company_list()
+    )
+
+    for company in companies:
+
+        count = (
+            get_company_count(
+                company
+            )
+        )
+
+        match_count = (
+            get_company_match_count(
+                company
+            )
+        )
 
         print(
-            "-",
-            company
+            f" - {company}: "
+            f"배당 {count:,}개 / "
+            f"경기 {match_count:,}개"
+        )
+
+    print(
+        "========================================"
         )
