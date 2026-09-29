@@ -75,6 +75,8 @@ def init_database():
 
         # -------------------------------------------------
         # 최종배당
+        #
+        # 초기배당 컬럼 없음
         # -------------------------------------------------
 
         cursor.execute(
@@ -110,9 +112,7 @@ def init_database():
         )
 
         # -------------------------------------------------
-        # 기존 DB가 예전 구조인 경우
-        # 초기배당 컬럼이 있어도 그대로 두어도 됨.
-        # 현재 프로그램에서는 사용하지 않음.
+        # 인덱스
         # -------------------------------------------------
 
         cursor.execute(
@@ -271,6 +271,13 @@ def save_odds(
 
     init_database()
 
+    company_name = str(
+        company_name or ""
+    ).strip()
+
+    if not company_name:
+        return
+
     conn = get_connection()
 
     try:
@@ -325,7 +332,7 @@ def save_odds(
             (
                 str(schedule_id),
                 str(company_id or ""),
-                str(company_name),
+                company_name,
                 final_home,
                 final_draw,
                 final_away
@@ -343,9 +350,7 @@ def save_odds(
 # 경기 조회
 # =========================================================
 
-def get_match(
-    schedule_id
-):
+def get_match(schedule_id):
 
     init_database()
 
@@ -353,7 +358,7 @@ def get_match(
 
     try:
 
-        row = conn.execute(
+        return conn.execute(
             """
             SELECT *
             FROM matches
@@ -364,8 +369,6 @@ def get_match(
                 str(schedule_id),
             )
         ).fetchone()
-
-        return row
 
     finally:
 
@@ -413,8 +416,7 @@ def get_match_count():
 
         row = conn.execute(
             """
-            SELECT COUNT(*)
-            AS count
+            SELECT COUNT(*) AS count
             FROM matches
             """
         ).fetchone()
@@ -442,8 +444,7 @@ def get_odds_count():
 
         row = conn.execute(
             """
-            SELECT COUNT(*)
-            AS count
+            SELECT COUNT(*) AS count
             FROM odds
             """
         ).fetchone()
@@ -458,7 +459,7 @@ def get_odds_count():
 
 
 # =========================================================
-# 전체 배당
+# 전체 최종배당
 # =========================================================
 
 def get_all_odds():
@@ -491,6 +492,40 @@ def get_all_odds():
 
 
 # =========================================================
+# 업체명 정규화
+# =========================================================
+
+def normalize_company_name(name):
+
+    if name is None:
+        return ""
+
+    value = str(name).strip().lower()
+
+    value = value.replace(
+        " ",
+        ""
+    )
+
+    value = value.replace(
+        "_",
+        ""
+    )
+
+    value = value.replace(
+        "-",
+        ""
+    )
+
+    value = value.replace(
+        ".",
+        ""
+    )
+
+    return value
+
+
+# =========================================================
 # 업체 목록
 # =========================================================
 
@@ -511,7 +546,7 @@ def get_company_names():
                 company_name IS NOT NULL
                 AND TRIM(company_name) <> ''
             ORDER BY
-                company_name
+                company_name COLLATE NOCASE
             """
         ).fetchall()
 
@@ -529,9 +564,7 @@ def get_company_names():
 # 특정 경기 최종배당
 # =========================================================
 
-def get_match_final_odds(
-    schedule_id
-):
+def get_match_final_odds(schedule_id):
 
     init_database()
 
@@ -550,7 +583,7 @@ def get_match_final_odds(
                 final_away
             FROM odds
             WHERE schedule_id = ?
-            ORDER BY company_name
+            ORDER BY company_name COLLATE NOCASE
             """,
             (
                 str(schedule_id),
@@ -560,6 +593,27 @@ def get_match_final_odds(
     finally:
 
         conn.close()
+
+
+# =========================================================
+# 숫자 비교
+# =========================================================
+
+def odds_equal(value1, value2):
+
+    try:
+
+        if value1 is None or value2 is None:
+            return False
+
+        return abs(
+            float(value1) -
+            float(value2)
+        ) < 0.000001
+
+    except Exception:
+
+        return False
 
 
 # =========================================================
@@ -575,6 +629,10 @@ def search_final_odds(
 
     init_database()
 
+    target_company = normalize_company_name(
+        company_name
+    )
+
     conn = get_connection()
 
     try:
@@ -583,52 +641,39 @@ def search_final_odds(
             """
             SELECT
                 m.*,
-
                 o.company_name,
-
                 o.final_home,
-
                 o.final_draw,
-
                 o.final_away
-
             FROM matches m
-
             INNER JOIN odds o
-
-                ON m.schedule_id =
-                   o.schedule_id
-
+                ON m.schedule_id = o.schedule_id
             WHERE
-                LOWER(TRIM(o.company_name))
-                =
-                LOWER(TRIM(?))
-
-                AND ABS(
-                    o.final_home - ?
-                ) < 0.000001
-
-                AND ABS(
-                    o.final_draw - ?
-                ) < 0.000001
-
-                AND ABS(
-                    o.final_away - ?
-                ) < 0.000001
-
+                ABS(o.final_home - ?) < 0.000001
+                AND ABS(o.final_draw - ?) < 0.000001
+                AND ABS(o.final_away - ?) < 0.000001
             ORDER BY
-                m.match_date DESC
+                m.match_date DESC,
+                m.id DESC
             """,
-
             (
-                company_name,
                 float(final_home),
                 float(final_draw),
                 float(final_away)
             )
         ).fetchall()
 
-        return rows
+        result = []
+
+        for row in rows:
+
+            if normalize_company_name(
+                row["company_name"]
+            ) == target_company:
+
+                result.append(row)
+
+        return result
 
     finally:
 
@@ -636,7 +681,7 @@ def search_final_odds(
 
 
 # =========================================================
-# 여러 업체 최종배당 완전일치 검색
+# 여러 업체 최종배당 완전일치
 # =========================================================
 
 def search_multiple_final_odds(
@@ -646,7 +691,6 @@ def search_multiple_final_odds(
     init_database()
 
     if not company_odds:
-
         return []
 
     conn = get_connection()
@@ -654,92 +698,123 @@ def search_multiple_final_odds(
     try:
 
         # -------------------------------------------------
-        # 업체별 조건을 모두 만족하는 경기만 찾음
+        # 먼저 업체별 정규화
         # -------------------------------------------------
 
-        conditions = []
+        normalized_requests = []
 
-        params = []
+        for company_name, odds in company_odds.items():
 
-        for company_name, odds in (
-            company_odds.items()
-        ):
+            normalized_requests.append({
 
-            conditions.append(
-                """
-                EXISTS (
-
-                    SELECT 1
-
-                    FROM odds o
-
-                    WHERE
-                        o.schedule_id =
-                        m.schedule_id
-
-                        AND LOWER(
-                            TRIM(o.company_name)
-                        )
-                        =
-                        LOWER(
-                            TRIM(?)
-                        )
-
-                        AND ABS(
-                            o.final_home - ?
-                        ) < 0.000001
-
-                        AND ABS(
-                            o.final_draw - ?
-                        ) < 0.000001
-
-                        AND ABS(
-                            o.final_away - ?
-                        ) < 0.000001
-                )
-                """
-            )
-
-            params.extend(
-                [
-                    company_name,
-
-                    float(
-                        odds["home"]
+                "company":
+                    normalize_company_name(
+                        company_name
                     ),
 
-                    float(
-                        odds["draw"]
-                    ),
+                "home":
+                    float(odds["home"]),
 
-                    float(
-                        odds["away"]
-                    )
-                ]
-            )
+                "draw":
+                    float(odds["draw"]),
 
-        sql = """
-            SELECT m.*
-            FROM matches m
-            WHERE
-        """
+                "away":
+                    float(odds["away"])
+            })
 
-        sql += "\nAND\n".join(
-            conditions
-        )
+        # -------------------------------------------------
+        # 경기 전체 조회
+        # -------------------------------------------------
 
-        sql += """
+        matches = conn.execute(
+            """
+            SELECT *
+            FROM matches
             ORDER BY
-                m.match_date DESC,
-                m.id DESC
-        """
-
-        rows = conn.execute(
-            sql,
-            params
+                match_date DESC,
+                id DESC
+            """
         ).fetchall()
 
-        return rows
+        result = []
+
+        # -------------------------------------------------
+        # 경기마다 업체 조건 검사
+        # -------------------------------------------------
+
+        for match in matches:
+
+            rows = conn.execute(
+                """
+                SELECT
+                    company_name,
+                    final_home,
+                    final_draw,
+                    final_away
+                FROM odds
+                WHERE schedule_id = ?
+                """,
+                (
+                    match["schedule_id"],
+                )
+            ).fetchall()
+
+            if not rows:
+                continue
+
+            # 업체 정규화
+            company_rows = {}
+
+            for row in rows:
+
+                key = normalize_company_name(
+                    row["company_name"]
+                )
+
+                company_rows[key] = row
+
+            matched = True
+
+            for request in normalized_requests:
+
+                company = request["company"]
+
+                if company not in company_rows:
+
+                    matched = False
+                    break
+
+                row = company_rows[company]
+
+                if not odds_equal(
+                    row["final_home"],
+                    request["home"]
+                ):
+
+                    matched = False
+                    break
+
+                if not odds_equal(
+                    row["final_draw"],
+                    request["draw"]
+                ):
+
+                    matched = False
+                    break
+
+                if not odds_equal(
+                    row["final_away"],
+                    request["away"]
+                ):
+
+                    matched = False
+                    break
+
+            if matched:
+
+                result.append(match)
+
+        return result
 
     finally:
 
@@ -747,30 +822,24 @@ def search_multiple_final_odds(
 
 
 # =========================================================
-# 최종배당 검색 + 업체 데이터
+# 검색 + 업체별 데이터
 # =========================================================
 
 def search_final_odds_with_companies(
     company_odds
 ):
 
-    matches = (
-        search_multiple_final_odds(
-            company_odds
-        )
+    matches = search_multiple_final_odds(
+        company_odds
     )
 
     result = []
 
     for match in matches:
 
-        item = dict(
-            match
-        )
+        item = dict(match)
 
-        item[
-            "odds"
-        ] = {}
+        item["odds"] = {}
 
         rows = get_match_final_odds(
             match["schedule_id"]
@@ -778,9 +847,7 @@ def search_final_odds_with_companies(
 
         for row in rows:
 
-            item[
-                "odds"
-            ][
+            item["odds"][
                 row["company_name"]
             ] = {
 
@@ -794,9 +861,7 @@ def search_final_odds_with_companies(
                     row["final_away"]
             }
 
-        result.append(
-            item
-        )
+        result.append(item)
 
     return result
 
@@ -805,14 +870,10 @@ def search_final_odds_with_companies(
 # 경기 존재 여부
 # =========================================================
 
-def match_exists(
-    schedule_id
-):
+def match_exists(schedule_id):
 
     return (
-        get_match(
-            schedule_id
-        )
+        get_match(schedule_id)
         is not None
     )
 
@@ -822,6 +883,8 @@ def match_exists(
 # =========================================================
 
 def clear_database():
+
+    init_database()
 
     conn = get_connection()
 
@@ -886,4 +949,4 @@ if __name__ == "__main__":
         print(
             " -",
             company
-            )
+)
