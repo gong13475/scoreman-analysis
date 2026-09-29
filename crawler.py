@@ -19,7 +19,10 @@ HEADERS = {
         "AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
     ),
-    "Referer": BASE_URL + "/"
+    "Referer": BASE_URL + "/",
+    "Accept": "text/html,application/xhtml+xml,application/json,"
+              "application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
 session = requests.Session()
@@ -31,9 +34,7 @@ session.headers.update(HEADERS)
 # =========================================================
 
 def to_float(value):
-
     try:
-
         if value is None:
             return None
 
@@ -42,55 +43,46 @@ def to_float(value):
         if not value:
             return None
 
-        return float(
-            value.replace(",", "")
-        )
+        return float(value.replace(",", ""))
 
     except Exception:
-
         return None
 
 
 def to_int(value):
-
     try:
-
         if value is None:
             return None
 
-        return int(
-            float(value)
-        )
+        value = str(value).strip()
+
+        if not value:
+            return None
+
+        return int(float(value))
 
     except Exception:
-
         return None
 
 
 def clean_text(value):
-
     if value is None:
         return ""
 
     value = str(value)
 
-    value = html_lib.unescape(
-        value
-    )
+    value = html_lib.unescape(value)
 
-    value = value.replace(
-        "\\/",
-        "/"
-    )
+    value = value.replace("\\/", "/")
+    value = value.replace('\\"', '"')
+    value = value.replace("\\'", "'")
+    value = value.replace("&nbsp;", " ")
 
-    value = value.replace(
-        '\\"',
-        '"'
-    )
-
-    value = value.replace(
-        "\\'",
-        "'"
+    value = re.sub(
+        r"<br\s*/?>",
+        " ",
+        value,
+        flags=re.I
     )
 
     value = re.sub(
@@ -112,15 +104,9 @@ def clean_text(value):
 # 결과
 # =========================================================
 
-def calculate_result(
-    home_score,
-    away_score
-):
+def calculate_result(home_score, away_score):
 
-    if (
-        home_score is None
-        or away_score is None
-    ):
+    if home_score is None or away_score is None:
         return ""
 
     if home_score > away_score:
@@ -133,16 +119,12 @@ def calculate_result(
 
 
 # =========================================================
-# 페이지
+# 페이지 요청
 # =========================================================
 
-def get_match_page(
-    schedule_id
-):
+def get_match_page(schedule_id):
 
-    url = (
-        f"{BASE_URL}/match/data-{schedule_id}"
-    )
+    url = f"{BASE_URL}/match/data-{schedule_id}"
 
     try:
 
@@ -159,11 +141,9 @@ def get_match_page(
         )
 
         if response.status_code != 200:
-
             return None
 
         if len(response.text) < 300:
-
             return None
 
         return response.text
@@ -171,8 +151,7 @@ def get_match_page(
     except Exception as e:
 
         print(
-            f"[페이지 오류] "
-            f"ID={schedule_id}: {e}",
+            f"[페이지 오류] ID={schedule_id}: {e}",
             flush=True
         )
 
@@ -180,24 +159,18 @@ def get_match_page(
 
 
 # =========================================================
-# 값 찾기
+# 일반 키 검색
 # =========================================================
 
-def find_value(
-    html,
-    keys
-):
+def find_value(html, keys):
 
     for key in keys:
 
         patterns = [
 
             rf'"{re.escape(key)}"\s*:\s*"([^"]*)"',
-
             rf'"{re.escape(key)}"\s*:\s*([^,}}\s]+)',
-
             rf"'{re.escape(key)}'\s*:\s*'([^']*)'",
-
             rf"{re.escape(key)}\s*=\s*[\"']([^\"']+)[\"']"
 
         ]
@@ -217,19 +190,47 @@ def find_value(
                 )
 
                 if value:
-
                     return value
 
     return ""
 
 
 # =========================================================
-# JSON 객체 탐색
+# HTML 속성 검색
 # =========================================================
 
-def search_json_objects(
-    html
-):
+def find_attribute_value(html, names):
+
+    for name in names:
+
+        pattern = (
+            rf'\b{re.escape(name)}\s*=\s*'
+            rf'["\']([^"\']+)["\']'
+        )
+
+        match = re.search(
+            pattern,
+            html,
+            re.I | re.S
+        )
+
+        if match:
+
+            value = clean_text(
+                match.group(1)
+            )
+
+            if value:
+                return value
+
+    return ""
+
+
+# =========================================================
+# JSON 객체 추출
+# =========================================================
+
+def search_json_objects(html):
 
     objects = []
 
@@ -246,24 +247,18 @@ def search_json_objects(
         if not script:
             continue
 
-        # JSON 전체
         try:
 
-            obj = json.loads(
-                script
-            )
+            obj = json.loads(script)
 
-            objects.append(
-                obj
-            )
+            objects.append(obj)
 
         except Exception:
-
             pass
 
-        # JSON.parse / 문자열 내부 등
+        # script 안의 JSON 조각
         for match in re.finditer(
-            r"\{[^{}]{20,5000}\}",
+            r"\{[^{}]{20,10000}\}",
             script,
             re.S
         ):
@@ -272,16 +267,11 @@ def search_json_objects(
 
             try:
 
-                obj = json.loads(
-                    value
-                )
+                obj = json.loads(value)
 
-                objects.append(
-                    obj
-                )
+                objects.append(obj)
 
             except Exception:
-
                 continue
 
     return objects
@@ -291,39 +281,24 @@ def search_json_objects(
 # JSON 재귀 검색
 # =========================================================
 
-def recursive_find(
-    obj,
-    wanted_keys
-):
+def recursive_find(obj, wanted_keys):
 
-    if isinstance(
-        obj,
-        dict
-    ):
+    if isinstance(obj, dict):
 
         for key, value in obj.items():
 
-            key_lower = str(
-                key
-            ).lower()
+            key_lower = str(key).lower()
 
             if key_lower in wanted_keys:
 
                 if isinstance(
                     value,
-                    (
-                        str,
-                        int,
-                        float
-                    )
+                    (str, int, float)
                 ):
 
-                    value = clean_text(
-                        value
-                    )
+                    value = clean_text(value)
 
                     if value:
-
                         return value
 
             result = recursive_find(
@@ -332,13 +307,9 @@ def recursive_find(
             )
 
             if result:
-
                 return result
 
-    elif isinstance(
-        obj,
-        list
-    ):
+    elif isinstance(obj, list):
 
         for item in obj:
 
@@ -348,7 +319,6 @@ def recursive_find(
             )
 
             if result:
-
                 return result
 
     return ""
@@ -358,12 +328,9 @@ def recursive_find(
 # 팀명 추출
 # =========================================================
 
-def find_team_names(
-    html
-):
+def find_team_names(html):
 
     home_keys = {
-
         "hometeamname",
         "home_team_name",
         "hometeam",
@@ -371,12 +338,12 @@ def find_team_names(
         "homename",
         "hname",
         "hometeamnamecn",
-        "home"
-
+        "home_name",
+        "hometeamcn",
+        "teamhome"
     }
 
     away_keys = {
-
         "awayteamname",
         "away_team_name",
         "awayteam",
@@ -384,8 +351,9 @@ def find_team_names(
         "awayname",
         "aname",
         "awayteamnamecn",
-        "away"
-
+        "away_name",
+        "awayteamcn",
+        "teamaway"
     }
 
     home = find_value(
@@ -399,7 +367,7 @@ def find_team_names(
     )
 
     # -----------------------------------------------------
-    # JSON 객체 검색
+    # JSON
     # -----------------------------------------------------
 
     if not home or not away:
@@ -425,82 +393,56 @@ def find_team_names(
                 )
 
             if home and away:
-
                 break
 
     # -----------------------------------------------------
-    # HTML data-* 속성
+    # data-* 속성
     # -----------------------------------------------------
 
     if not home:
 
-        patterns = [
-
-            r'data-home(?:team|name)?=["\']([^"\']+)',
-
-            r'data-hname=["\']([^"\']+)',
-
-            r'data-home-team=["\']([^"\']+)'
-
-        ]
-
-        for pattern in patterns:
-
-            match = re.search(
-                pattern,
-                html,
-                re.I
-            )
-
-            if match:
-
-                home = clean_text(
-                    match.group(1)
-                )
-
-                break
+        home = find_attribute_value(
+            html,
+            [
+                "data-home",
+                "data-home-team",
+                "data-home-name",
+                "data-hname",
+                "data-hometeam"
+            ]
+        )
 
     if not away:
 
-        patterns = [
-
-            r'data-away(?:team|name)?=["\']([^"\']+)',
-
-            r'data-aname=["\']([^"\']+)',
-
-            r'data-away-team=["\']([^"\']+)'
-
-        ]
-
-        for pattern in patterns:
-
-            match = re.search(
-                pattern,
-                html,
-                re.I
-            )
-
-            if match:
-
-                away = clean_text(
-                    match.group(1)
-                )
-
-                break
+        away = find_attribute_value(
+            html,
+            [
+                "data-away",
+                "data-away-team",
+                "data-away-name",
+                "data-aname",
+                "data-awayteam"
+            ]
+        )
 
     # -----------------------------------------------------
-    # class 기반
+    # HTML class
     # -----------------------------------------------------
 
     if not home:
 
         patterns = [
 
-            r'class=["\'][^"\']*home[^"\']*["\'][^>]*>'
-            r'\s*([^<]{2,120})',
+            r'class=["\'][^"\']*(?:home|Home)[^"\']*["\']'
+            r'[^>]*>\s*([^<]{2,200})',
 
-            r'class=["\'][^"\']*Home[^"\']*["\'][^>]*>'
-            r'\s*([^<]{2,120})'
+            r'<span[^>]*class=["\'][^"\']*'
+            r'(?:home|Home)[^"\']*["\'][^>]*>'
+            r'\s*([^<]{2,200})',
+
+            r'<div[^>]*class=["\'][^"\']*'
+            r'(?:home|Home)[^"\']*["\'][^>]*>'
+            r'\s*([^<]{2,200})'
 
         ]
 
@@ -519,20 +461,23 @@ def find_team_names(
                 )
 
                 if value:
-
                     home = value
-
                     break
 
     if not away:
 
         patterns = [
 
-            r'class=["\'][^"\']*away[^"\']*["\'][^>]*>'
-            r'\s*([^<]{2,120})',
+            r'class=["\'][^"\']*(?:away|Away)[^"\']*["\']'
+            r'[^>]*>\s*([^<]{2,200})',
 
-            r'class=["\'][^"\']*Away[^"\']*["\'][^>]*>'
-            r'\s*([^<]{2,120})'
+            r'<span[^>]*class=["\'][^"\']*'
+            r'(?:away|Away)[^"\']*["\'][^>]*>'
+            r'\s*([^<]{2,200})',
+
+            r'<div[^>]*class=["\'][^"\']*'
+            r'(?:away|Away)[^"\']*["\'][^>]*>'
+            r'\s*([^<]{2,200})'
 
         ]
 
@@ -551,9 +496,7 @@ def find_team_names(
                 )
 
                 if value:
-
                     away = value
-
                     break
 
     return (
@@ -566,39 +509,37 @@ def find_team_names(
 # 스코어
 # =========================================================
 
-def find_scores(
-    html
-):
+def find_scores(html):
 
     patterns = [
 
         (
             r'"homeScore"\s*:\s*["\']?(\d+)'
-            r'.{0,1000}?'
+            r'.{0,2000}?'
             r'"awayScore"\s*:\s*["\']?(\d+)'
         ),
 
         (
             r'"home_score"\s*:\s*["\']?(\d+)'
-            r'.{0,1000}?'
+            r'.{0,2000}?'
             r'"away_score"\s*:\s*["\']?(\d+)'
         ),
 
         (
             r'"hscore"\s*:\s*["\']?(\d+)'
-            r'.{0,1000}?'
+            r'.{0,2000}?'
             r'"ascore"\s*:\s*["\']?(\d+)'
         ),
 
         (
             r'"HomeScore"\s*:\s*["\']?(\d+)'
-            r'.{0,1000}?'
+            r'.{0,2000}?'
             r'"AwayScore"\s*:\s*["\']?(\d+)'
         ),
 
         (
             r'"hs"\s*:\s*["\']?(\d+)'
-            r'.{0,1000}?'
+            r'.{0,2000}?'
             r'"as"\s*:\s*["\']?(\d+)'
         )
 
@@ -615,15 +556,14 @@ def find_scores(
         if match:
 
             return (
-                to_int(
-                    match.group(1)
-                ),
-                to_int(
-                    match.group(2)
-                )
+                to_int(match.group(1)),
+                to_int(match.group(2))
             )
 
+    # -----------------------------------------------------
     # HTML
+    # -----------------------------------------------------
+
     patterns = [
 
         r">\s*(\d{1,2})\s*-\s*(\d{1,2})\s*<",
@@ -651,19 +591,14 @@ def find_scores(
                 to_int(aws)
             )
 
-    return (
-        None,
-        None
-    )
+    return None, None
 
 
 # =========================================================
 # 날짜
 # =========================================================
 
-def find_match_date(
-    html
-):
+def find_match_date(html):
 
     keys = [
 
@@ -672,7 +607,9 @@ def find_match_date(
         "startTime",
         "MatchTime",
         "MatchDate",
-        "date"
+        "date",
+        "gameTime",
+        "eventTime"
 
     ]
 
@@ -682,7 +619,6 @@ def find_match_date(
     )
 
     if value:
-
         return value
 
     match = re.search(
@@ -692,7 +628,6 @@ def find_match_date(
     )
 
     if match:
-
         return clean_text(
             match.group(1)
         )
@@ -709,16 +644,12 @@ def parse_match_info(
     schedule_id
 ):
 
-    home_team, away_team = (
-        find_team_names(
-            html
-        )
+    home_team, away_team = find_team_names(
+        html
     )
 
-    home_score, away_score = (
-        find_scores(
-            html
-        )
+    home_score, away_score = find_scores(
+        html
     )
 
     match_date = find_match_date(
@@ -749,35 +680,24 @@ def parse_match_info(
             flush=True
         )
 
-        # -------------------------------------------------
-        # 실패 원인 확인용
-        # -------------------------------------------------
+        # =================================================
+        # 실제 HTML 확인용
+        # =================================================
 
-        for keyword in [
-            "homeTeam",
-            "awayTeam",
-            "home",
-            "away",
-            "team",
-            "score"
-        ]:
+        print(
+            "========== HTML DEBUG START ==========",
+            flush=True
+        )
 
-            pos = html.lower().find(
-                keyword.lower()
-            )
+        print(
+            html[:10000],
+            flush=True
+        )
 
-            if pos >= 0:
-
-                sample = html[
-                    max(0, pos - 200):
-                    min(len(html), pos + 500)
-                ]
-
-                print(
-                    f"[HTML 발견] {keyword}: "
-                    f"{clean_text(sample)[:700]}",
-                    flush=True
-                )
+        print(
+            "========== HTML DEBUG END ==========",
+            flush=True
+        )
 
         return None
 
@@ -807,12 +727,10 @@ def parse_match_info(
 
 
 # =========================================================
-# 배당
+# 배당 API
 # =========================================================
 
-def get_odds(
-    schedule_id
-):
+def get_odds(schedule_id):
 
     url = (
         f"{BASE_URL}/ajax/soccerajax"
@@ -836,7 +754,6 @@ def get_odds(
         )
 
         if response.status_code != 200:
-
             return []
 
         data = response.json()
@@ -844,23 +761,16 @@ def get_odds(
     except Exception as e:
 
         print(
-            f"[배당 오류] "
-            f"ID={schedule_id}: {e}",
+            f"[배당 오류] ID={schedule_id}: {e}",
             flush=True
         )
 
         return []
 
-    if not isinstance(
-        data,
-        dict
-    ):
-
+    if not isinstance(data, dict):
         return []
 
-    if data.get(
-        "ErrCode"
-    ) != 0:
+    if data.get("ErrCode") != 0:
 
         print(
             f"[배당 오류] "
@@ -875,11 +785,7 @@ def get_odds(
         {}
     )
 
-    if not isinstance(
-        data_block,
-        dict
-    ):
-
+    if not isinstance(data_block, dict):
         return []
 
     mixodds = data_block.get(
@@ -887,26 +793,17 @@ def get_odds(
         []
     )
 
-    if not isinstance(
-        mixodds,
-        list
-    ):
-
+    if not isinstance(mixodds, list):
         return []
 
     result = []
 
     for item in mixodds:
 
-        if not isinstance(
-            item,
-            dict
-        ):
+        if not isinstance(item, dict):
             continue
 
-        company_id = item.get(
-            "cid"
-        )
+        company_id = item.get("cid")
 
         company_name = clean_text(
             item.get(
@@ -920,10 +817,7 @@ def get_odds(
             {}
         )
 
-        if not isinstance(
-            euro,
-            dict
-        ):
+        if not isinstance(euro, dict):
             continue
 
         initial = euro.get(
@@ -936,16 +830,10 @@ def get_odds(
             {}
         )
 
-        if not isinstance(
-            initial,
-            dict
-        ):
+        if not isinstance(initial, dict):
             initial = {}
 
-        if not isinstance(
-            final,
-            dict
-        ):
+        if not isinstance(final, dict):
             final = {}
 
         initial_home = to_float(
@@ -972,6 +860,7 @@ def get_odds(
             final.get("d")
         )
 
+        # 초기배당 3개가 없는 업체는 제외
         if (
             initial_home is None
             or initial_draw is None
@@ -1006,6 +895,7 @@ def get_odds(
 
             "final_away":
                 final_away
+
         })
 
     print(
@@ -1013,6 +903,21 @@ def get_odds(
         f"업체={len(result)}",
         flush=True
     )
+
+    for odds in result:
+
+        print(
+            f"  - {odds['company_name']} "
+            f"초기 "
+            f"{odds['initial_home']}/"
+            f"{odds['initial_draw']}/"
+            f"{odds['initial_away']} "
+            f"→ 최종 "
+            f"{odds['final_home']}/"
+            f"{odds['final_draw']}/"
+            f"{odds['final_away']}",
+            flush=True
+        )
 
     return result
 
@@ -1050,6 +955,7 @@ def save_match_data(
             match["result"],
 
         source="Scoreman"
+
     )
 
     count = 0
@@ -1084,6 +990,7 @@ def save_match_data(
 
             final_away=
                 odds["final_away"]
+
         )
 
         count += 1
@@ -1092,12 +999,10 @@ def save_match_data(
 
 
 # =========================================================
-# 존재 여부
+# 경기 존재 여부
 # =========================================================
 
-def match_exists(
-    schedule_id
-):
+def match_exists(schedule_id):
 
     try:
 
@@ -1114,12 +1019,10 @@ def match_exists(
 
 
 # =========================================================
-# ID 하나
+# ID 하나 수집
 # =========================================================
 
-def collect_one(
-    schedule_id
-):
+def collect_one(schedule_id):
 
     print(
         "",
@@ -1132,49 +1035,7 @@ def collect_one(
     )
 
     # -----------------------------------------------------
-    # 기존 경기
-    # -----------------------------------------------------
-
-    if match_exists(
-        schedule_id
-    ):
-
-        print(
-            f"[기존 경기] {schedule_id}",
-            flush=True
-        )
-
-        odds_list = get_odds(
-            schedule_id
-        )
-
-        saved = 0
-
-        if odds_list:
-
-            match = database.get_match(
-                schedule_id
-            )
-
-            if match:
-
-                saved = save_match_data(
-                    dict(match),
-                    odds_list
-                )
-
-        return {
-
-            "status":
-                "exists",
-
-            "odds":
-                saved
-
-        }
-
-    # -----------------------------------------------------
-    # 페이지
+    # 페이지 먼저 가져오기
     # -----------------------------------------------------
 
     html = get_match_page(
@@ -1184,16 +1045,12 @@ def collect_one(
     if not html:
 
         return {
-
-            "status":
-                "skip",
-
-            "odds":
-                0
+            "status": "skip",
+            "odds": 0
         }
 
     # -----------------------------------------------------
-    # 파싱
+    # 경기 파싱
     # -----------------------------------------------------
 
     match = parse_match_info(
@@ -1204,16 +1061,31 @@ def collect_one(
     if not match:
 
         return {
-
-            "status":
-                "skip",
-
-            "odds":
-                0
+            "status": "skip",
+            "odds": 0
         }
 
     # -----------------------------------------------------
-    # 완료 경기
+    # 배당 가져오기
+    # -----------------------------------------------------
+
+    odds_list = get_odds(
+        schedule_id
+    )
+
+    # -----------------------------------------------------
+    # 기존 경기
+    #
+    # 경기정보가 이미 DB에 있어도
+    # 배당은 다시 받아서 최종배당까지 갱신
+    # -----------------------------------------------------
+
+    existed = match_exists(
+        schedule_id
+    )
+
+    # -----------------------------------------------------
+    # 결과가 완료된 경기인지 확인
     # -----------------------------------------------------
 
     if match["result"] not in [
@@ -1228,21 +1100,13 @@ def collect_one(
         )
 
         return {
-
-            "status":
-                "skip",
-
-            "odds":
-                0
+            "status": "skip",
+            "odds": 0
         }
 
     # -----------------------------------------------------
-    # 배당
+    # 배당이 없으면 저장하지 않음
     # -----------------------------------------------------
-
-    odds_list = get_odds(
-        schedule_id
-    )
 
     if not odds_list:
 
@@ -1252,16 +1116,12 @@ def collect_one(
         )
 
         return {
-
-            "status":
-                "skip",
-
-            "odds":
-                0
+            "status": "skip",
+            "odds": 0
         }
 
     # -----------------------------------------------------
-    # 저장
+    # 경기 + 업체별 배당 저장
     # -----------------------------------------------------
 
     saved = save_match_data(
@@ -1269,8 +1129,29 @@ def collect_one(
         odds_list
     )
 
+    if existed:
+
+        print(
+            f"[기존 갱신 완료] "
+            f"{schedule_id} "
+            f"{match['home_team']} "
+            f"vs "
+            f"{match['away_team']} "
+            f"→ {match['result']} "
+            f"/ 배당 {saved}개",
+            flush=True
+        )
+
+        return {
+            "status": "exists",
+            "odds": saved,
+            "home": match["home_team"],
+            "away": match["away_team"],
+            "result": match["result"]
+        }
+
     print(
-        f"[저장 완료] "
+        f"[신규 저장 완료] "
         f"{schedule_id} "
         f"{match['home_team']} "
         f"vs "
@@ -1281,21 +1162,11 @@ def collect_one(
     )
 
     return {
-
-        "status":
-            "success",
-
-        "odds":
-            saved,
-
-        "home":
-            match["home_team"],
-
-        "away":
-            match["away_team"],
-
-        "result":
-            match["result"]
+        "status": "success",
+        "odds": saved,
+        "home": match["home_team"],
+        "away": match["away_team"],
+        "result": match["result"]
     }
 
 
@@ -1313,13 +1184,8 @@ def build_database_progress(
 
     database.init_database()
 
-    start_id = int(
-        start_id
-    )
-
-    end_id = int(
-        end_id
-    )
+    start_id = int(start_id)
+    end_id = int(end_id)
 
     if end_id < start_id:
 
@@ -1340,9 +1206,7 @@ def build_database_progress(
 
     def log(message):
 
-        message = str(
-            message
-        )
+        message = str(message)
 
         print(
             message,
@@ -1354,6 +1218,10 @@ def build_database_progress(
             log_callback(
                 message
             )
+
+    # -----------------------------------------------------
+    # 시작
+    # -----------------------------------------------------
 
     log(
         "========================================"
@@ -1374,6 +1242,10 @@ def build_database_progress(
     log(
         "========================================"
     )
+
+    # -----------------------------------------------------
+    # ID 순서대로
+    # -----------------------------------------------------
 
     for index, schedule_id in enumerate(
 
@@ -1408,17 +1280,13 @@ def build_database_progress(
 
                 success += 1
 
-                odds_total += (
-                    odds_count
-                )
+                odds_total += odds_count
 
             elif status == "exists":
 
                 exists += 1
 
-                odds_total += (
-                    odds_count
-                )
+                odds_total += odds_count
 
             else:
 
@@ -1429,8 +1297,7 @@ def build_database_progress(
             failed += 1
 
             log(
-                f"[오류] "
-                f"ID={schedule_id}: {e}"
+                f"[오류] ID={schedule_id}: {e}"
             )
 
         percent = (
@@ -1457,8 +1324,15 @@ def build_database_progress(
         if delay:
 
             time.sleep(
-                float(delay)
+                max(
+                    0,
+                    float(delay)
+                )
             )
+
+    # -----------------------------------------------------
+    # 완료
+    # -----------------------------------------------------
 
     log(
         "========================================"
@@ -1508,6 +1382,7 @@ def build_database_progress(
 
         "odds":
             odds_total
+
     }
 
 
@@ -1536,6 +1411,7 @@ def auto_collect(
             log_callback,
 
         delay=delay
+
     )
 
 
@@ -1553,6 +1429,10 @@ if __name__ == "__main__":
 
     print(
         "Scoreman DB 수집"
+    )
+
+    print(
+        "========================================"
     )
 
     start_id = int(
@@ -1576,6 +1456,7 @@ if __name__ == "__main__":
         log_callback=print,
 
         delay=0.5
+
     )
 
     print()
@@ -1603,5 +1484,4 @@ if __name__ == "__main__":
     print(
         "배당:",
         result["odds"]
-    )
-print(html[:10000])
+        )
