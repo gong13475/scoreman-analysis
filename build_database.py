@@ -1,7 +1,6 @@
 import time
 import re
 import requests
-from datetime import datetime
 
 import database
 
@@ -30,7 +29,9 @@ session.headers.update(HEADERS)
 # =========================================================
 
 def to_float(value):
+
     try:
+
         if value is None:
             return None
 
@@ -42,22 +43,26 @@ def to_float(value):
         return float(value)
 
     except Exception:
+
         return None
 
 
 def to_int(value):
+
     try:
+
         if value is None:
             return None
 
         return int(value)
 
     except Exception:
+
         return None
 
 
 # =========================================================
-# 결과
+# 경기 결과
 # =========================================================
 
 def calculate_result(home_score, away_score):
@@ -98,11 +103,12 @@ def get_match_page(schedule_id):
         return response.text
 
     except Exception:
+
         return None
 
 
 # =========================================================
-# JSON 문자열 정리
+# 문자열 정리
 # =========================================================
 
 def clean_text(value):
@@ -202,7 +208,7 @@ def parse_match_info(html, schedule_id):
             break
 
     # -----------------------------------------------------
-    # 홈 스코어 / 원정 스코어
+    # 스코어
     # -----------------------------------------------------
 
     score_patterns = [
@@ -302,18 +308,10 @@ def parse_match_info(html, schedule_id):
 
             break
 
-    # -----------------------------------------------------
-    # 결과
-    # -----------------------------------------------------
-
     result = calculate_result(
         home_score,
         away_score
     )
-
-    # -----------------------------------------------------
-    # 최소 조건
-    # -----------------------------------------------------
 
     if not home_team and not away_team:
         return None
@@ -344,7 +342,7 @@ def parse_match_info(html, schedule_id):
 
 
 # =========================================================
-# 배당 API
+# 회사별 배당
 # =========================================================
 
 def get_odds(schedule_id):
@@ -370,6 +368,7 @@ def get_odds(schedule_id):
         data = response.json()
 
     except Exception:
+
         return []
 
     if not isinstance(data, dict):
@@ -418,11 +417,13 @@ def get_odds(schedule_id):
         if not isinstance(euro, dict):
             continue
 
+        # 최초 배당
         initial = euro.get(
             "f",
             {}
         )
 
+        # 최종 배당
         final = euro.get(
             "l",
             {}
@@ -458,6 +459,7 @@ def get_odds(schedule_id):
             final.get("d")
         )
 
+        # 최초배당이 없는 업체는 제외
         if (
             initial_home is None
             or initial_draw is None
@@ -471,7 +473,7 @@ def get_odds(schedule_id):
                 company_id,
 
             "company_name":
-                company_name,
+                str(company_name).strip(),
 
             "initial_home":
                 initial_home,
@@ -497,7 +499,7 @@ def get_odds(schedule_id):
 
 
 # =========================================================
-# 저장
+# 경기 + 배당 저장
 # =========================================================
 
 def save_match_data(
@@ -508,12 +510,19 @@ def save_match_data(
     database.save_match(
 
         schedule_id=match["schedule_id"],
+
         match_date=match["match_date"],
+
         home_team=match["home_team"],
+
         away_team=match["away_team"],
+
         home_score=match["home_score"],
+
         away_score=match["away_score"],
+
         result=match["result"],
+
         source="Scoreman"
 
     )
@@ -522,51 +531,46 @@ def save_match_data(
 
         database.save_odds(
 
-            schedule_id=match["schedule_id"],
-            company_id=odds["company_id"],
-            company_name=odds["company_name"],
-            initial_home=odds["initial_home"],
-            initial_draw=odds["initial_draw"],
-            initial_away=odds["initial_away"],
-            final_home=odds["final_home"],
-            final_draw=odds["final_draw"],
-            final_away=odds["final_away"]
+            schedule_id=
+                match["schedule_id"],
+
+            company_id=
+                odds["company_id"],
+
+            company_name=
+                odds["company_name"],
+
+            initial_home=
+                odds["initial_home"],
+
+            initial_draw=
+                odds["initial_draw"],
+
+            initial_away=
+                odds["initial_away"],
+
+            final_home=
+                odds["final_home"],
+
+            final_draw=
+                odds["final_draw"],
+
+            final_away=
+                odds["final_away"]
 
         )
 
 
 # =========================================================
-# 존재 여부
+# 경기 1개 수집
 # =========================================================
-
-def match_exists(schedule_id):
-
-    try:
-
-        return (
-            database.get_match(
-                schedule_id
-            )
-            is not None
-        )
-
-    except Exception:
-
-        return False
-
-
-# =========================================================
-# ID 하나 수집
+#
+# 중요:
+# 기존 경기라도 다시 크롤링한다.
+# 따라서 초기/최종배당을 계속 업데이트할 수 있다.
 # =========================================================
 
 def collect_one(schedule_id):
-
-    if match_exists(schedule_id):
-
-        return {
-            "status": "exists",
-            "odds": 0
-        }
 
     html = get_match_page(
         schedule_id
@@ -603,6 +607,7 @@ def collect_one(schedule_id):
             "odds": 0
         }
 
+    # 회사별 초기/최종배당
     odds_list = get_odds(
         schedule_id
     )
@@ -614,6 +619,7 @@ def collect_one(schedule_id):
             "odds": 0
         }
 
+    # 저장 / 업데이트
     save_match_data(
         match,
         odds_list
@@ -701,34 +707,27 @@ def build_database_progress(
 
                 success += 1
 
-                odds_total += int(
+                odds_count = int(
                     result.get(
                         "odds",
                         0
                     )
                 )
 
+                odds_total += odds_count
+
                 if log_callback:
 
                     log_callback(
-                        f"[저장] {schedule_id} "
+
+                        f"[저장/업데이트] "
+                        f"{schedule_id} | "
                         f"{result.get('home', '')} "
                         f"vs "
-                        f"{result.get('away', '')} "
-                        f"→ "
-                        f"{result.get('result', '')} "
-                        f"/ 업체 "
-                        f"{result.get('odds', 0)}"
-                    )
+                        f"{result.get('away', '')} | "
+                        f"결과 {result.get('result', '')} | "
+                        f"업체 {odds_count}"
 
-            elif status == "exists":
-
-                exists += 1
-
-                if log_callback:
-
-                    log_callback(
-                        f"[기존] {schedule_id}"
                     )
 
             else:
@@ -765,6 +764,7 @@ def build_database_progress(
         "failed":
             failed,
 
+        # 기존 UI와 호환
         "exists":
             exists,
 
@@ -777,7 +777,7 @@ def build_database_progress(
 
 
 # =========================================================
-# 자동 ID 탐색
+# 자동 수집
 # =========================================================
 
 def auto_collect(
@@ -801,11 +801,12 @@ def auto_collect(
             log_callback,
 
         delay=delay
+
     )
 
 
 # =========================================================
-# 테스트 실행
+# 직접 실행
 # =========================================================
 
 if __name__ == "__main__":
@@ -813,7 +814,19 @@ if __name__ == "__main__":
     database.init_database()
 
     print(
+        "================================"
+    )
+
+    print(
         "Scoreman DB 수집"
+    )
+
+    print(
+        "기존 경기 배당도 업데이트합니다."
+    )
+
+    print(
+        "================================"
     )
 
     start_id = int(
@@ -842,7 +855,7 @@ if __name__ == "__main__":
 
     print()
     print(
-        "=============================="
+        "================================"
     )
 
     print(
@@ -855,7 +868,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "성공:",
+        "저장/업데이트:",
         result["success"]
     )
 
@@ -865,15 +878,10 @@ if __name__ == "__main__":
     )
 
     print(
-        "기존:",
-        result["exists"]
-    )
-
-    print(
         "배당:",
         result["odds"]
     )
 
     print(
-        "=============================="
-    )
+        "================================"
+            )
