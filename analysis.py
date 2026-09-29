@@ -1,6 +1,5 @@
 import sqlite3
 import pandas as pd
-import numpy as np
 
 from database import DB_FILE
 
@@ -10,6 +9,7 @@ from database import DB_FILE
 # =========================================================
 
 def get_connection():
+
     return sqlite3.connect(DB_FILE)
 
 
@@ -54,26 +54,35 @@ def get_all_analysis_data():
     """
 
     try:
-        df = pd.read_sql_query(query, conn)
+
+        df = pd.read_sql_query(
+            query,
+            conn
+        )
 
     finally:
+
         conn.close()
 
     if df.empty:
         return df
 
-    number_columns = [
+    numeric_columns = [
+
         "initial_home",
         "initial_draw",
         "initial_away",
+
         "final_home",
         "final_draw",
         "final_away",
+
         "home_score",
         "away_score"
+
     ]
 
-    for column in number_columns:
+    for column in numeric_columns:
 
         if column in df.columns:
 
@@ -82,696 +91,458 @@ def get_all_analysis_data():
                 errors="coerce"
             )
 
-    # =====================================================
-    # 정상적인 1X2 초기배당만 사용
-    # =====================================================
+    return df
 
-    df = df[
-        (df["initial_home"] > 1) &
-        (df["initial_draw"] > 1) &
-        (df["initial_away"] > 1)
-    ].copy()
 
-    if df.empty:
-        return df
+# =========================================================
+# 회사 목록
+# =========================================================
 
-    # =====================================================
-    # 초기배당 이론 확률
-    # =====================================================
+def get_company_list():
 
-    inverse_home = 1 / df["initial_home"]
-    inverse_draw = 1 / df["initial_draw"]
-    inverse_away = 1 / df["initial_away"]
+    conn = get_connection()
 
-    total = (
-        inverse_home +
-        inverse_draw +
-        inverse_away
-    )
+    query = """
+        SELECT
+            company_id,
+            company_name,
+            COUNT(*) AS match_count
 
-    df["승확률"] = (
-        inverse_home / total * 100
-    ).round(2)
+        FROM odds
 
-    df["무확률"] = (
-        inverse_draw / total * 100
-    ).round(2)
+        WHERE company_name IS NOT NULL
+        AND TRIM(company_name) != ''
 
-    df["패확률"] = (
-        inverse_away / total * 100
-    ).round(2)
+        GROUP BY
+            company_id,
+            company_name
 
-    # =====================================================
-    # 최종배당 이론 확률
-    # =====================================================
+        ORDER BY
+            company_name
+    """
 
-    valid_final = (
-        (df["final_home"] > 1) &
-        (df["final_draw"] > 1) &
-        (df["final_away"] > 1)
-    )
+    try:
 
-    df["최종승확률"] = np.nan
-    df["최종무확률"] = np.nan
-    df["최종패확률"] = np.nan
+        df = pd.read_sql_query(
+            query,
+            conn
+        )
 
-    final_home = 1 / df.loc[valid_final, "final_home"]
-    final_draw = 1 / df.loc[valid_final, "final_draw"]
-    final_away = 1 / df.loc[valid_final, "final_away"]
+    finally:
 
-    final_total = (
-        final_home +
-        final_draw +
-        final_away
-    )
-
-    df.loc[valid_final, "최종승확률"] = (
-        final_home / final_total * 100
-    ).round(2)
-
-    df.loc[valid_final, "최종무확률"] = (
-        final_draw / final_total * 100
-    ).round(2)
-
-    df.loc[valid_final, "최종패확률"] = (
-        final_away / final_total * 100
-    ).round(2)
-
-    # =====================================================
-    # 배당상 예상
-    # =====================================================
-
-    df["배당예상"] = np.select(
-        [
-            (
-                (df["initial_home"] <= df["initial_draw"]) &
-                (df["initial_home"] <= df["initial_away"])
-            ),
-
-            (
-                (df["initial_draw"] < df["initial_home"]) &
-                (df["initial_draw"] <= df["initial_away"])
-            )
-        ],
-        [
-            "승",
-            "무"
-        ],
-        default="패"
-    )
-
-    # =====================================================
-    # 배당상 예상 적중
-    # =====================================================
-
-    df["적중"] = (
-        df["배당예상"] == df["result"]
-    )
-
-    # =====================================================
-    # 배당 구간
-    # =====================================================
-
-    df["승배당구간"] = df[
-        "initial_home"
-    ].apply(get_odds_range)
-
-    df["무배당구간"] = df[
-        "initial_draw"
-    ].apply(get_odds_range)
-
-    df["패배당구간"] = df[
-        "initial_away"
-    ].apply(get_odds_range)
+        conn.close()
 
     return df
 
 
 # =========================================================
-# 경기별 중복 제거
+# 회사명 목록
+# =========================================================
+
+def get_company_names():
+
+    df = get_company_list()
+
+    if df.empty:
+        return []
+
+    return (
+        df["company_name"]
+        .dropna()
+        .astype(str)
+        .drop_duplicates()
+        .tolist()
+    )
+
+
+# =========================================================
+# 경기 중복 제거
 # =========================================================
 
 def get_unique_match_data(df):
 
     if df is None or df.empty:
+
         return pd.DataFrame()
 
-    temp = df.copy()
-
-    temp = temp.drop_duplicates(
-        subset=["schedule_id"]
-    ).copy()
-
-    return temp
-
-
-# =========================================================
-# 배당 구간
-# =========================================================
-
-def get_odds_range(odds):
-
-    if pd.isna(odds):
-        return "-"
-
-    odds = float(odds)
-
-    if odds < 1.20:
-        return "1.01~1.19"
-
-    elif odds < 1.30:
-        return "1.20~1.29"
-
-    elif odds < 1.40:
-        return "1.30~1.39"
-
-    elif odds < 1.50:
-        return "1.40~1.49"
-
-    elif odds < 1.60:
-        return "1.50~1.59"
-
-    elif odds < 1.70:
-        return "1.60~1.69"
-
-    elif odds < 1.80:
-        return "1.70~1.79"
-
-    elif odds < 1.90:
-        return "1.80~1.89"
-
-    elif odds < 2.00:
-        return "1.90~1.99"
-
-    elif odds < 2.10:
-        return "2.00~2.09"
-
-    elif odds < 2.20:
-        return "2.10~2.19"
-
-    elif odds < 2.30:
-        return "2.20~2.29"
-
-    elif odds < 2.40:
-        return "2.30~2.39"
-
-    elif odds < 2.50:
-        return "2.40~2.49"
-
-    elif odds < 2.75:
-        return "2.50~2.74"
-
-    elif odds < 3.00:
-        return "2.75~2.99"
-
-    elif odds < 3.50:
-        return "3.00~3.49"
-
-    elif odds < 4.00:
-        return "3.50~3.99"
-
-    elif odds < 5.00:
-        return "4.00~4.99"
-
-    elif odds < 7.00:
-        return "5.00~6.99"
-
-    else:
-        return "7.00+"
-
-
-# =========================================================
-# 전체 승무패 통계
-# =========================================================
-
-def calculate_result_stats(df):
-
-    if df is None or df.empty:
-
-        return {
-            "승": {"count": 0, "percent": 0},
-            "무": {"count": 0, "percent": 0},
-            "패": {"count": 0, "percent": 0}
-        }
-
-    unique_df = get_unique_match_data(df)
-
-    result_series = (
-        unique_df["result"]
-        .dropna()
-        .astype(str)
+    return (
+        df
+        .drop_duplicates(
+            subset=["schedule_id"]
+        )
+        .copy()
     )
 
-    total = len(result_series)
-
-    stats = {}
-
-    for result in ["승", "무", "패"]:
-
-        count = int(
-            (result_series == result).sum()
-        )
-
-        percent = round(
-            count / total * 100,
-            2
-        ) if total else 0
-
-        stats[result] = {
-            "count": count,
-            "percent": percent
-        }
-
-    return stats
-
 
 # =========================================================
-# 배당 구간별 통계
+# 숫자 정규화
+#
+# 1.50과 1.5를 같은 값으로 처리
 # =========================================================
 
-def make_odds_range_table(df, side="home"):
+def normalize_odds(value):
 
-    if df is None or df.empty:
-        return pd.DataFrame()
+    if value is None:
+        return None
 
-    temp = get_unique_match_data(df)
+    try:
 
-    column_map = {
-        "home": "initial_home",
-        "draw": "initial_draw",
-        "away": "initial_away"
-    }
-
-    result_map = {
-        "home": "승",
-        "draw": "무",
-        "away": "패"
-    }
-
-    if side not in column_map:
-        raise ValueError(
-            "side는 home/draw/away만 가능합니다."
-        )
-
-    odds_column = column_map[side]
-    target_result = result_map[side]
-
-    temp["배당구간"] = temp[
-        odds_column
-    ].apply(get_odds_range)
-
-    ranges = [
-        "1.01~1.19",
-        "1.20~1.29",
-        "1.30~1.39",
-        "1.40~1.49",
-        "1.50~1.59",
-        "1.60~1.69",
-        "1.70~1.79",
-        "1.80~1.89",
-        "1.90~1.99",
-        "2.00~2.09",
-        "2.10~2.19",
-        "2.20~2.29",
-        "2.30~2.39",
-        "2.40~2.49",
-        "2.50~2.74",
-        "2.75~2.99",
-        "3.00~3.49",
-        "3.50~3.99",
-        "4.00~4.99",
-        "5.00~6.99",
-        "7.00+"
-    ]
-
-    rows = []
-
-    for odds_range in ranges:
-
-        group = temp[
-            temp["배당구간"] == odds_range
-        ]
-
-        count = len(group)
-
-        if count == 0:
-            continue
-
-        target_count = int(
-            (group["result"] == target_result).sum()
-        )
-
-        target_percent = round(
-            target_count / count * 100,
+        return round(
+            float(value),
             2
         )
 
-        home_count = int(
-            (group["result"] == "승").sum()
-        )
+    except Exception:
 
-        draw_count = int(
-            (group["result"] == "무").sum()
-        )
-
-        away_count = int(
-            (group["result"] == "패").sum()
-        )
-
-        rows.append({
-            "배당구간": odds_range,
-            "경기수": count,
-
-            f"{target_result} 적중":
-                target_count,
-
-            f"{target_result} 적중률":
-                f"{target_percent:.2f}% "
-                f"({target_count}경기)",
-
-            "승":
-                f"{home_count / count * 100:.2f}% "
-                f"({home_count}경기)",
-
-            "무":
-                f"{draw_count / count * 100:.2f}% "
-                f"({draw_count}경기)",
-
-            "패":
-                f"{away_count / count * 100:.2f}% "
-                f"({away_count}경기)"
-        })
-
-    return pd.DataFrame(rows)
+        return None
 
 
 # =========================================================
-# 배당업체별 통계
+# 완전 동일배당 검색
 # =========================================================
 
-def get_company_stats(df):
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    rows = []
-
-    for company, group in df.groupby(
-        "company_name",
-        dropna=False
-    ):
-
-        company = (
-            str(company)
-            if company
-            else "알 수 없음"
-        )
-
-        group = group.drop_duplicates(
-            subset=["schedule_id"]
-        ).copy()
-
-        total = len(group)
-
-        if total == 0:
-            continue
-
-        home_count = int(
-            (group["result"] == "승").sum()
-        )
-
-        draw_count = int(
-            (group["result"] == "무").sum()
-        )
-
-        away_count = int(
-            (group["result"] == "패").sum()
-        )
-
-        home_percent = round(
-            home_count / total * 100,
-            2
-        )
-
-        draw_percent = round(
-            draw_count / total * 100,
-            2
-        )
-
-        away_percent = round(
-            away_count / total * 100,
-            2
-        )
-
-        hit_count = int(
-            group["적중"].sum()
-        )
-
-        hit_percent = round(
-            hit_count / total * 100,
-            2
-        )
-
-        rows.append({
-            "배당업체": company,
-            "경기수": total,
-
-            "승":
-                f"{home_percent:.2f}% "
-                f"({home_count}경기)",
-
-            "무":
-                f"{draw_percent:.2f}% "
-                f"({draw_count}경기)",
-
-            "패":
-                f"{away_percent:.2f}% "
-                f"({away_count}경기)",
-
-            "배당상 예상 적중":
-                f"{hit_percent:.2f}% "
-                f"({hit_count}경기)"
-        })
-
-    result = pd.DataFrame(rows)
-
-    if not result.empty:
-
-        result = result.sort_values(
-            "경기수",
-            ascending=False
-        )
-
-    return result
-
-
-# =========================================================
-# 특정 배당구간 통계
-# =========================================================
-
-def get_range_result_stats(
+def find_exact_odds(
     df,
-    odds_column,
-    min_odds,
-    max_odds
+    company_name,
+    initial_home,
+    initial_draw,
+    initial_away,
+    final_home,
+    final_draw,
+    final_away
 ):
 
     if df is None or df.empty:
 
-        return {
-            "경기수": 0,
-            "승": 0,
-            "무": 0,
-            "패": 0
-        }
-
-    temp = get_unique_match_data(df)
-
-    group = temp[
-        (temp[odds_column] >= min_odds) &
-        (temp[odds_column] <= max_odds)
-    ]
-
-    total = len(group)
-
-    if total == 0:
-
-        return {
-            "경기수": 0,
-            "승": 0,
-            "무": 0,
-            "패": 0
-        }
-
-    return {
-        "경기수": total,
-
-        "승":
-            int((group["result"] == "승").sum()),
-
-        "무":
-            int((group["result"] == "무").sum()),
-
-        "패":
-            int((group["result"] == "패").sum())
-    }
-
-
-# =========================================================
-# 요약
-# =========================================================
-
-def get_summary(df):
-
-    if df is None or df.empty:
-
-        return {
-            "경기수": 0,
-            "업체수": 0,
-            "승": 0,
-            "무": 0,
-            "패": 0
-        }
-
-    unique_df = get_unique_match_data(df)
-
-    return {
-        "경기수": len(unique_df),
-
-        "업체수":
-            df["company_name"].nunique(),
-
-        "승":
-            int((unique_df["result"] == "승").sum()),
-
-        "무":
-            int((unique_df["result"] == "무").sum()),
-
-        "패":
-            int((unique_df["result"] == "패").sum())
-    }
-
-
-# =========================================================
-# ★ 완전 동일 초기배당 검색
-# =========================================================
-#
-# 유사배당이 아닙니다.
-#
-# 승 / 무 / 패 초기배당 3개가
-# 모두 정확히 동일한 경기만 검색합니다.
-#
-# 예:
-#
-# 1.85 / 3.40 / 4.20  → 포함
-# 1.85 / 3.40 / 4.20  → 포함
-#
-# 1.86 / 3.40 / 4.20  → 제외
-# 1.85 / 3.41 / 4.20  → 제외
-# 1.85 / 3.40 / 4.21  → 제외
-#
-# 경기 수가 부족해도 범위를 확대하지 않습니다.
-# =========================================================
-
-def find_similar_odds(
-    df,
-    home_odds,
-    draw_odds,
-    away_odds,
-    tolerance=0.0,
-    minimum_games=0,
-    maximum_tolerance=0.0
-):
-
-    if df is None or df.empty:
-        return pd.DataFrame(), 0.0
-
-    temp = df.copy()
-
-    # 경기 중복 제거
-    temp = get_unique_match_data(temp)
+        return pd.DataFrame()
 
     required_columns = [
+
+        "company_name",
+
         "initial_home",
         "initial_draw",
-        "initial_away"
+        "initial_away",
+
+        "final_home",
+        "final_draw",
+        "final_away"
+
     ]
 
     for column in required_columns:
 
-        if column not in temp.columns:
-            return pd.DataFrame(), 0.0
+        if column not in df.columns:
+
+            return pd.DataFrame()
+
+    target_initial_home = normalize_odds(
+        initial_home
+    )
+
+    target_initial_draw = normalize_odds(
+        initial_draw
+    )
+
+    target_initial_away = normalize_odds(
+        initial_away
+    )
+
+    target_final_home = normalize_odds(
+        final_home
+    )
+
+    target_final_draw = normalize_odds(
+        final_draw
+    )
+
+    target_final_away = normalize_odds(
+        final_away
+    )
+
+    temp = df.copy()
+
+    # =====================================================
+    # 회사명 정확히 일치
+    # =====================================================
+
+    temp = temp[
+        temp["company_name"]
+        .astype(str)
+        .str.strip()
+        ==
+        str(company_name).strip()
+    ].copy()
+
+    if temp.empty:
+
+        return pd.DataFrame()
+
+    # =====================================================
+    # 배당 숫자 정규화
+    # =====================================================
+
+    odds_columns = [
+
+        "initial_home",
+        "initial_draw",
+        "initial_away",
+
+        "final_home",
+        "final_draw",
+        "final_away"
+
+    ]
+
+    for column in odds_columns:
 
         temp[column] = pd.to_numeric(
             temp[column],
             errors="coerce"
-        )
-
-    # 입력값 숫자 변환
-    try:
-
-        home_odds = float(home_odds)
-        draw_odds = float(draw_odds)
-        away_odds = float(away_odds)
-
-    except (TypeError, ValueError):
-
-        return pd.DataFrame(), 0.0
+        ).round(2)
 
     # =====================================================
-    # ★ 완전 동일 조건
+    # 완전 동일
+    #
+    # 초기 3개
+    # +
+    # 최종 3개
+    #
+    # 총 6개 모두 일치
     # =====================================================
 
-    similar = temp[
-        (temp["initial_home"] == home_odds) &
-        (temp["initial_draw"] == draw_odds) &
-        (temp["initial_away"] == away_odds)
+    condition = (
+
+        (temp["initial_home"] == target_initial_home)
+
+        &
+
+        (temp["initial_draw"] == target_initial_draw)
+
+        &
+
+        (temp["initial_away"] == target_initial_away)
+
+        &
+
+        (temp["final_home"] == target_final_home)
+
+        &
+
+        (temp["final_draw"] == target_final_draw)
+
+        &
+
+        (temp["final_away"] == target_final_away)
+
+    )
+
+    result = temp[
+        condition
     ].copy()
 
-    # =====================================================
-    # 차이값
-    # =====================================================
-
-    if not similar.empty:
-
-        similar["승차이"] = (
-            similar["initial_home"] -
-            home_odds
-        ).abs()
-
-        similar["무차이"] = (
-            similar["initial_draw"] -
-            draw_odds
-        ).abs()
-
-        similar["패차이"] = (
-            similar["initial_away"] -
-            away_odds
-        ).abs()
-
-        similar["총차이"] = (
-            similar["승차이"] +
-            similar["무차이"] +
-            similar["패차이"]
-        )
-
-        similar = similar.sort_values(
-            "총차이",
-            ascending=True
-        )
-
-    return similar, 0.0
+    return result.sort_values(
+        "match_date",
+        ascending=False
+    )
 
 
 # =========================================================
-# 완전 동일 초기배당 승무패 통계
+# 여러 회사의 완전 동일배당 검색
+#
+# 선택한 모든 회사가
+# 같은 경기에서 각각 입력값과 완전히 일치해야 함
 # =========================================================
 
-def calculate_similar_result_stats(similar_df):
+def find_exact_multi_company(
+    df,
+    company_inputs
+):
 
-    if similar_df is None or similar_df.empty:
+    if df is None or df.empty:
+
+        return pd.DataFrame()
+
+    if not company_inputs:
+
+        return pd.DataFrame()
+
+    all_matches = []
+
+    # =====================================================
+    # 회사별 검색
+    # =====================================================
+
+    for company_name, values in company_inputs.items():
+
+        company_result = find_exact_odds(
+
+            df=df,
+
+            company_name=company_name,
+
+            initial_home=
+                values["initial_home"],
+
+            initial_draw=
+                values["initial_draw"],
+
+            initial_away=
+                values["initial_away"],
+
+            final_home=
+                values["final_home"],
+
+            final_draw=
+                values["final_draw"],
+
+            final_away=
+                values["final_away"]
+
+        )
+
+        if company_result.empty:
+
+            return pd.DataFrame()
+
+        all_matches.append(
+            company_result
+        )
+
+    # =====================================================
+    # 첫 번째 회사 결과
+    # =====================================================
+
+    base = all_matches[0].copy()
+
+    # =====================================================
+    # 나머지 회사와 경기ID 교집합
+    # =====================================================
+
+    for other in all_matches[1:]:
+
+        common_ids = set(
+            base["schedule_id"]
+        ).intersection(
+            set(other["schedule_id"])
+        )
+
+        base = base[
+            base["schedule_id"].isin(
+                common_ids
+            )
+        ].copy()
+
+        if base.empty:
+
+            return pd.DataFrame()
+
+    # =====================================================
+    # 회사별 배당 정보 표시
+    # =====================================================
+
+    result = base.copy()
+
+    for index, company_df in enumerate(
+        all_matches
+    ):
+
+        company_name = str(
+            company_df.iloc[0]["company_name"]
+        )
+
+        if index == 0:
+
+            continue
+
+        # 해당 회사 데이터와 경기ID 기준 병합
+        extra = company_df[
+            [
+                "schedule_id",
+
+                "initial_home",
+                "initial_draw",
+                "initial_away",
+
+                "final_home",
+                "final_draw",
+                "final_away"
+
+            ]
+        ].copy()
+
+        suffix = (
+            "_"
+            +
+            str(index + 1)
+        )
+
+        result = result.merge(
+
+            extra,
+
+            on="schedule_id",
+
+            how="inner",
+
+            suffixes=(
+                "",
+                suffix
+            )
+        )
+
+    return result.sort_values(
+        "match_date",
+        ascending=False
+    )
+
+
+# =========================================================
+# 입력 배당과 완전 동일한 경기 찾기
+#
+# 단일 회사용 편의 함수
+# =========================================================
+
+def find_exact_match(
+    df,
+    company_name,
+    initial_home,
+    initial_draw,
+    initial_away,
+    final_home,
+    final_draw,
+    final_away
+):
+
+    return find_exact_odds(
+
+        df=df,
+
+        company_name=company_name,
+
+        initial_home=initial_home,
+        initial_draw=initial_draw,
+        initial_away=initial_away,
+
+        final_home=final_home,
+        final_draw=final_draw,
+        final_away=final_away
+
+    )
+
+
+# =========================================================
+# 완전 동일배당 결과 통계
+# =========================================================
+
+def calculate_exact_result_stats(
+    exact_df
+):
+
+    if exact_df is None or exact_df.empty:
 
         return {
+
             "전체": 0,
 
             "승": {
@@ -788,10 +559,15 @@ def calculate_similar_result_stats(similar_df):
                 "count": 0,
                 "percent": 0
             }
+
         }
 
-    temp = get_unique_match_data(
-        similar_df
+    temp = (
+        exact_df
+        .drop_duplicates(
+            subset=["schedule_id"]
+        )
+        .copy()
     )
 
     total = len(temp)
@@ -800,111 +576,70 @@ def calculate_similar_result_stats(similar_df):
         "전체": total
     }
 
-    for result in ["승", "무", "패"]:
+    for result in [
+        "승",
+        "무",
+        "패"
+    ]:
 
         count = int(
-            (temp["result"] == result).sum()
+            (
+                temp["result"]
+                ==
+                result
+            ).sum()
         )
 
-        percent = round(
-            count / total * 100,
-            2
-        ) if total else 0
+        percent = (
+
+            round(
+                count /
+                total *
+                100,
+                2
+            )
+
+            if total
+
+            else 0
+
+        )
 
         stats[result] = {
-            "count": count,
-            "percent": percent
+
+            "count":
+                count,
+
+            "percent":
+                percent
         }
 
     return stats
 
 
 # =========================================================
-# 입력 배당 이론확률
+# 추천
 # =========================================================
 
-def calculate_market_probability(
-    home_odds,
-    draw_odds,
-    away_odds
+def get_recommendation(
+    stats
 ):
 
-    try:
-
-        values = [
-            float(home_odds),
-            float(draw_odds),
-            float(away_odds)
-        ]
-
-    except (TypeError, ValueError):
-
-        return None
-
-    if any(
-        value <= 0
-        for value in values
-    ):
-        return None
-
-    inverse = [
-        1 / value
-        for value in values
-    ]
-
-    total = sum(inverse)
-
-    if total <= 0:
-        return None
-
-    return {
-        "승":
-            round(
-                inverse[0] / total * 100,
-                2
-            ),
-
-        "무":
-            round(
-                inverse[1] / total * 100,
-                2
-            ),
-
-        "패":
-            round(
-                inverse[2] / total * 100,
-                2
-            )
-    }
-
-
-# =========================================================
-# 추천 결과
-# =========================================================
-
-def get_recommendation(stats):
-
     if not stats:
+
         return None
 
     values = {
+
         "승":
-            stats.get("승", {}).get(
-                "percent",
-                0
-            ),
+            stats["승"]["percent"],
 
         "무":
-            stats.get("무", {}).get(
-                "percent",
-                0
-            ),
+            stats["무"]["percent"],
 
         "패":
-            stats.get("패", {}).get(
-                "percent",
-                0
-            )
+            stats["패"]["percent"]
+
     }
 
     return max(
@@ -914,248 +649,86 @@ def get_recommendation(stats):
 
 
 # =========================================================
-# 신뢰도
+# 완전 동일 여부 확인
 # =========================================================
 
-def get_confidence(total):
-
-    total = int(total or 0)
-
-    if total >= 100:
-        return "높음"
-
-    if total >= 50:
-        return "보통"
-
-    if total >= 20:
-        return "낮음"
-
-    return "매우 낮음"
-
-
-# =========================================================
-# 배당 변동 분석
-# =========================================================
-
-def calculate_odds_movement(df):
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    temp = get_unique_match_data(
-        df
-    ).copy()
-
-    required = [
-        "initial_home",
-        "initial_draw",
-        "initial_away",
-        "final_home",
-        "final_draw",
-        "final_away"
-    ]
-
-    for column in required:
-
-        if column not in temp.columns:
-            return pd.DataFrame()
-
-    temp["승변동"] = (
-        temp["final_home"] -
-        temp["initial_home"]
-    ).round(2)
-
-    temp["무변동"] = (
-        temp["final_draw"] -
-        temp["initial_draw"]
-    ).round(2)
-
-    temp["패변동"] = (
-        temp["final_away"] -
-        temp["initial_away"]
-    ).round(2)
-
-    temp["승변동방향"] = np.select(
-        [
-            temp["승변동"] < -0.03,
-            temp["승변동"] > 0.03
-        ],
-        [
-            "하락",
-            "상승"
-        ],
-        default="유지"
-    )
-
-    temp["무변동방향"] = np.select(
-        [
-            temp["무변동"] < -0.03,
-            temp["무변동"] > 0.03
-        ],
-        [
-            "하락",
-            "상승"
-        ],
-        default="유지"
-    )
-
-    temp["패변동방향"] = np.select(
-        [
-            temp["패변동"] < -0.03,
-            temp["패변동"] > 0.03
-        ],
-        [
-            "하락",
-            "상승"
-        ],
-        default="유지"
-    )
-
-    return temp
-
-
-# =========================================================
-# 배당 하락 적중률
-# =========================================================
-
-def get_movement_result_stats(
-    df,
-    movement_column,
-    target_result
+def is_exact_odds_match(
+    row,
+    initial_home,
+    initial_draw,
+    initial_away,
+    final_home,
+    final_draw,
+    final_away
 ):
 
-    if df is None or df.empty:
+    try:
 
-        return {
-            "경기수": 0,
-            "적중": 0,
-            "적중률": 0
-        }
+        return (
 
-    group = df[
-        df[movement_column] == "하락"
-    ].copy()
-
-    total = len(group)
-
-    if total == 0:
-
-        return {
-            "경기수": 0,
-            "적중": 0,
-            "적중률": 0
-        }
-
-    hit = int(
-        (group["result"] == target_result).sum()
-    )
-
-    percent = round(
-        hit / total * 100,
-        2
-    )
-
-    return {
-        "경기수": total,
-        "적중": hit,
-        "적중률": percent
-    }
-
-
-# =========================================================
-# 역배 분석
-# =========================================================
-
-def get_upset_analysis(df):
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    temp = get_unique_match_data(
-        df
-    ).copy()
-
-    required = [
-        "initial_home",
-        "initial_draw",
-        "initial_away",
-        "result"
-    ]
-
-    for column in required:
-
-        if column not in temp.columns:
-            return pd.DataFrame()
-
-    temp["예상"] = temp.apply(
-        lambda row:
-
-            "승"
-            if row["initial_home"] ==
-            min(
-                row["initial_home"],
-                row["initial_draw"],
-                row["initial_away"]
+            normalize_odds(
+                row["initial_home"]
+            )
+            ==
+            normalize_odds(
+                initial_home
             )
 
-            else (
+            and
 
-                "무"
-                if row["initial_draw"] ==
-                min(
-                    row["initial_home"],
-                    row["initial_draw"],
-                    row["initial_away"]
-                )
+            normalize_odds(
+                row["initial_draw"]
+            )
+            ==
+            normalize_odds(
+                initial_draw
+            )
 
-                else "패"
-            ),
+            and
 
-        axis=1
-    )
+            normalize_odds(
+                row["initial_away"]
+            )
+            ==
+            normalize_odds(
+                initial_away
+            )
 
-    temp["역배"] = (
-        temp["예상"] !=
-        temp["result"]
-    )
+            and
 
-    return temp
+            normalize_odds(
+                row["final_home"]
+            )
+            ==
+            normalize_odds(
+                final_home
+            )
 
+            and
 
-# =========================================================
-# 역배 통계
-# =========================================================
+            normalize_odds(
+                row["final_draw"]
+            )
+            ==
+            normalize_odds(
+                final_draw
+            )
 
-def get_upset_stats(df):
+            and
 
-    upset_df = get_upset_analysis(df)
+            normalize_odds(
+                row["final_away"]
+            )
+            ==
+            normalize_odds(
+                final_away
+            )
 
-    if upset_df.empty:
+        )
 
-        return {
-            "전체경기": 0,
-            "역배경기": 0,
-            "역배율": 0
-        }
+    except Exception:
 
-    total = len(upset_df)
-
-    upset_count = int(
-        upset_df["역배"].sum()
-    )
-
-    upset_percent = round(
-        upset_count /
-        total *
-        100,
-        2
-    ) if total else 0
-
-    return {
-        "전체경기": total,
-        "역배경기": upset_count,
-        "역배율": upset_percent
-    }
+        return False
 
 
 # =========================================================
@@ -1164,6 +737,18 @@ def get_upset_stats(df):
 
 if __name__ == "__main__":
 
+    print(
+        "================================"
+    )
+
+    print(
+        "완전 동일배당 분석"
+    )
+
+    print(
+        "================================"
+    )
+
     df = get_all_analysis_data()
 
     print(
@@ -1171,35 +756,20 @@ if __name__ == "__main__":
         len(df)
     )
 
-    unique_df = get_unique_match_data(df)
+    companies = get_company_names()
 
     print(
-        "실제 경기 수:",
-        len(unique_df)
+        "배당 업체:",
+        len(companies)
     )
 
-    print(
-        "승무패:",
-        calculate_result_stats(df)
-    )
+    for company in companies:
 
-    print("\n승 배당구간:")
-
-    print(
-        make_odds_range_table(
-            df,
-            side="home"
+        print(
+            "-",
+            company
         )
-    )
-
-    print("\n업체별:")
 
     print(
-        get_company_stats(df)
-    )
-
-    print("\n역배:")
-
-    print(
-        get_upset_stats(df)
+        "================================"
     )
