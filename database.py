@@ -3,6 +3,10 @@ from pathlib import Path
 from datetime import datetime
 
 
+# =========================================================
+# DB 기본 설정
+# =========================================================
+
 DB_FILE = Path(__file__).parent / "historical_odds.db"
 
 
@@ -11,45 +15,67 @@ DB_FILE = Path(__file__).parent / "historical_odds.db"
 # =========================================================
 
 def get_connection():
-    conn = sqlite3.connect(DB_FILE)
+
+    conn = sqlite3.connect(
+        DB_FILE
+    )
+
     conn.row_factory = sqlite3.Row
+
     return conn
 
 
 # =========================================================
-# DB 초기화
+# 데이터베이스 생성
 # =========================================================
 
-def init_database():
+def create_database():
 
     conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS games (
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS matches (
+
             id INTEGER PRIMARY KEY AUTOINCREMENT,
 
             source TEXT,
+
             sport TEXT,
+
             league TEXT,
 
-            game_date TEXT,
-            game_time TEXT,
+            match_date TEXT,
+
+            match_time TEXT,
 
             home_team TEXT,
+
             away_team TEXT,
 
             home_odds REAL,
+
             draw_odds REAL,
+
             away_odds REAL,
 
             result TEXT,
 
-            created_at TEXT
+            created_at TEXT,
+
+            UNIQUE(
+                source,
+                match_date,
+                match_time,
+                home_team,
+                away_team
+            )
         )
     """)
 
     conn.commit()
+
     conn.close()
 
 
@@ -57,81 +83,36 @@ def init_database():
 # 경기 저장
 # =========================================================
 
-def save_game(
-    source,
-    sport,
-    league,
-    game_date,
-    game_time,
-    home_team,
-    away_team,
-    home_odds,
-    draw_odds,
-    away_odds,
+def save_match(
+    source="Scoreman",
+    sport="축구",
+    league="",
+    match_date="",
+    match_time="",
+    home_team="",
+    away_team="",
+    home_odds=0,
+    draw_odds=0,
+    away_odds=0,
     result=""
 ):
 
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO games (
-            source,
-            sport,
-            league,
-            game_date,
-            game_time,
-            home_team,
-            away_team,
-            home_odds,
-            draw_odds,
-            away_odds,
-            result,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        source,
-        sport,
-        league,
-        game_date,
-        game_time,
-        home_team,
-        away_team,
-        home_odds,
-        draw_odds,
-        away_odds,
-        result,
-        datetime.now().isoformat()
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-# =========================================================
-# 경기 여러 개 저장
-# =========================================================
-
-def save_games(games):
-
-    if not games:
-        return 0
+    create_database()
 
     conn = get_connection()
-    cur = conn.cursor()
 
-    count = 0
+    cursor = conn.cursor()
 
-    for game in games:
+    try:
 
-        cur.execute("""
-            INSERT INTO games (
+        cursor.execute("""
+            INSERT OR IGNORE INTO matches (
+
                 source,
                 sport,
                 league,
-                game_date,
-                game_time,
+                match_date,
+                match_time,
                 home_team,
                 away_team,
                 home_odds,
@@ -139,138 +120,205 @@ def save_games(games):
                 away_odds,
                 result,
                 created_at
+
             )
+
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            game.get("source", "Scoreman"),
-            game.get("sport", ""),
-            game.get("league", ""),
-            game.get("game_date", ""),
-            game.get("game_time", ""),
-            game.get("home_team", ""),
-            game.get("away_team", ""),
-            game.get("home_odds", 0),
-            game.get("draw_odds", 0),
-            game.get("away_odds", 0),
-            game.get("result", ""),
+
+            source,
+            sport,
+            league,
+            match_date,
+            match_time,
+            home_team,
+            away_team,
+            home_odds,
+            draw_odds,
+            away_odds,
+            result,
             datetime.now().isoformat()
+
         ))
 
-        count += 1
+        conn.commit()
 
-    conn.commit()
-    conn.close()
+        inserted = cursor.rowcount
+
+    finally:
+
+        conn.close()
+
+    return inserted
+
+
+# =========================================================
+# 경기 여러 개 저장
+# =========================================================
+
+def save_matches(matches):
+
+    create_database()
+
+    count = 0
+
+    for match in matches:
+
+        result = save_match(
+
+            source=match.get(
+                "source",
+                "Scoreman"
+            ),
+
+            sport=match.get(
+                "sport",
+                "축구"
+            ),
+
+            league=match.get(
+                "league",
+                ""
+            ),
+
+            match_date=match.get(
+                "match_date",
+                ""
+            ),
+
+            match_time=match.get(
+                "match_time",
+                ""
+            ),
+
+            home_team=match.get(
+                "home_team",
+                ""
+            ),
+
+            away_team=match.get(
+                "away_team",
+                ""
+            ),
+
+            home_odds=match.get(
+                "home_odds",
+                0
+            ),
+
+            draw_odds=match.get(
+                "draw_odds",
+                0
+            ),
+
+            away_odds=match.get(
+                "away_odds",
+                0
+            ),
+
+            result=match.get(
+                "result",
+                ""
+            )
+        )
+
+        count += result
 
     return count
+
+
+# =========================================================
+# DB 상태
+# =========================================================
+
+def get_database_status():
+
+    create_database()
+
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT COUNT(*) AS count
+        FROM matches
+    """)
+
+    total = cursor.fetchone()["count"]
+
+    conn.close()
+
+    return {
+        "database": str(DB_FILE),
+        "matches": total
+    }
 
 
 # =========================================================
 # 경기 조회
 # =========================================================
 
-def get_games(
-    sport="",
-    league="",
-    source="",
-    limit=5000
+def get_matches(
+    limit=10000
 ):
 
-    conn = get_connection()
-    cur = conn.cursor()
+    create_database()
 
-    query = """
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
         SELECT *
-        FROM games
-        WHERE 1=1
-    """
 
-    params = []
+        FROM matches
 
-    if sport:
+        ORDER BY
+            match_date DESC,
+            match_time DESC
 
-        query += " AND sport = ?"
-        params.append(sport)
-
-    if league:
-
-        query += " AND league = ?"
-        params.append(league)
-
-    if source:
-
-        query += " AND source = ?"
-        params.append(source)
-
-    query += """
-        ORDER BY game_date DESC, game_time DESC
         LIMIT ?
-    """
+    """, (
+        limit,
+    ))
 
-    params.append(limit)
-
-    cur.execute(query, params)
-
-    rows = cur.fetchall()
+    rows = cursor.fetchall()
 
     conn.close()
 
-    return [dict(row) for row in rows]
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 # =========================================================
-# 전체 경기
-# =========================================================
-
-def get_all_games(limit=10000):
-
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM games
-        ORDER BY game_date DESC, game_time DESC
-        LIMIT ?
-    """, (limit,))
-
-    rows = cur.fetchall()
-
-    conn.close()
-
-    return [dict(row) for row in rows]
-
-
-# =========================================================
-# DB 경기수
-# =========================================================
-
-def count_games():
-
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT COUNT(*) AS cnt
-        FROM games
-    """)
-
-    result = cur.fetchone()["cnt"]
-
-    conn.close()
-
-    return result
-
-
-# =========================================================
-# DB 삭제
+# 전체 경기 삭제
 # =========================================================
 
 def clear_database():
 
     conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute("DELETE FROM games")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM matches"
+    )
 
     conn.commit()
+
     conn.close()
+
+
+# =========================================================
+# 실행 테스트
+# =========================================================
+
+if __name__ == "__main__":
+
+    create_database()
+
+    print(
+        get_database_status()
+    )
