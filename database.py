@@ -246,9 +246,6 @@ def save_match(
 
 # =========================================================
 # 최종배당 저장
-#
-# 초기배당은 저장하지 않음
-# 최종배당만 저장
 # =========================================================
 
 def save_odds(
@@ -263,7 +260,6 @@ def save_odds(
     init_database()
 
     if not company_name:
-
         return False
 
     conn = get_connection()
@@ -333,6 +329,34 @@ def save_odds(
 
 
 # =========================================================
+# 경기 존재 여부
+# =========================================================
+
+def match_exists(schedule_id):
+
+    init_database()
+
+    conn = get_connection()
+
+    try:
+
+        row = conn.execute("""
+            SELECT 1
+            FROM matches
+            WHERE schedule_id = ?
+            LIMIT 1
+        """, (
+            str(schedule_id),
+        )).fetchone()
+
+        return row is not None
+
+    finally:
+
+        conn.close()
+
+
+# =========================================================
 # 경기 1건 조회
 # =========================================================
 
@@ -352,6 +376,76 @@ def get_match(schedule_id):
         """, (
             str(schedule_id),
         )).fetchone()
+
+    finally:
+
+        conn.close()
+
+
+# =========================================================
+# 마지막 저장 경기 ID
+# =========================================================
+
+def get_last_saved_schedule_id():
+
+    init_database()
+
+    conn = get_connection()
+
+    try:
+
+        row = conn.execute("""
+            SELECT schedule_id
+            FROM matches
+            ORDER BY id DESC
+            LIMIT 1
+        """).fetchone()
+
+        if row is None:
+            return None
+
+        return row["schedule_id"]
+
+    finally:
+
+        conn.close()
+
+
+# =========================================================
+# 숫자가 가장 큰 마지막 경기 ID
+# =========================================================
+
+def get_max_schedule_id():
+
+    init_database()
+
+    conn = get_connection()
+
+    try:
+
+        rows = conn.execute("""
+            SELECT schedule_id
+            FROM matches
+        """).fetchall()
+
+        values = []
+
+        for row in rows:
+
+            try:
+
+                values.append(
+                    int(row["schedule_id"])
+                )
+
+            except Exception:
+
+                continue
+
+        if not values:
+            return None
+
+        return max(values)
 
     finally:
 
@@ -451,15 +545,10 @@ def get_all_odds():
             SELECT
 
                 schedule_id,
-
                 company_id,
-
                 company_name,
-
                 final_home,
-
                 final_draw,
-
                 final_away
 
             FROM odds
@@ -488,7 +577,6 @@ def get_company_names():
 
         rows = conn.execute("""
             SELECT DISTINCT
-
                 company_name
 
             FROM odds
@@ -529,7 +617,6 @@ def get_company_counts():
             SELECT
 
                 company_name,
-
                 COUNT(*) AS count
 
             FROM odds
@@ -565,9 +652,7 @@ def get_company_counts():
 # 특정 업체 저장 개수
 # =========================================================
 
-def get_company_count(
-    company_name
-):
+def get_company_count(company_name):
 
     init_database()
 
@@ -605,9 +690,7 @@ def get_company_count(
 # 특정 경기 최종배당
 # =========================================================
 
-def get_match_final_odds(
-    schedule_id
-):
+def get_match_final_odds(schedule_id):
 
     init_database()
 
@@ -619,15 +702,10 @@ def get_match_final_odds(
             SELECT
 
                 schedule_id,
-
                 company_id,
-
                 company_name,
-
                 final_home,
-
                 final_draw,
-
                 final_away
 
             FROM odds
@@ -669,20 +747,14 @@ def search_final_odds(
                 m.*,
 
                 o.company_name,
-
                 o.final_home,
-
                 o.final_draw,
-
                 o.final_away
 
             FROM matches m
 
             INNER JOIN odds o
-
-                ON
-                    m.schedule_id =
-                    o.schedule_id
+                ON m.schedule_id = o.schedule_id
 
             WHERE
 
@@ -707,9 +779,7 @@ def search_final_odds(
                 ) < 0.000001
 
             ORDER BY
-
                 m.match_date DESC,
-
                 m.id DESC
         """, (
             company_name,
@@ -727,14 +797,11 @@ def search_final_odds(
 # 여러 업체 최종배당 완전일치 검색
 # =========================================================
 
-def search_multiple_final_odds(
-    company_odds
-):
+def search_multiple_final_odds(company_odds):
 
     init_database()
 
     if not company_odds:
-
         return []
 
     conn = get_connection()
@@ -742,12 +809,9 @@ def search_multiple_final_odds(
     try:
 
         conditions = []
-
         params = []
 
-        for company_name, odds in (
-            company_odds.items()
-        ):
+        for company_name, odds in company_odds.items():
 
             conditions.append("""
 
@@ -825,7 +889,6 @@ def search_multiple_final_odds(
             ORDER BY
 
                 m.match_date DESC,
-
                 m.id DESC
 
         """
@@ -844,30 +907,22 @@ def search_multiple_final_odds(
 # 검색 + 업체별 배당
 # =========================================================
 
-def search_final_odds_with_companies(
-    company_odds
-):
+def search_final_odds_with_companies(company_odds):
 
-    matches = (
-        search_multiple_final_odds(
-            company_odds
-        )
+    matches = search_multiple_final_odds(
+        company_odds
     )
 
     result = []
 
     for match in matches:
 
-        item = dict(
-            match
-        )
+        item = dict(match)
 
         item["odds"] = {}
 
-        rows = (
-            get_match_final_odds(
-                match["schedule_id"]
-            )
+        rows = get_match_final_odds(
+            match["schedule_id"]
         )
 
         for row in rows:
@@ -887,27 +942,9 @@ def search_final_odds_with_companies(
 
             }
 
-        result.append(
-            item
-        )
+        result.append(item)
 
     return result
-
-
-# =========================================================
-# 경기 존재 여부
-# =========================================================
-
-def match_exists(
-    schedule_id
-):
-
-    return (
-        get_match(
-            schedule_id
-        )
-        is not None
-    )
 
 
 # =========================================================
@@ -975,9 +1012,7 @@ def get_database_status():
 
         result_rows = conn.execute("""
             SELECT
-
                 result,
-
                 COUNT(*) AS count
 
             FROM matches
@@ -994,11 +1029,9 @@ def get_database_status():
         """).fetchall()
 
         result_counts = {
-
             "승": 0,
             "무": 0,
             "패": 0
-
         }
 
         for row in result_rows:
@@ -1058,7 +1091,6 @@ def get_result_counts():
             SELECT
 
                 result,
-
                 COUNT(*) AS count
 
             FROM matches
@@ -1132,19 +1164,25 @@ if __name__ == "__main__":
         get_odds_count()
     )
 
+    print(
+        "마지막 저장 ID:",
+        get_last_saved_schedule_id()
+    )
+
+    print(
+        "가장 큰 경기 ID:",
+        get_max_schedule_id()
+    )
+
     print()
 
     print(
         "업체별 저장 개수:"
     )
 
-    counts = (
-        get_company_counts()
-    )
+    counts = get_company_counts()
 
-    for company, count in (
-        counts.items()
-    ):
+    for company, count in counts.items():
 
         print(
             f" - {company}: {count:,}"
@@ -1156,9 +1194,7 @@ if __name__ == "__main__":
         "실제 결과:"
     )
 
-    result_counts = (
-        get_result_counts()
-    )
+    result_counts = get_result_counts()
 
     print(
         "승:",
@@ -1173,4 +1209,4 @@ if __name__ == "__main__":
     print(
         "패:",
         result_counts["패"]
-                    )
+    )
