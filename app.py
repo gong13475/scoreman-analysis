@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import database
 import scoreman_crawler
