@@ -136,10 +136,34 @@ def calculate_result(
 
 
 # =========================================================
+# 이미 저장된 경기인지 먼저 확인
+#
+# 중요:
+# 여기서 존재하면 경기 페이지 자체를 요청하지 않음
+# =========================================================
+
+def match_exists(
+    schedule_id
+):
+
+    try:
+
+        return database.match_exists(
+            schedule_id
+        )
+
+    except Exception:
+
+        return False
+
+
+# =========================================================
 # 경기 페이지 가져오기
 # =========================================================
 
-def get_match_page(schedule_id):
+def get_match_page(
+    schedule_id
+):
 
     url = (
         f"{BASE_URL}/match/data-{schedule_id}"
@@ -192,8 +216,11 @@ def find_value(
         patterns = [
 
             rf'"{re.escape(key)}"\s*:\s*"([^"]*)"',
+
             rf'"{re.escape(key)}"\s*:\s*([^,}}\s]+)',
+
             rf"'{re.escape(key)}'\s*:\s*'([^']*)'",
+
             rf"{re.escape(key)}\s*=\s*[\"']([^\"']+)[\"']"
 
         ]
@@ -222,7 +249,9 @@ def find_value(
 # JSON 객체 탐색
 # =========================================================
 
-def search_json_objects(html):
+def search_json_objects(
+    html
+):
 
     objects = []
 
@@ -342,7 +371,9 @@ def recursive_find(
 # 팀명 찾기
 # =========================================================
 
-def find_team_names(html):
+def find_team_names(
+    html
+):
 
     home_keys = {
 
@@ -469,7 +500,9 @@ def find_team_names(html):
 # 스코어 찾기
 # =========================================================
 
-def find_scores(html):
+def find_scores(
+    html
+):
 
     patterns = [
 
@@ -557,7 +590,9 @@ def find_scores(html):
 # 경기 날짜
 # =========================================================
 
-def find_match_date(html):
+def find_match_date(
+    html
+):
 
     keys = [
 
@@ -670,15 +705,73 @@ def parse_match_info(
 
 
 # =========================================================
+# 업체명 비교용
+# =========================================================
+
+def normalize_company_name(
+    name
+):
+
+    return str(
+        name or ""
+    ).strip().lower()
+
+
+# =========================================================
+# 선택 업체 필터
+# =========================================================
+
+def filter_selected_companies(
+    odds_list,
+    selected_companies=None
+):
+
+    # 아무 업체도 선택하지 않으면 전체 저장
+    if not selected_companies:
+
+        return odds_list
+
+    selected = {
+
+        normalize_company_name(
+            company
+        )
+
+        for company in selected_companies
+
+        if str(company).strip()
+
+    }
+
+    result = []
+
+    for odds in odds_list:
+
+        company_name = normalize_company_name(
+
+            odds.get(
+                "company_name",
+                ""
+            )
+
+        )
+
+        if company_name in selected:
+
+            result.append(
+                odds
+            )
+
+    return result
+
+
+# =========================================================
 # 최종배당 수집
 #
-# selected_companies:
-#   None 또는 [] = 전체 업체
-#   ["Bet365"] = Bet365만
-#   ["Bet365", "William Hill"] = 2개 업체
+# f = 초기배당
+# l = 최종배당
 #
-# 초기배당 f는 사용하지 않음
-# 최종배당 l만 사용
+# 반드시 l만 사용
 # =========================================================
 
 def get_odds(
@@ -762,27 +855,6 @@ def get_odds(
     ):
         return []
 
-    # -----------------------------------------------------
-    # 업체 선택 정리
-    # -----------------------------------------------------
-
-    selected_set = None
-
-    if selected_companies:
-
-        selected_set = {
-
-            str(company)
-            .strip()
-            .lower()
-
-            for company
-            in selected_companies
-
-            if str(company).strip()
-
-        }
-
     result = []
 
     for item in mixodds:
@@ -807,21 +879,6 @@ def get_odds(
         if not company_name:
             continue
 
-        # -------------------------------------------------
-        # 선택 업체만 통과
-        # -------------------------------------------------
-
-        if selected_set is not None:
-
-            if (
-                company_name
-                .strip()
-                .lower()
-                not in selected_set
-            ):
-
-                continue
-
         euro = item.get(
             "euro",
             {}
@@ -834,8 +891,8 @@ def get_odds(
             continue
 
         # -------------------------------------------------
-        # 초기배당 f 사용 안 함
-        # 최종배당 l만 사용
+        # 초기배당 f는 사용하지 않음
+        # 최종배당 l만 저장
         # -------------------------------------------------
 
         final = euro.get(
@@ -889,12 +946,36 @@ def get_odds(
 
         })
 
+    # =====================================================
+    # 선택 업체만 필터
+    # =====================================================
+
+    before_count = len(
+        result
+    )
+
+    result = filter_selected_companies(
+        result,
+        selected_companies
+    )
+
+    after_count = len(
+        result
+    )
+
+    if selected_companies:
+
+        print(
+            f"[업체 선택] "
+            f"전체={before_count} "
+            f"선택={after_count}",
+            flush=True
+        )
+
     print(
         f"[최종배당 완료] "
         f"ID={schedule_id} "
-        f"선택업체="
-        f"{len(selected_companies) if selected_companies else '전체'} "
-        f"수집업체={len(result)}",
+        f"업체={len(result)}",
         flush=True
     )
 
@@ -910,7 +991,30 @@ def save_match_data(
     odds_list
 ):
 
-    database.save_match(
+    # -----------------------------------------------------
+    # 신규 경기인지 다시 한 번 확인
+    #
+    # 중복 실행 방지용 이중 안전장치
+    # -----------------------------------------------------
+
+    if database.match_exists(
+        match["schedule_id"]
+    ):
+
+        print(
+            f"[저장 차단] "
+            f"이미 저장된 경기 "
+            f"ID={match['schedule_id']}",
+            flush=True
+        )
+
+        return 0
+
+    # -----------------------------------------------------
+    # 경기 저장
+    # -----------------------------------------------------
+
+    saved_match = database.save_match_if_new(
 
         schedule_id=
             match["schedule_id"],
@@ -937,11 +1041,26 @@ def save_match_data(
 
     )
 
+    if not saved_match:
+
+        print(
+            f"[저장 차단] "
+            f"이미 존재하는 경기 "
+            f"ID={match['schedule_id']}",
+            flush=True
+        )
+
+        return 0
+
+    # -----------------------------------------------------
+    # 최종배당 저장
+    # -----------------------------------------------------
+
     count = 0
 
     for odds in odds_list:
 
-        saved = database.save_odds(
+        saved = database.save_odds_if_new_match(
 
             schedule_id=
                 match["schedule_id"],
@@ -976,33 +1095,52 @@ def save_match_data(
         )
 
         if saved:
+
             count += 1
+
+    # -----------------------------------------------------
+    # 마지막 저장 경기 기록
+    # -----------------------------------------------------
+
+    database.save_last_crawler_state(
+
+        schedule_id=
+            match["schedule_id"],
+
+        match_date=
+            match.get(
+                "match_date",
+                ""
+            ),
+
+        home_team=
+            match.get(
+                "home_team",
+                ""
+            ),
+
+        away_team=
+            match.get(
+                "away_team",
+                ""
+            ),
+
+        result=
+            match.get(
+                "result",
+                ""
+            ),
+
+        odds_count=
+            count
+
+    )
 
     return count
 
 
 # =========================================================
-# 경기 존재 여부
-# =========================================================
-
-def match_exists(schedule_id):
-
-    try:
-
-        return database.match_exists(
-            schedule_id
-        )
-
-    except Exception:
-
-        return False
-
-
-# =========================================================
 # 경기 하나 수집
-#
-# 중요:
-# 기존 경기라면 웹사이트에 접속하지 않음
 # =========================================================
 
 def collect_one(
@@ -1021,10 +1159,10 @@ def collect_one(
     )
 
     # =====================================================
-    # 1. DB 먼저 확인
+    # 가장 먼저 DB 존재 여부 확인
     #
-    # 이미 저장된 경기라면
-    # 절대로 웹페이지/배당을 다시 수집하지 않음
+    # 중요:
+    # 기존 경기면 페이지 자체를 요청하지 않음
     # =====================================================
 
     if match_exists(
@@ -1033,7 +1171,7 @@ def collect_one(
 
         print(
             f"[이미 저장됨] ID={schedule_id} "
-            f"→ 재수집하지 않고 건너뜀",
+            f"→ 경기/배당 재수집 안 함",
             flush=True
         )
 
@@ -1051,7 +1189,7 @@ def collect_one(
         }
 
     # =====================================================
-    # 2. 신규 경기만 페이지 접속
+    # 신규 경기만 페이지 요청
     # =====================================================
 
     html = get_match_page(
@@ -1074,7 +1212,7 @@ def collect_one(
         }
 
     # =====================================================
-    # 3. 경기 정보 파싱
+    # 경기 정보 파싱
     # =====================================================
 
     match = parse_match_info(
@@ -1098,7 +1236,7 @@ def collect_one(
         }
 
     # =====================================================
-    # 4. 완료된 경기만 저장
+    # 완료된 경기만 저장
     # =====================================================
 
     if match["result"] not in [
@@ -1126,7 +1264,7 @@ def collect_one(
         }
 
     # =====================================================
-    # 5. 선택 업체 최종배당 수집
+    # 신규 경기의 최종배당 수집
     # =====================================================
 
     odds_list = get_odds(
@@ -1141,8 +1279,7 @@ def collect_one(
     if not odds_list:
 
         print(
-            f"[최종배당 없음] "
-            f"ID={schedule_id}",
+            f"[최종배당 없음] ID={schedule_id}",
             flush=True
         )
 
@@ -1160,7 +1297,7 @@ def collect_one(
         }
 
     # =====================================================
-    # 6. 신규 경기 + 배당 저장
+    # 신규 경기 + 최종배당 저장
     # =====================================================
 
     saved = save_match_data(
@@ -1168,8 +1305,23 @@ def collect_one(
         odds_list
     )
 
+    if saved <= 0:
+
+        return {
+
+            "status":
+                "exists",
+
+            "odds":
+                0,
+
+            "schedule_id":
+                str(schedule_id)
+
+        }
+
     print(
-        f"[신규 저장 완료] "
+        f"[저장 완료] "
         f"{schedule_id} "
         f"{match.get('home_team', '')} "
         f"vs "
@@ -1186,6 +1338,9 @@ def collect_one(
 
         "odds":
             saved,
+
+        "schedule_id":
+            str(schedule_id),
 
         "home":
             match.get(
@@ -1205,8 +1360,11 @@ def collect_one(
                 ""
             ),
 
-        "schedule_id":
-            str(schedule_id)
+        "match_date":
+            match.get(
+                "match_date",
+                ""
+            )
 
     }
 
@@ -1218,10 +1376,10 @@ def collect_one(
 def build_database_progress(
     start_id,
     end_id,
-    selected_companies=None,
     progress_callback=None,
     log_callback=None,
-    delay=0.5
+    delay=0.5,
+    selected_companies=None
 ):
 
     database.init_database()
@@ -1252,7 +1410,10 @@ def build_database_progress(
     failed = 0
     exists = 0
     odds_total = 0
-    last_saved_id = None
+
+    last_saved_id = (
+        database.get_last_saved_schedule_id()
+    )
 
     def log(message):
 
@@ -1271,27 +1432,12 @@ def build_database_progress(
                 message
             )
 
-    # =====================================================
-    # 선택 업체 표시
-    # =====================================================
-
-    if selected_companies:
-
-        company_text = ", ".join(
-            str(x)
-            for x in selected_companies
-        )
-
-    else:
-
-        company_text = "전체 업체"
-
     log(
         "========================================"
     )
 
     log(
-        "Scoreman DB 신규 경기 수집 시작"
+        "Scoreman DB 수집 시작"
     )
 
     log(
@@ -1303,14 +1449,6 @@ def build_database_progress(
     )
 
     log(
-        f"수집 업체: {company_text}"
-    )
-
-    log(
-        "이미 저장된 경기: 재수집하지 않음"
-    )
-
-    log(
         "초기배당: 저장하지 않음"
     )
 
@@ -1318,9 +1456,41 @@ def build_database_progress(
         "최종배당: 저장"
     )
 
+    if selected_companies:
+
+        log(
+            "선택 업체: "
+            +
+            ", ".join(
+                str(x)
+                for x in selected_companies
+            )
+        )
+
+    else:
+
+        log(
+            "선택 업체: 전체 업체"
+        )
+
+    if last_saved_id:
+
+        log(
+            f"현재 DB 마지막 저장 ID: "
+            f"{last_saved_id}"
+        )
+
+    log(
+        "기존 경기: 재수집하지 않음"
+    )
+
     log(
         "========================================"
     )
+
+    # =====================================================
+    # ID 순서대로 수집
+    # =====================================================
 
     for index, schedule_id in enumerate(
 
@@ -1359,9 +1529,12 @@ def build_database_progress(
             if status == "success":
 
                 success += 1
-                odds_total += odds_count
 
-                last_saved_id = (
+                odds_total += (
+                    odds_count
+                )
+
+                last_saved_id = str(
                     schedule_id
                 )
 
@@ -1393,7 +1566,7 @@ def build_database_progress(
             f"{index}/{total} "
             f"({percent * 100:.1f}%) "
             f"신규={success} "
-            f"기존건너뜀={exists} "
+            f"기존={exists} "
             f"실패={failed} "
             f"최종배당={odds_total}"
         )
@@ -1411,16 +1584,20 @@ def build_database_progress(
             )
 
     # =====================================================
-    # 수집 종료 후 실제 DB 마지막 ID 확인
+    # 실제 DB 마지막 저장 경기
     # =====================================================
 
-    db_last_id = (
-        database.get_last_saved_schedule_id()
+    last_match = (
+        database.get_last_saved_match()
     )
 
-    max_id = (
-        database.get_max_schedule_id()
-    )
+    if last_match:
+
+        last_saved_id = (
+            last_match.get(
+                "schedule_id"
+            )
+        )
 
     log(
         "========================================"
@@ -1439,7 +1616,7 @@ def build_database_progress(
     )
 
     log(
-        f"이미 저장되어 건너뜀: {exists}"
+        f"기존 경기: {exists}"
     )
 
     log(
@@ -1450,20 +1627,37 @@ def build_database_progress(
         f"저장 최종배당: {odds_total}"
     )
 
-    log(
-        f"이번 수집 마지막 신규 ID: "
-        f"{last_saved_id if last_saved_id is not None else '-'}"
-    )
+    if last_match:
 
-    log(
-        f"DB 마지막 저장 ID: "
-        f"{db_last_id if db_last_id is not None else '-'}"
-    )
+        log(
+            "----------------------------------------"
+        )
 
-    log(
-        f"DB 가장 큰 경기 ID: "
-        f"{max_id if max_id is not None else '-'}"
-    )
+        log(
+            "마지막 저장 경기"
+        )
+
+        log(
+            f"경기 ID: "
+            f"{last_match.get('schedule_id', '-')}"
+        )
+
+        log(
+            f"경기일: "
+            f"{last_match.get('match_date', '-')}"
+        )
+
+        log(
+            f"경기: "
+            f"{last_match.get('home_team', '')} "
+            f"vs "
+            f"{last_match.get('away_team', '')}"
+        )
+
+        log(
+            f"결과: "
+            f"{last_match.get('result', '-')}"
+        )
 
     log(
         "========================================"
@@ -1489,11 +1683,8 @@ def build_database_progress(
         "last_saved_id":
             last_saved_id,
 
-        "db_last_id":
-            db_last_id,
-
-        "max_id":
-            max_id
+        "last_match":
+            last_match
 
     }
 
@@ -1505,10 +1696,10 @@ def build_database_progress(
 def auto_collect(
     start_id,
     end_id,
-    selected_companies=None,
     progress_callback=None,
     log_callback=None,
-    delay=0.5
+    delay=0.5,
+    selected_companies=None
 ):
 
     return build_database_progress(
@@ -1517,17 +1708,83 @@ def auto_collect(
 
         end_id=end_id,
 
-        selected_companies=
-            selected_companies,
-
         progress_callback=
             progress_callback,
 
         log_callback=
             log_callback,
 
-        delay=delay
+        delay=delay,
 
+        selected_companies=
+            selected_companies
+
+    )
+
+
+# =========================================================
+# 마지막 저장 경기 정보
+# =========================================================
+
+def get_last_saved_info():
+
+    state = (
+        database.get_last_crawler_state()
+    )
+
+    if state:
+
+        return state
+
+    match = (
+        database.get_last_saved_match()
+    )
+
+    if match is None:
+
+        return None
+
+    return {
+
+        "last_saved_schedule_id":
+            match.get(
+                "schedule_id"
+            ),
+
+        "last_saved_match_date":
+            match.get(
+                "match_date"
+            ),
+
+        "last_saved_home_team":
+            match.get(
+                "home_team"
+            ),
+
+        "last_saved_away_team":
+            match.get(
+                "away_team"
+            ),
+
+        "last_saved_result":
+            match.get(
+                "result"
+            ),
+
+        "last_saved_odds_count":
+            0
+
+    }
+
+
+# =========================================================
+# 다음 수집 시작 ID
+# =========================================================
+
+def get_next_collect_id():
+
+    return (
+        database.get_next_schedule_id()
     )
 
 
@@ -1544,11 +1801,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "Scoreman 신규 경기 DB 수집"
-    )
-
-    print(
-        "이미 저장된 경기 재수집 안 함"
+        "Scoreman 최종배당 DB 수집"
     )
 
     print(
@@ -1560,18 +1813,32 @@ if __name__ == "__main__":
     )
 
     print(
+        "기존 경기 재수집 안 함"
+    )
+
+    print(
         "========================================"
     )
 
-    print(
-        "현재 마지막 저장 ID:",
+    last_id = (
         database.get_last_saved_schedule_id()
     )
 
-    print(
-        "현재 가장 큰 경기 ID:",
-        database.get_max_schedule_id()
-    )
+    if last_id:
+
+        print(
+            f"현재 마지막 저장 경기 ID: "
+            f"{last_id}"
+        )
+
+        next_id = (
+            database.get_next_schedule_id()
+        )
+
+        print(
+            f"다음 권장 시작 ID: "
+            f"{next_id}"
+        )
 
     print()
 
@@ -1587,21 +1854,69 @@ if __name__ == "__main__":
         )
     )
 
+    print()
+
+    print(
+        "업체 선택"
+    )
+
+    print(
+        "예: Bet365,William Hill,10Bet"
+    )
+
+    print(
+        "전체 업체는 그냥 Enter"
+    )
+
+    company_input = input(
+        "업체: "
+    ).strip()
+
+    if company_input:
+
+        selected_companies = [
+
+            x.strip()
+
+            for x in
+            company_input.split(",")
+
+            if x.strip()
+
+        ]
+
+    else:
+
+        selected_companies = None
+
     result = build_database_progress(
 
         start_id=start_id,
 
         end_id=end_id,
 
-        selected_companies=None,
-
         log_callback=print,
 
-        delay=0.5
+        delay=0.5,
+
+        selected_companies=
+            selected_companies
 
     )
 
     print()
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "수집 결과"
+    )
+
+    print(
+        "========================================"
+    )
 
     print(
         "전체:",
@@ -1629,11 +1944,13 @@ if __name__ == "__main__":
     )
 
     print(
-        "이번 수집 마지막 신규 ID:",
-        result["last_saved_id"]
+        "마지막 저장 ID:",
+        result.get(
+            "last_saved_id",
+            "-"
+        )
     )
 
     print(
-        "DB 마지막 저장 ID:",
-        result["db_last_id"]
-)
+        "========================================"
+                )
