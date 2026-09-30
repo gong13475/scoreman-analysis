@@ -10,7 +10,9 @@ def normalize_company_name(name):
     if name is None:
         return ""
 
-    value = str(name).strip().lower()
+    value = str(
+        name
+    ).strip().lower()
 
     value = value.replace(" ", "")
     value = value.replace("_", "")
@@ -30,10 +32,10 @@ def get_company_list():
 
     companies = database.get_company_names()
 
-    # DB에 실제 저장된 업체 우선
-    result = list(companies)
+    result = list(
+        companies
+    )
 
-    # 주요 해외 업체
     preferred_companies = [
 
         "Bet365",
@@ -42,11 +44,11 @@ def get_company_list():
 
     ]
 
-    existing_normalized = set()
+    existing = set()
 
     for company in result:
 
-        existing_normalized.add(
+        existing.add(
             normalize_company_name(
                 company
             )
@@ -60,11 +62,13 @@ def get_company_list():
             )
         )
 
-        if normalized not in existing_normalized:
+        if normalized not in existing:
 
-            result.append(company)
+            result.append(
+                company
+            )
 
-            existing_normalized.add(
+            existing.add(
                 normalized
             )
 
@@ -75,7 +79,7 @@ def get_company_list():
 
 
 # =========================================================
-# 배당값 검증
+# 배당 검증
 # =========================================================
 
 def validate_company_odds(
@@ -106,7 +110,9 @@ def validate_company_odds(
                 f"{company} 배당값이 없습니다."
             )
 
-        odds = input_odds[company]
+        odds = input_odds[
+            company
+        ]
 
         for key in [
             "home",
@@ -145,7 +151,7 @@ def validate_company_odds(
 
 
 # =========================================================
-# 배당 → 암시적 확률
+# 배당 → 암시확률
 # =========================================================
 
 def calculate_implied_probabilities(
@@ -165,6 +171,7 @@ def calculate_implied_probabilities(
             or draw <= 0
             or away <= 0
         ):
+
             return {
                 "home": 0,
                 "draw": 0,
@@ -223,7 +230,9 @@ def calculate_result_counts(
     matches
 ):
 
-    total = len(matches)
+    total = len(
+        matches
+    )
 
     win = 0
     draw = 0
@@ -320,14 +329,6 @@ def calculate_actual_percentages(
 
 # =========================================================
 # 부족확률
-#
-# 예상확률 - 실제결과비율
-#
-# 양수:
-# 예상보다 실제 결과가 부족
-#
-# 음수:
-# 예상보다 실제 결과가 많이 발생
 # =========================================================
 
 def calculate_shortage_percent(
@@ -471,17 +472,19 @@ def run_search(
 
         }
 
-    # -----------------------------------------------------
-    # DB 검색용
-    # -----------------------------------------------------
 
     company_odds = {}
 
+
     for company in selected_companies:
 
-        odds = input_odds[company]
+        odds = input_odds[
+            company
+        ]
 
-        company_odds[company] = {
+        company_odds[
+            company
+        ] = {
 
             "home":
                 float(
@@ -499,6 +502,7 @@ def run_search(
                 )
 
         }
+
 
     try:
 
@@ -526,13 +530,12 @@ def run_search(
 
         }
 
+
     results = []
 
-    # -----------------------------------------------------
-    # 선택 업체 정규화
-    # -----------------------------------------------------
 
     normalized_selected = {}
+
 
     for company in selected_companies:
 
@@ -542,9 +545,6 @@ def run_search(
             )
         ] = company
 
-    # -----------------------------------------------------
-    # 경기별 데이터
-    # -----------------------------------------------------
 
     for match in matches:
 
@@ -552,13 +552,17 @@ def run_search(
             match
         )
 
-        item["company_odds"] = {}
+        item[
+            "company_odds"
+        ] = {}
+
 
         rows = (
             database.get_match_final_odds(
                 match["schedule_id"]
             )
         )
+
 
         for row in rows:
 
@@ -577,6 +581,7 @@ def run_search(
                     normalized
                 )
             )
+
 
             if selected_name:
 
@@ -597,29 +602,31 @@ def run_search(
 
                 }
 
+
         results.append(
             item
         )
 
-    # =====================================================
-    # 업체별 통계
-    # =====================================================
 
     statistics = {}
 
+
     for company in selected_companies:
 
-        statistics[company] = (
-            analyze_company_results(
+        statistics[
+            company
+        ] = analyze_company_results(
 
-                results,
+            results,
 
-                company,
+            company,
 
-                input_odds[company]
+            input_odds[
+                company
+            ]
 
-            )
         )
+
 
     return {
 
@@ -639,7 +646,7 @@ def run_search(
 
 
 # =========================================================
-# 전체 검색 결과 통계
+# 전체 통계
 # =========================================================
 
 def get_overall_statistics(
@@ -700,13 +707,9 @@ if __name__ == "__main__":
         "========================================"
     )
 
-    print(
-        "업체 목록"
-    )
-
     for company in get_company_list():
 
         print(
             "-",
             company
-        )
+    )
