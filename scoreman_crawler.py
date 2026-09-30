@@ -1807,3 +1807,17 @@ if __name__ == "__main__":
     print(
         get_job_status()
     )
+def stop_background_collection():
+
+    with _JOB_LOCK:
+
+        if not _JOB["running"]:
+            return False
+
+    _STOP_EVENT.set()
+
+    _append_log(
+        "🛑 수집 중지 버튼이 눌렸습니다."
+    )
+
+    return True
