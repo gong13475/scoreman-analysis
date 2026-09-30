@@ -9,10 +9,6 @@ import traceback
 import database
 
 
-# =========================================================
-# 기본 설정
-# =========================================================
-
 BASE_URL = "https://www.scoreman123.com"
 
 HEADERS = {
@@ -32,13 +28,12 @@ HEADERS = {
 
 _JOB_LOCK = threading.Lock()
 
-# 실제 수집 중지 신호
 _STOP_EVENT = threading.Event()
-
 
 _JOB = {
     "running": False,
     "finished": False,
+    "stopped": False,
 
     "current": 0,
     "total": 0,
@@ -63,49 +58,47 @@ _JOB = {
 }
 
 
-# =========================================================
-# 작업 상태 가져오기
-# =========================================================
-
 def get_job_status():
 
     with _JOB_LOCK:
-
         return dict(_JOB)
 
-
-# =========================================================
-# 작업 상태 변경
-# =========================================================
 
 def _set_job(**kwargs):
 
     with _JOB_LOCK:
-
         _JOB.update(kwargs)
 
-
-# =========================================================
-# 로그 추가
-# =========================================================
 
 def _append_log(message):
 
     with _JOB_LOCK:
+        _JOB["log"] += str(message) + "\n"
+
+
+# =========================================================
+# 중지 요청
+# =========================================================
+
+def stop_background_collection():
+
+    with _JOB_LOCK:
+
+        if not _JOB["running"]:
+            return False
+
+        _STOP_EVENT.set()
+
+        _JOB["stopped"] = True
 
         _JOB["log"] += (
-            str(message)
-            + "\n"
+            "========================================\n"
+            "⏹️ 수집 중지 요청\n"
+            "현재 경기 처리가 끝난 후 수집을 중지합니다.\n"
+            "========================================\n"
         )
 
-
-# =========================================================
-# 수집 중지 여부
-# =========================================================
-
-def is_stop_requested():
-
-    return _STOP_EVENT.is_set()
+    return True
 
 
 # =========================================================
@@ -137,9 +130,7 @@ def to_int(value):
 
     try:
 
-        return int(
-            float(value)
-        )
+        return int(float(value))
 
     except Exception:
 
@@ -151,19 +142,10 @@ def clean_text(value):
     if value is None:
         return ""
 
-    value = html_lib.unescape(
-        str(value)
-    )
+    value = html_lib.unescape(str(value))
 
-    value = value.replace(
-        "\\/",
-        "/"
-    )
-
-    value = value.replace(
-        '\\"',
-        '"'
-    )
+    value = value.replace("\\/", "/")
+    value = value.replace('\\"', '"')
 
     value = re.sub(
         r"<[^>]+>",
@@ -189,7 +171,6 @@ def calculate_result(
         home_score is None
         or away_score is None
     ):
-
         return ""
 
     if home_score > away_score:
@@ -228,11 +209,9 @@ def get_match_page(
         )
 
         if response.status_code != 200:
-
             return None
 
         if len(response.text) < 300:
-
             return None
 
         return response.text
@@ -261,8 +240,11 @@ def find_value(
         patterns = [
 
             rf'"{re.escape(key)}"\s*:\s*"([^"]*)"',
+
             rf'"{re.escape(key)}"\s*:\s*([^,}}\s]+)',
+
             rf"'{re.escape(key)}'\s*:\s*'([^']*)'",
+
             rf"{re.escape(key)}\s*=\s*[\"']([^\"']+)[\"']"
         ]
 
@@ -281,7 +263,6 @@ def find_value(
                 )
 
                 if value:
-
                     return value
 
     return ""
@@ -352,9 +333,7 @@ def recursive_find(
 
         for key, value in obj.items():
 
-            key_lower = str(
-                key
-            ).lower()
+            key_lower = str(key).lower()
 
             if key_lower in wanted_keys:
 
@@ -367,12 +346,9 @@ def recursive_find(
                     )
                 ):
 
-                    value = clean_text(
-                        value
-                    )
+                    value = clean_text(value)
 
                     if value:
-
                         return value
 
             result = recursive_find(
@@ -381,7 +357,6 @@ def recursive_find(
             )
 
             if result:
-
                 return result
 
     elif isinstance(obj, list):
@@ -394,7 +369,6 @@ def recursive_find(
             )
 
             if result:
-
                 return result
 
     return ""
@@ -453,7 +427,6 @@ def find_team_names(html):
                 )
 
             if home and away:
-
                 break
 
     return (
@@ -549,7 +522,6 @@ def find_match_date(html):
     )
 
     if value:
-
         return value
 
     match = re.search(
@@ -559,9 +531,7 @@ def find_match_date(html):
     )
 
     return (
-        clean_text(
-            match.group(1)
-        )
+        clean_text(match.group(1))
         if match
         else ""
     )
@@ -576,17 +546,11 @@ def parse_match_info(
     schedule_id
 ):
 
-    home, away = find_team_names(
-        html
-    )
+    home, away = find_team_names(html)
 
-    hs, aws = find_scores(
-        html
-    )
+    hs, aws = find_scores(html)
 
-    match_date = find_match_date(
-        html
-    )
+    match_date = find_match_date(html)
 
     result = calculate_result(
         hs,
@@ -671,15 +635,10 @@ def get_odds(
 
         return []
 
-    if not isinstance(
-        data,
-        dict
-    ):
-
+    if not isinstance(data, dict):
         return []
 
     if data.get("ErrCode") != 0:
-
         return []
 
     block = data.get(
@@ -687,11 +646,7 @@ def get_odds(
         {}
     )
 
-    if not isinstance(
-        block,
-        dict
-    ):
-
+    if not isinstance(block, dict):
         return []
 
     mixodds = block.get(
@@ -699,11 +654,7 @@ def get_odds(
         []
     )
 
-    if not isinstance(
-        mixodds,
-        list
-    ):
-
+    if not isinstance(mixodds, list):
         return []
 
     if selected_companies:
@@ -721,26 +672,16 @@ def get_odds(
 
     for item in mixodds:
 
-        if not isinstance(
-            item,
-            dict
-        ):
-
+        if not isinstance(item, dict):
             continue
 
-        company_id = item.get(
-            "cid"
-        )
+        company_id = item.get("cid")
 
         company_name = clean_text(
-            item.get(
-                "cn",
-                ""
-            )
+            item.get("cn", "")
         )
 
         if not company_name:
-
             continue
 
         if wanted is not None:
@@ -749,7 +690,6 @@ def get_odds(
                 company_name.strip().lower()
                 not in wanted
             ):
-
                 continue
 
         euro = item.get(
@@ -757,11 +697,7 @@ def get_odds(
             {}
         )
 
-        if not isinstance(
-            euro,
-            dict
-        ):
-
+        if not isinstance(euro, dict):
             continue
 
         final = euro.get(
@@ -769,11 +705,7 @@ def get_odds(
             {}
         )
 
-        if not isinstance(
-            final,
-            dict
-        ):
-
+        if not isinstance(final, dict):
             continue
 
         home = to_float(
@@ -793,7 +725,6 @@ def get_odds(
             or draw is None
             or away is None
         ):
-
             continue
 
         result.append({
@@ -962,8 +893,6 @@ def _run_background(
     delay
 ):
 
-    _STOP_EVENT.clear()
-
     session = requests.Session()
 
     session.headers.update(
@@ -993,6 +922,8 @@ def _run_background(
         running=True,
 
         finished=False,
+
+        stopped=False,
 
         current=0,
 
@@ -1080,35 +1011,22 @@ def _run_background(
             start=1
         ):
 
-            # -----------------------------------------
-            # 수집 시작 전 중지 확인
-            # -----------------------------------------
+            # ---------------------------------------------
+            # 다음 경기 시작 전 중지 확인
+            # ---------------------------------------------
 
             if _STOP_EVENT.is_set():
 
                 stopped = True
 
                 _append_log(
-                    "========================================"
-                )
-
-                _append_log(
-                    "⏹ 사용자가 수집을 중지했습니다."
-                )
-
-                _append_log(
-                    f"중지 위치: ID={schedule_id}"
-                )
-
-                _append_log(
-                    "이미 저장된 DB 데이터는 유지됩니다."
-                )
-
-                _append_log(
-                    "========================================"
+                    f"[중지] "
+                    f"ID={schedule_id}부터 수집 중단"
                 )
 
                 break
+
+            status = "skip"
 
             try:
 
@@ -1118,9 +1036,7 @@ def _run_background(
                     session
                 )
 
-                status = result[
-                    "status"
-                ]
+                status = result["status"]
 
                 odds = int(
                     result["odds"]
@@ -1172,60 +1088,50 @@ def _run_background(
                 odds=odds_total
             )
 
-            # -----------------------------------------
-            # 경기 처리 후 중지 확인
-            # -----------------------------------------
+            # ---------------------------------------------
+            # 경기 하나 처리 후 중지 확인
+            # ---------------------------------------------
 
             if _STOP_EVENT.is_set():
 
                 stopped = True
 
                 _append_log(
-                    "========================================"
+                    "⏹️ 현재 경기 처리 완료"
                 )
 
                 _append_log(
-                    "⏹ 수집 중지 요청 확인"
-                )
-
-                _append_log(
-                    "현재 경기 처리가 끝난 후 "
-                    "안전하게 수집을 종료합니다."
-                )
-
-                _append_log(
-                    "========================================"
+                    "⏹️ 백그라운드 수집을 중지합니다."
                 )
 
                 break
 
-            # -----------------------------------------
-            # 요청 간격
-            # -----------------------------------------
-
             if delay > 0:
 
+                # delay 중에도 중지 가능
                 if _STOP_EVENT.wait(
-                    delay
+                    float(delay)
                 ):
 
                     stopped = True
 
                     _append_log(
-                        "⏹ 요청 대기 중 "
-                        "수집이 중지되었습니다."
+                        "⏹️ 수집 중지 요청 확인"
                     )
 
                     break
 
-        # =================================================
-        # 결과
-        # =================================================
-
-        result = {
+        result_data = {
 
             "total":
                 total,
+
+            "current":
+                (
+                    index
+                    if "index" in locals()
+                    else 0
+                ),
 
             "success":
                 success,
@@ -1243,45 +1149,75 @@ def _run_background(
                 stopped
         }
 
-        _append_log(
-            "========================================"
-        )
-
         if stopped:
 
             _append_log(
-                "⏹ 백그라운드 수집 중지 완료"
+                "========================================"
+            )
+
+            _append_log(
+                "⏹️ 백그라운드 수집 중지 완료"
+            )
+
+            _append_log(
+                f"진행: "
+                f"{result_data['current']:,}/"
+                f"{total:,}"
+            )
+
+            _append_log(
+                f"신규: {success:,}"
+            )
+
+            _append_log(
+                f"기존: {exists:,}"
+            )
+
+            _append_log(
+                f"실패: {failed:,}"
+            )
+
+            _append_log(
+                f"최종배당: {odds_total:,}"
+            )
+
+            _append_log(
+                "========================================"
             )
 
         else:
 
             _append_log(
+                "========================================"
+            )
+
+            _append_log(
                 "✅ 백그라운드 수집 완료"
             )
 
-        _append_log(
-            f"전체: {total:,}"
-        )
+            _append_log(
+                f"전체: {total:,}"
+            )
 
-        _append_log(
-            f"신규: {success:,}"
-        )
+            _append_log(
+                f"신규: {success:,}"
+            )
 
-        _append_log(
-            f"기존: {exists:,}"
-        )
+            _append_log(
+                f"기존: {exists:,}"
+            )
 
-        _append_log(
-            f"실패: {failed:,}"
-        )
+            _append_log(
+                f"실패: {failed:,}"
+            )
 
-        _append_log(
-            f"최종배당: {odds_total:,}"
-        )
+            _append_log(
+                f"최종배당: {odds_total:,}"
+            )
 
-        _append_log(
-            "========================================"
-        )
+            _append_log(
+                "========================================"
+            )
 
         _set_job(
 
@@ -1289,7 +1225,9 @@ def _run_background(
 
             finished=True,
 
-            result=result
+            stopped=stopped,
+
+            result=result_data
         )
 
     except Exception as e:
@@ -1304,6 +1242,8 @@ def _run_background(
             running=False,
 
             finished=True,
+
+            stopped=False,
 
             error=str(e)
         )
@@ -1327,10 +1267,9 @@ def start_background_collection(
     with _JOB_LOCK:
 
         if _JOB["running"]:
-
             return False
 
-    _STOP_EVENT.clear()
+        _STOP_EVENT.clear()
 
     database.init_database()
 
@@ -1368,27 +1307,6 @@ def start_background_collection(
 
 
 # =========================================================
-# 실제 수집 중지
-# =========================================================
-
-def stop_background_collection():
-
-    with _JOB_LOCK:
-
-        if not _JOB["running"]:
-
-            return False
-
-        _STOP_EVENT.set()
-
-        _JOB["log"] += (
-            "\n⏳ 수집 중지 요청을 받았습니다.\n"
-        )
-
-    return True
-
-
-# =========================================================
 # 실행 상태
 # =========================================================
 
@@ -1410,8 +1328,9 @@ def reset_job():
     with _JOB_LOCK:
 
         if _JOB["running"]:
-
             return False
+
+        _STOP_EVENT.clear()
 
         _JOB.update({
 
@@ -1419,6 +1338,9 @@ def reset_job():
                 False,
 
             "finished":
+                False,
+
+            "stopped":
                 False,
 
             "current":
@@ -1460,8 +1382,6 @@ def reset_job():
             "error":
                 ""
         })
-
-    _STOP_EVENT.clear()
 
     return True
 
@@ -1511,4 +1431,4 @@ if __name__ == "__main__":
 
     print(
         get_job_status()
-        )
+    )
