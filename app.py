@@ -94,7 +94,29 @@ except Exception:
     company_names = []
 
 
-c1, c2, c3 = st.columns(3)
+try:
+
+    last_saved_id = (
+        database.get_last_saved_schedule_id()
+    )
+
+except Exception:
+
+    last_saved_id = None
+
+
+try:
+
+    max_schedule_id = (
+        database.get_max_schedule_id()
+    )
+
+except Exception:
+
+    max_schedule_id = None
+
+
+c1, c2, c3, c4, c5 = st.columns(5)
 
 
 with c1:
@@ -121,6 +143,30 @@ with c3:
     )
 
 
+with c4:
+
+    st.metric(
+        "마지막 저장 ID",
+        str(
+            last_saved_id
+            if last_saved_id is not None
+            else "-"
+        )
+    )
+
+
+with c5:
+
+    st.metric(
+        "가장 큰 경기 ID",
+        str(
+            max_schedule_id
+            if max_schedule_id is not None
+            else "-"
+        )
+    )
+
+
 st.divider()
 
 
@@ -129,46 +175,210 @@ st.divider()
 # =========================================================
 
 st.header(
-    "📥 스코어맨 경기 자동수집"
+    "📥 스코어맨 신규 경기 자동수집"
 )
 
 st.write(
-    "스코어맨 경기 ID 범위를 검색하여 "
-    "완료된 경기와 해외업체 최종배당을 DB에 저장합니다."
+    "이미 DB에 저장된 경기 ID는 웹사이트에 다시 접속하지 않고 "
+    "자동으로 건너뜁니다."
 )
 
 st.info(
-    "초기배당은 저장하지 않고 "
-    "**최종배당만 저장**합니다."
+    "🔒 **한 번 저장된 경기 ID는 재수집하지 않습니다.** "
+    "초기배당은 저장하지 않고 최종배당만 저장합니다."
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
+# 현재 마지막 ID 안내
+# =========================================================
+
+if max_schedule_id is not None:
+
+    st.success(
+        f"현재 DB 가장 큰 경기 ID: "
+        f"**{max_schedule_id}**"
+    )
+
+    st.caption(
+        f"다음 신규 경기부터 수집하려면 "
+        f"시작 ID를 **{int(max_schedule_id) + 1}**로 설정하면 됩니다."
+    )
+
+else:
+
+    st.warning(
+        "현재 DB에 저장된 경기가 없습니다."
+    )
+
+
+# =========================================================
+# 수집 업체 선택
+# =========================================================
+
+st.subheader(
+    "🏢 수집할 해외업체 선택"
+)
+
+st.write(
+    "선택한 업체의 최종배당만 DB에 저장합니다."
+)
+
+
+# DB에 이미 저장된 업체
+try:
+
+    saved_companies = (
+        database.get_company_names()
+    )
+
+except Exception:
+
+    saved_companies = []
+
+
+# 기본 주요 업체
+preferred_companies = [
+
+    "Bet365",
+    "William Hill",
+    "10Bet"
+
+]
+
+
+all_crawler_companies = list(
+    saved_companies
+)
+
+
+for company in preferred_companies:
+
+    if company not in all_crawler_companies:
+
+        all_crawler_companies.append(
+            company
+        )
+
+
+all_crawler_companies = sorted(
+    list(
+        dict.fromkeys(
+            all_crawler_companies
+        )
+    ),
+    key=lambda x: str(x).lower()
+)
+
+
+select_all = st.checkbox(
+    "🌎 전체 업체 수집",
+    value=True
+)
+
+
+if select_all:
+
+    selected_crawler_companies = None
+
+    st.success(
+        "전체 해외업체의 최종배당을 수집합니다."
+    )
+
+else:
+
+    selected_crawler_companies = st.multiselect(
+
+        "수집할 업체",
+
+        options=
+            all_crawler_companies,
+
+        default=
+            [
+                x
+                for x in preferred_companies
+                if x in all_crawler_companies
+            ],
+
+        placeholder=
+            "Bet365 / William Hill / 10Bet 등 선택"
+
+    )
+
+    if selected_crawler_companies:
+
+        st.info(
+            "선택 업체: "
+            +
+            ", ".join(
+                selected_crawler_companies
+            )
+        )
+
+    else:
+
+        st.warning(
+            "업체를 1개 이상 선택하세요."
+        )
+
+
+st.divider()
+
+
+# =========================================================
 # 경기 ID
-# ---------------------------------------------------------
+# =========================================================
 
 c1, c2 = st.columns(2)
 
 
 with c1:
 
+    default_start = 1
+
+    if max_schedule_id is not None:
+
+        try:
+
+            default_start = (
+                int(max_schedule_id) + 1
+            )
+
+        except Exception:
+
+            default_start = 1
+
+
     start_id = st.number_input(
+
         "시작 경기 ID",
+
         min_value=1,
-        value=3001118,
+
+        value=default_start,
+
         step=1,
+
         format="%d"
+
     )
 
 
 with c2:
 
     end_id = st.number_input(
+
         "마지막 경기 ID",
+
         min_value=1,
-        value=3001118,
+
+        value=default_start,
+
         step=1,
+
         format="%d"
+
     )
 
 
@@ -192,9 +402,9 @@ st.write(
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # 요청 간격
-# ---------------------------------------------------------
+# =========================================================
 
 delay = st.number_input(
 
@@ -209,6 +419,7 @@ delay = st.number_input(
     step=0.10,
 
     format="%.2f"
+
 )
 
 
@@ -217,15 +428,25 @@ delay = st.number_input(
 # =========================================================
 
 if st.button(
-    "🚀 스코어맨 DB 자동수집 시작",
+
+    "🚀 신규 경기 DB 자동수집 시작",
+
     type="primary",
+
     use_container_width=True
+
 ):
 
     if end_id < start_id:
 
         st.error(
             "마지막 ID가 시작 ID보다 작습니다."
+        )
+
+    elif not select_all and not selected_crawler_companies:
+
+        st.error(
+            "수집할 해외업체를 최소 1개 선택하세요."
         )
 
     else:
@@ -297,7 +518,7 @@ if st.button(
         )
 
         add_log(
-            "⚽ Scoreman DB 자동수집 시작"
+            "⚽ Scoreman 신규 경기 자동수집 시작"
         )
 
         add_log(
@@ -307,6 +528,26 @@ if st.button(
 
         add_log(
             f"전체 ID: {total_ids:,}"
+        )
+
+        if selected_crawler_companies:
+
+            add_log(
+                "수집 업체: "
+                +
+                ", ".join(
+                    selected_crawler_companies
+                )
+            )
+
+        else:
+
+            add_log(
+                "수집 업체: 전체 업체"
+            )
+
+        add_log(
+            "이미 저장된 경기: 재수집하지 않음"
         )
 
         add_log(
@@ -334,6 +575,9 @@ if st.button(
                     end_id=int(
                         end_id
                     ),
+
+                    selected_companies=
+                        selected_crawler_companies,
 
                     progress_callback=
                         update_progress,
@@ -370,7 +614,7 @@ if st.button(
             )
 
             add_log(
-                f"기존 경기: "
+                f"이미 저장되어 건너뜀: "
                 f"{result.get('exists', 0):,}"
             )
 
@@ -385,6 +629,16 @@ if st.button(
             )
 
             add_log(
+                f"이번 수집 마지막 신규 ID: "
+                f"{result.get('last_saved_id', '-')}"
+            )
+
+            add_log(
+                f"DB 마지막 저장 ID: "
+                f"{result.get('db_last_id', '-')}"
+            )
+
+            add_log(
                 "========================================"
             )
 
@@ -395,11 +649,11 @@ if st.button(
 
 
             st.success(
-                "✅ 스코어맨 DB 수집 완료"
+                "✅ 신규 경기 DB 수집 완료"
             )
 
 
-            r1, r2, r3, r4 = st.columns(4)
+            r1, r2, r3, r4, r5 = st.columns(5)
 
 
             with r1:
@@ -421,7 +675,7 @@ if st.button(
             with r3:
 
                 st.metric(
-                    "기존 경기",
+                    "이미 저장",
                     f"{result.get('exists', 0):,}"
                 )
 
@@ -429,8 +683,21 @@ if st.button(
             with r4:
 
                 st.metric(
-                    "최종배당",
-                    f"{result.get('odds', 0):,}"
+                    "실패/건너뜀",
+                    f"{result.get('failed', 0):,}"
+                )
+
+
+            with r5:
+
+                st.metric(
+                    "마지막 신규 ID",
+                    str(
+                        result.get(
+                            "last_saved_id",
+                            "-"
+                        )
+                    )
                 )
 
 
@@ -558,7 +825,6 @@ st.header(
     "🌎 해외배당업체 선택"
 )
 
-
 st.write(
     "검색할 해외업체를 선택하고 "
     "최종 승 / 무 / 패 배당을 입력합니다."
@@ -577,10 +843,6 @@ except Exception as e:
         f"업체 목록 오류: {e}"
     )
 
-
-# ---------------------------------------------------------
-# 주요 업체가 반드시 표시되도록 보완
-# ---------------------------------------------------------
 
 preferred_companies = [
 
@@ -836,10 +1098,6 @@ if search_results:
     )
 
 
-    # -----------------------------------------------------
-    # 전체 경기 결과 집계
-    # -----------------------------------------------------
-
     total_games = len(
         search_results
     )
@@ -872,10 +1130,6 @@ if search_results:
             loss_count += 1
 
 
-    # -----------------------------------------------------
-    # 실제 결과 퍼센트
-    # -----------------------------------------------------
-
     if total_games > 0:
 
         win_pct = (
@@ -902,10 +1156,6 @@ if search_results:
         draw_pct = 0
         loss_pct = 0
 
-
-    # -----------------------------------------------------
-    # 결과 전체 건수
-    # -----------------------------------------------------
 
     st.subheader(
         "🏆 전체 경기 결과"
@@ -953,10 +1203,6 @@ if search_results:
     st.divider()
 
 
-    # =====================================================
-    # 배당 확률 계산
-    # =====================================================
-
     st.subheader(
         "🎯 배당 확률 대비 부족확률"
     )
@@ -967,10 +1213,6 @@ if search_results:
         "실제 과거 결과 비율을 비교한 값입니다."
     )
 
-
-    # -----------------------------------------------------
-    # 업체별 분석
-    # -----------------------------------------------------
 
     for company in selected_companies:
 
@@ -991,7 +1233,6 @@ if search_results:
 
 
             if not odds:
-
                 continue
 
 
@@ -1023,10 +1264,6 @@ if search_results:
                 continue
 
 
-            # ---------------------------------------------
-            # 배당 암시확률
-            # ---------------------------------------------
-
             raw_home = (
                 1 /
                 home_odd
@@ -1053,7 +1290,6 @@ if search_results:
 
 
             if total_raw <= 0:
-
                 continue
 
 
@@ -1063,13 +1299,11 @@ if search_results:
                 100
             )
 
-
             implied_draw = (
                 raw_draw /
                 total_raw *
                 100
             )
-
 
             implied_away = (
                 raw_away /
@@ -1099,7 +1333,6 @@ if search_results:
 
 
         if not company_data:
-
             continue
 
 
@@ -1147,13 +1380,11 @@ if search_results:
             100
         )
 
-
         actual_draw_pct = (
             actual_draw /
             data_count *
             100
         )
-
 
         actual_loss_pct = (
             actual_loss /
@@ -1198,28 +1429,17 @@ if search_results:
         )
 
 
-        # -------------------------------------------------
-        # 부족확률
-        #
-        # 실제 결과율 - 배당확률
-        #
-        # 양수 = 실제 결과가 더 많이 발생
-        # 음수 = 실제 결과가 부족
-        # -------------------------------------------------
-
         win_gap = (
             actual_win_pct
             -
             avg_home_probability
         )
 
-
         draw_gap = (
             actual_draw_pct
             -
             avg_draw_probability
         )
-
 
         loss_gap = (
             actual_loss_pct
@@ -1228,24 +1448,15 @@ if search_results:
         )
 
 
-        # -------------------------------------------------
-        # 부족한 정도
-        #
-        # 실제 확률이 배당확률보다 낮으면
-        # 부족확률로 표시
-        # -------------------------------------------------
-
         win_shortage = max(
             0,
             -win_gap
         )
 
-
         draw_shortage = max(
             0,
             -draw_gap
         )
-
 
         loss_shortage = max(
             0,
@@ -1334,10 +1545,6 @@ if search_results:
                     f"{loss_gap:.1f}%"
                 )
 
-
-        # -------------------------------------------------
-        # 상세표
-        # -------------------------------------------------
 
         analysis_table = [
 
@@ -1446,30 +1653,25 @@ if search_results:
             ""
         )
 
-
         away_team = row.get(
             "away_team",
             ""
         )
-
 
         result = row.get(
             "result",
             "-"
         )
 
-
         home_score = row.get(
             "home_score",
             "-"
         )
 
-
         away_score = row.get(
             "away_score",
             "-"
         )
-
 
         match_date = row.get(
             "match_date",
@@ -1745,7 +1947,29 @@ except Exception:
     final_companies = []
 
 
-c1, c2, c3 = st.columns(3)
+try:
+
+    final_last_id = (
+        database.get_last_saved_schedule_id()
+    )
+
+except Exception:
+
+    final_last_id = None
+
+
+try:
+
+    final_max_id = (
+        database.get_max_schedule_id()
+    )
+
+except Exception:
+
+    final_max_id = None
+
+
+c1, c2, c3, c4, c5 = st.columns(5)
 
 
 with c1:
@@ -1769,6 +1993,30 @@ with c3:
     st.metric(
         "실제 저장 업체",
         f"{len(final_companies):,}개"
+    )
+
+
+with c4:
+
+    st.metric(
+        "마지막 저장 ID",
+        str(
+            final_last_id
+            if final_last_id is not None
+            else "-"
+        )
+    )
+
+
+with c5:
+
+    st.metric(
+        "가장 큰 경기 ID",
+        str(
+            final_max_id
+            if final_max_id is not None
+            else "-"
+        )
     )
 
 
@@ -1806,14 +2054,16 @@ with st.expander(
 # =========================================================
 
 st.info(
-    "💡 Bet365 / William Hill / 10Bet은 "
-    "업체 선택창에 표시됩니다. "
-    "단, 실제 검색 결과를 만들려면 "
-    "스코어맨에서 해당 업체의 최종배당이 "
-    "DB에 저장되어 있어야 합니다."
+    "💡 이미 저장된 경기 ID는 다시 수집하지 않습니다. "
+    "예를 들어 3001118이 DB에 있으면 다음 수집에서 "
+    "3001118을 다시 요청하지 않고 바로 건너뜁니다."
 )
 
+st.info(
+    "💡 수집 업체를 선택하면 선택한 업체의 최종배당만 저장합니다. "
+    "전체 업체 수집을 선택하면 기존처럼 모든 업체의 최종배당을 저장합니다."
+)
 
 st.success(
     "✅ 프로그램 정상 작동"
-    )
+            )
