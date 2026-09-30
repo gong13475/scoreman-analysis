@@ -26,6 +26,9 @@ database.init_database()
 if "search_result" not in st.session_state:
     st.session_state.search_result = None
 
+if "show_crawler_log" not in st.session_state:
+    st.session_state.show_crawler_log = False
+
 
 # =========================================================
 # 제목
@@ -292,6 +295,10 @@ if status["running"] or status["finished"]:
         )
 
 
+    # =====================================================
+    # 마지막 완료 ID
+    # =====================================================
+
     if status.get("last_completed_id"):
 
         st.info(
@@ -299,6 +306,10 @@ if status["running"] or status["finished"]:
             f"**{status['last_completed_id']}**"
         )
 
+
+    # =====================================================
+    # 수집 업체
+    # =====================================================
 
     if status["selected_companies"]:
 
@@ -310,18 +321,68 @@ if status["running"] or status["finished"]:
         )
 
 
-    st.code(
-        status["log"],
-        language="text"
-    )
+    # =====================================================
+    # 수집 로그 버튼
+    # =====================================================
 
+    st.divider()
+
+    if st.session_state.show_crawler_log:
+
+        button_text = "🙈 수집 로그 숨기기"
+
+    else:
+
+        button_text = "📋 수집 로그 보기"
+
+
+    if st.button(
+        button_text,
+        use_container_width=True,
+        key="crawler_log_button"
+    ):
+
+        st.session_state.show_crawler_log = (
+            not st.session_state.show_crawler_log
+        )
+
+        st.rerun()
+
+
+    # =====================================================
+    # 로그 표시
+    # =====================================================
+
+    if st.session_state.show_crawler_log:
+
+        st.markdown("### 📋 Scoreman 수집 로그")
+
+        log_text = status.get("log", "")
+
+        if log_text:
+
+            st.code(
+                log_text,
+                language="text"
+            )
+
+        else:
+
+            st.info(
+                "현재 표시할 수집 로그가 없습니다."
+            )
+
+
+    # =====================================================
+    # 작업 상태 안내
+    # =====================================================
 
     if status["running"]:
 
         st.info(
-            "수집 중입니다. "
-            "휴대폰 화면을 꺼도 서버가 계속 실행되는 동안 "
-            "백그라운드 수집은 계속됩니다."
+            "🟢 수집 중입니다. "
+            "로그는 기본적으로 숨겨져 있으며 "
+            "「📋 수집 로그 보기」를 누르면 확인할 수 있습니다."
         )
 
     elif status["finished"]:
@@ -336,7 +397,7 @@ if status["running"] or status["finished"]:
         else:
 
             st.success(
-                "수집 작업이 완료되었습니다."
+                "✅ 수집 작업이 완료되었습니다."
             )
 
 
@@ -689,10 +750,6 @@ if search and search.get("success"):
         )
 
 
-        # -----------------------------------------------
-        # 가장 높은 실제결과
-        # -----------------------------------------------
-
         best_key = max(
             ["home", "draw", "away"],
             key=lambda x:
@@ -897,4 +954,4 @@ if status["running"]:
         </script>
         """,
         unsafe_allow_html=True
-            )
+    )
