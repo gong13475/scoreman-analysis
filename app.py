@@ -16,6 +16,11 @@ st.set_page_config(
     layout="wide"
 )
 
+
+# =========================================================
+# DB 초기화
+# =========================================================
+
 database.init_database()
 
 
@@ -46,22 +51,26 @@ st.caption(
 c1, c2, c3 = st.columns(3)
 
 with c1:
+
     st.metric(
         "저장 경기",
         f"{database.get_match_count():,}"
     )
 
 with c2:
+
     st.metric(
         "저장 최종배당",
         f"{database.get_odds_count():,}"
     )
 
 with c3:
+
     st.metric(
         "실제 저장 업체",
         f"{len(database.get_company_names()):,}"
     )
+
 
 st.divider()
 
@@ -73,23 +82,30 @@ st.divider()
 st.header("📥 스코어맨 경기 자동수집")
 
 st.info(
-    "시작 ID와 마지막 ID를 입력한 후 "
-    "수집 시작 버튼을 누르면 백그라운드 수집을 시작합니다."
+    "시작 경기 ID와 마지막 경기 ID를 입력한 후 "
+    "수집 시작 버튼을 누르면 백그라운드에서 자동수집합니다."
 )
 
+
+# =========================================================
+# ID 입력
+# =========================================================
 
 c1, c2 = st.columns(2)
 
 with c1:
+
     start_id = st.number_input(
         "시작 경기 ID",
         min_value=1,
-        value=3001118,
+        value=2005000,
         step=1,
         format="%d"
     )
 
+
 with c2:
+
     end_id = st.number_input(
         "마지막 경기 ID",
         min_value=1,
@@ -105,16 +121,18 @@ total_ids = (
     else 0
 )
 
+
 st.write(
     f"검색 대상: **{total_ids:,}개 경기 ID**"
 )
 
 
 # =========================================================
-# 수집 업체
+# 업체 선택
 # =========================================================
 
 st.subheader("🏢 수집할 해외업체 선택")
+
 
 crawl_mode = st.radio(
     "수집 방식",
@@ -142,6 +160,7 @@ else:
 
     companies = analysis.get_company_list()
 
+
     selected_crawl_companies = st.multiselect(
         "수집 업체",
         options=companies,
@@ -150,20 +169,26 @@ else:
         key="crawl_companies"
     )
 
+
     if selected_crawl_companies:
 
         st.success(
             "선택 업체: "
-            + " / ".join(selected_crawl_companies)
+            + " / ".join(
+                selected_crawl_companies
+            )
         )
 
     else:
 
         st.warning(
-            "특정 업체 수집을 선택했다면 "
             "업체를 1개 이상 선택하세요."
         )
 
+
+# =========================================================
+# 요청 간격
+# =========================================================
 
 delay = st.number_input(
     "요청 간격(초)",
@@ -181,90 +206,95 @@ delay = st.number_input(
 
 status = scoreman_crawler.get_job_status()
 
-running = bool(status.get("running", False))
-
 
 # =========================================================
 # 수집 시작 / 중지 버튼
 # =========================================================
 
-if not running:
+if not status["running"]:
 
-    st.markdown("### 🟢 수집 대기중")
+    st.success("🟢 수집 대기중")
 
-    if st.button(
-        "🚀 수집 시작",
-        type="primary",
-        use_container_width=True
-    ):
 
-        if end_id < start_id:
+    c1, c2 = st.columns(2)
 
-            st.error(
-                "마지막 ID가 시작 ID보다 작습니다."
-            )
 
-        elif (
-            crawl_mode == "특정 업체만 수집"
-            and not selected_crawl_companies
+    with c1:
+
+        if st.button(
+            "🚀 수집 시작",
+            type="primary",
+            use_container_width=True
         ):
 
-            st.error(
-                "수집 업체를 1개 이상 선택하세요."
-            )
+            if end_id < start_id:
 
-        else:
+                st.error(
+                    "마지막 ID가 시작 ID보다 작습니다."
+                )
 
-            if crawl_mode == "전체 업체 자동수집":
+            elif (
+                crawl_mode == "특정 업체만 수집"
+                and not selected_crawl_companies
+            ):
 
-                companies_for_crawler = None
+                st.error(
+                    "수집 업체를 1개 이상 선택하세요."
+                )
 
             else:
 
-                companies_for_crawler = (
-                    selected_crawl_companies
+                if crawl_mode == "전체 업체 자동수집":
+
+                    companies_for_crawler = None
+
+                else:
+
+                    companies_for_crawler = (
+                        selected_crawl_companies
+                    )
+
+
+                started = (
+                    scoreman_crawler
+                    .start_background_collection(
+                        int(start_id),
+                        int(end_id),
+                        companies_for_crawler,
+                        float(delay)
+                    )
                 )
 
 
-            started = (
-                scoreman_crawler
-                .start_background_collection(
-                    int(start_id),
-                    int(end_id),
-                    companies_for_crawler,
-                    float(delay)
-                )
-            )
+                if started:
+
+                    st.success(
+                        "🚀 백그라운드 수집을 시작했습니다."
+                    )
+
+                    st.rerun()
+
+                else:
+
+                    st.warning(
+                        "수집 작업을 시작하지 못했습니다."
+                    )
 
 
-            if started:
+    with c2:
 
-                st.success(
-                    "🚀 수집을 시작했습니다."
-                )
+        if st.button(
+            "🔄 상태 새로고침",
+            use_container_width=True
+        ):
 
-                st.rerun()
+            st.rerun()
 
-            else:
-
-                st.warning(
-                    "이미 수집 작업이 실행 중입니다."
-                )
 
 else:
 
-    # -----------------------------------------------------
-    # 수집중 표시
-    # -----------------------------------------------------
+    st.error("🔴 현재 수집중입니다.")
 
-    st.error(
-        "🔴 현재 수집중"
-    )
-
-
-    # -----------------------------------------------------
-    # 수집중지 버튼
-    # -----------------------------------------------------
 
     if st.button(
         "🛑 수집 중지",
@@ -272,60 +302,26 @@ else:
         use_container_width=True
     ):
 
-        # stop_background_collection 함수가
-        # 현재 crawler.py에 없어도 오류가 나지 않도록
-        # 존재 여부를 먼저 확인
-        stop_function = getattr(
-            scoreman_crawler,
-            "stop_background_collection",
-            None
+        stopped = (
+            scoreman_crawler
+            .stop_background_collection()
         )
 
 
-        if stop_function is not None:
+        if stopped:
 
-            try:
-
-                stopped = (
-                    stop_function()
-                )
-
-                if stopped:
-
-                    st.warning(
-                        "🛑 수집 중지 요청을 보냈습니다."
-                    )
-
-                else:
-
-                    st.info(
-                        "수집 중지 상태를 확인하세요."
-                    )
-
-                st.rerun()
-
-            except Exception as e:
-
-                st.error(
-                    "수집 중지 처리 중 오류가 발생했습니다."
-                )
-
-                st.code(
-                    str(e)
-                )
+            st.warning(
+                "🛑 수집 중지 요청을 보냈습니다."
+            )
 
         else:
 
-            st.error(
-                "현재 scoreman_crawler.py에 "
-                "수집 중지 기능이 없습니다."
+            st.info(
+                "현재 실행 중인 수집 작업이 없습니다."
             )
 
-            st.info(
-                "app.py 오류가 발생하지 않도록 처리했습니다. "
-                "crawler.py에 중지 기능을 추가하면 버튼으로 "
-                "실제 수집을 중단할 수 있습니다."
-            )
+
+        st.rerun()
 
 
 # =========================================================
@@ -334,58 +330,78 @@ else:
 
 status = scoreman_crawler.get_job_status()
 
-if status.get("running") or status.get("finished"):
+
+if status["running"] or status["finished"]:
+
+    st.divider()
 
     st.subheader("📡 수집 진행상황")
 
 
     total = int(
-        status.get("total", 0)
+        status.get(
+            "total",
+            0
+        )
     )
+
 
     current = int(
-        status.get("current", 0)
+        status.get(
+            "current",
+            0
+        )
     )
 
 
-    progress = (
-        current / total
-        if total > 0
-        else 0
-    )
+    if total > 0:
+
+        progress = (
+            current / total
+        )
+
+    else:
+
+        progress = 0
 
 
     st.progress(
-        min(max(progress, 0), 1)
+        min(
+            max(
+                progress,
+                0
+            ),
+            1
+        )
     )
 
 
-    # -----------------------------------------------------
-    # 현재 상태
-    # -----------------------------------------------------
+    # =====================================================
+    # 수집 상태 표시
+    # =====================================================
 
-    if status.get("running"):
+    if status["running"]:
 
         st.error(
             "🔴 수집중"
         )
 
-    elif status.get("error"):
+    elif status.get("stopped"):
 
-        st.error(
-            "⚠️ 수집 오류"
+        st.warning(
+            "🛑 수집 중지됨"
         )
 
-    elif status.get("finished"):
+    elif status["finished"]:
 
         st.success(
             "🟢 수집 완료"
         )
 
 
-    # -----------------------------------------------------
-    # 통계
-    # -----------------------------------------------------
+    # =====================================================
+    # 숫자 현황
+    # =====================================================
 
     c1, c2, c3, c4, c5 = st.columns(5)
 
@@ -402,7 +418,7 @@ if status.get("running") or status.get("finished"):
 
         st.metric(
             "신규",
-            f"{int(status.get('success', 0)):,}"
+            f"{status.get('success', 0):,}"
         )
 
 
@@ -410,7 +426,7 @@ if status.get("running") or status.get("finished"):
 
         st.metric(
             "기존",
-            f"{int(status.get('exists', 0)):,}"
+            f"{status.get('exists', 0):,}"
         )
 
 
@@ -418,7 +434,7 @@ if status.get("running") or status.get("finished"):
 
         st.metric(
             "실패",
-            f"{int(status.get('failed', 0)):,}"
+            f"{status.get('failed', 0):,}"
         )
 
 
@@ -426,25 +442,30 @@ if status.get("running") or status.get("finished"):
 
         st.metric(
             "최종배당",
-            f"{int(status.get('odds', 0)):,}"
+            f"{status.get('odds', 0):,}"
         )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # 마지막 완료 ID
-    # -----------------------------------------------------
+    # =====================================================
 
-    if status.get("last_completed_id"):
+    last_id = status.get(
+        "last_completed_id"
+    )
+
+
+    if last_id:
 
         st.info(
             f"✅ 마지막 완료 경기 ID: "
-            f"**{status['last_completed_id']}**"
+            f"**{last_id}**"
         )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # 업체
-    # -----------------------------------------------------
+    # =====================================================
 
     selected_status_companies = (
         status.get(
@@ -464,11 +485,14 @@ if status.get("running") or status.get("finished"):
         )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # 로그
-    # -----------------------------------------------------
+    # =====================================================
 
-    st.subheader("📜 수집 로그")
+    st.subheader(
+        "📜 수집 로그"
+    )
+
 
     log_text = status.get(
         "log",
@@ -486,20 +510,47 @@ if status.get("running") or status.get("finished"):
     else:
 
         st.info(
-            "아직 수집 로그가 없습니다."
+            "수집 로그가 없습니다."
         )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # 오류
-    # -----------------------------------------------------
+    # =====================================================
 
     if status.get("error"):
 
         st.error(
             "수집 작업 오류: "
-            + str(status["error"])
+            + str(
+                status["error"]
+            )
         )
+
+
+    # =====================================================
+    # 완료 결과
+    # =====================================================
+
+    if (
+        status["finished"]
+        and status.get("result")
+    ):
+
+        result = status["result"]
+
+
+        if status.get("stopped"):
+
+            st.warning(
+                "🛑 사용자가 수집을 중지했습니다."
+            )
+
+        else:
+
+            st.success(
+                "✅ 수집 작업이 완료되었습니다."
+            )
 
 
 # =========================================================
@@ -508,7 +559,8 @@ if status.get("running") or status.get("finished"):
 
 status = scoreman_crawler.get_job_status()
 
-if status.get("running"):
+
+if status["running"]:
 
     st.markdown(
         """
@@ -530,6 +582,7 @@ st.divider()
 # =========================================================
 
 st.header("📋 저장된 전체 경기")
+
 
 matches = database.get_all_matches()
 
@@ -700,9 +753,7 @@ if selected_companies:
 
         if result["success"]:
 
-            st.session_state.search_result = (
-                result
-            )
+            st.session_state.search_result = result
 
         else:
 
@@ -722,6 +773,7 @@ if search and search.get("success"):
 
     results = search["results"]
 
+
     statistics = search.get(
         "statistics",
         {}
@@ -735,6 +787,10 @@ if search and search.get("success"):
         "📊 동일 배당 기준 전체 경기 분석"
     )
 
+
+    # =====================================================
+    # 전체 요약
+    # =====================================================
 
     counts = statistics.get(
         "counts",
@@ -866,9 +922,13 @@ if search and search.get("success"):
 
 
         for key, label in [
+
             ("home", "승"),
+
             ("draw", "무"),
+
             ("away", "패")
+
         ]:
 
             expected = (
@@ -923,9 +983,16 @@ if search and search.get("success"):
 
 
         best_label = {
-            "home": "승",
-            "draw": "무",
-            "away": "패"
+
+            "home":
+                "승",
+
+            "draw":
+                "무",
+
+            "away":
+                "패"
+
         }[best_key]
 
 
@@ -937,7 +1004,7 @@ if search and search.get("success"):
 
 
     # =====================================================
-    # 검색 경기
+    # 검색된 경기
     # =====================================================
 
     st.subheader(
@@ -999,8 +1066,13 @@ if search and search.get("success"):
 
             odds = (
                 row
-                .get("company_odds", {})
-                .get(company)
+                .get(
+                    "company_odds",
+                    {}
+                )
+                .get(
+                    company
+                )
             )
 
 
@@ -1018,7 +1090,7 @@ if search and search.get("success"):
 
 
 # =========================================================
-# DB 최종배당
+# DB 배당
 # =========================================================
 
 st.header(
@@ -1031,6 +1103,7 @@ if st.checkbox(
 ):
 
     odds_rows = database.get_all_odds()
+
 
     table = []
 
@@ -1069,6 +1142,7 @@ if st.checkbox(
 
 st.divider()
 
+
 st.header(
     "🏢 해외업체별 저장 데이터"
 )
@@ -1080,19 +1154,26 @@ counts = database.get_company_counts()
 if counts:
 
     st.dataframe(
+
         [
+
             {
+
                 "업체":
                     company,
 
                 "저장 배당 수":
                     count
+
             }
 
             for company, count
             in counts.items()
+
         ],
+
         use_container_width=True,
+
         hide_index=True
     )
 
@@ -1101,8 +1182,3 @@ else:
     st.info(
         "아직 업체별 배당 데이터가 없습니다."
     )
-
-
-# =========================================================
-# 끝
-# =========================================================
