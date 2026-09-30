@@ -7,7 +7,7 @@ import analysis
 
 
 # =========================================================
-# 설정
+# 기본 설정
 # =========================================================
 
 st.set_page_config(
@@ -15,11 +15,6 @@ st.set_page_config(
     page_icon="⚽",
     layout="wide"
 )
-
-
-# =========================================================
-# DB 초기화
-# =========================================================
 
 database.init_database()
 
@@ -31,6 +26,9 @@ database.init_database()
 if "search_result" not in st.session_state:
     st.session_state.search_result = None
 
+if "show_collection_log" not in st.session_state:
+    st.session_state.show_collection_log = False
+
 
 # =========================================================
 # 제목
@@ -39,8 +37,8 @@ if "search_result" not in st.session_state:
 st.title("⚽ 전종목 해외배당 분석")
 
 st.caption(
-    "스코어맨 자동수집 · 전체 해외업체 · "
-    "최종배당 · 실제결과 · 확률분석"
+    "스코어맨 자동수집 · 해외업체 최종배당 · "
+    "실제결과 · 확률분석"
 )
 
 
@@ -51,21 +49,18 @@ st.caption(
 c1, c2, c3 = st.columns(3)
 
 with c1:
-
     st.metric(
         "저장 경기",
         f"{database.get_match_count():,}"
     )
 
 with c2:
-
     st.metric(
         "저장 최종배당",
         f"{database.get_odds_count():,}"
     )
 
 with c3:
-
     st.metric(
         "실제 저장 업체",
         f"{len(database.get_company_names()):,}"
@@ -82,8 +77,8 @@ st.divider()
 st.header("📥 스코어맨 경기 자동수집")
 
 st.info(
-    "시작 경기 ID와 마지막 경기 ID를 입력한 후 "
-    "수집 시작 버튼을 누르면 백그라운드에서 자동수집합니다."
+    "시작 ID와 마지막 ID를 입력한 뒤 "
+    "수집 시작 버튼을 누르면 백그라운드에서 수집합니다."
 )
 
 
@@ -100,7 +95,8 @@ with c1:
         min_value=1,
         value=2005000,
         step=1,
-        format="%d"
+        format="%d",
+        key="start_id"
     )
 
 
@@ -111,15 +107,22 @@ with c2:
         min_value=1,
         value=3001118,
         step=1,
-        format="%d"
+        format="%d",
+        key="end_id"
     )
 
 
-total_ids = (
-    int(end_id) - int(start_id) + 1
-    if end_id >= start_id
-    else 0
-)
+if end_id >= start_id:
+
+    total_ids = (
+        int(end_id)
+        - int(start_id)
+        + 1
+    )
+
+else:
+
+    total_ids = 0
 
 
 st.write(
@@ -128,7 +131,7 @@ st.write(
 
 
 # =========================================================
-# 업체 선택
+# 수집 업체
 # =========================================================
 
 st.subheader("🏢 수집할 해외업체 선택")
@@ -151,24 +154,21 @@ selected_crawl_companies = []
 if crawl_mode == "전체 업체 자동수집":
 
     st.success(
-        "✅ 전체 업체 자동수집\n\n"
-        "Scoreman에서 제공하는 모든 업체의 "
-        "최종배당을 자동으로 저장합니다."
+        "✅ Scoreman에서 제공하는 업체의 "
+        "최종배당을 자동으로 수집합니다."
     )
 
 else:
 
     companies = analysis.get_company_list()
 
-
     selected_crawl_companies = st.multiselect(
         "수집 업체",
         options=companies,
         default=[],
-        placeholder="원하는 업체를 여러 개 선택하세요",
+        placeholder="여러 업체 선택 가능",
         key="crawl_companies"
     )
-
 
     if selected_crawl_companies:
 
@@ -196,7 +196,8 @@ delay = st.number_input(
     max_value=2.00,
     value=0.50,
     step=0.10,
-    format="%.2f"
+    format="%.2f",
+    key="crawl_delay"
 )
 
 
@@ -208,52 +209,114 @@ status = scoreman_crawler.get_job_status()
 
 
 # =========================================================
-# 수집 시작 / 중지 버튼
+# 수집 버튼
 # =========================================================
 
-if not status["running"]:
+if status["running"]:
 
-    st.success("🟢 수집 대기중")
+    st.error("🔴 현재 수집중입니다.")
 
+    # -----------------------------------------------------
+    # 수집 중지 버튼
+    # -----------------------------------------------------
 
-    c1, c2 = st.columns(2)
+    if st.button(
+        "🛑 수집 중지",
+        type="secondary",
+        use_container_width=True,
+        key="stop_collection"
+    ):
 
-
-    with c1:
-
-        if st.button(
-            "🚀 수집 시작",
-            type="primary",
-            use_container_width=True
+        if hasattr(
+            scoreman_crawler,
+            "stop_background_collection"
         ):
 
-            if end_id < start_id:
+            try:
 
-                st.error(
-                    "마지막 ID가 시작 ID보다 작습니다."
+                stopped = (
+                    scoreman_crawler
+                    .stop_background_collection()
                 )
 
-            elif (
-                crawl_mode == "특정 업체만 수집"
-                and not selected_crawl_companies
-            ):
+                if stopped:
 
-                st.error(
-                    "수집 업체를 1개 이상 선택하세요."
-                )
-
-            else:
-
-                if crawl_mode == "전체 업체 자동수집":
-
-                    companies_for_crawler = None
+                    st.warning(
+                        "🛑 수집 중지 요청을 보냈습니다."
+                    )
 
                 else:
 
-                    companies_for_crawler = (
-                        selected_crawl_companies
+                    st.info(
+                        "현재 실행 중인 수집 작업이 없습니다."
                     )
 
+                st.rerun()
+
+            except Exception as e:
+
+                st.error(
+                    "수집 중지 오류"
+                )
+
+                st.code(
+                    str(e)
+                )
+
+        else:
+
+            st.error(
+                "scoreman_crawler.py에 "
+                "stop_background_collection() 함수가 없습니다."
+            )
+
+            st.info(
+                "scoreman_crawler.py 최종본으로 교체하세요."
+            )
+
+
+else:
+
+    # -----------------------------------------------------
+    # 수집 시작 버튼
+    # -----------------------------------------------------
+
+    if st.button(
+        "🚀 백그라운드 수집 시작",
+        type="primary",
+        use_container_width=True,
+        key="start_collection"
+    ):
+
+        if end_id < start_id:
+
+            st.error(
+                "마지막 ID가 시작 ID보다 작습니다."
+            )
+
+        elif (
+            crawl_mode == "특정 업체만 수집"
+            and not selected_crawl_companies
+        ):
+
+            st.error(
+                "수집 업체를 1개 이상 선택하세요."
+            )
+
+        else:
+
+            if crawl_mode == "전체 업체 자동수집":
+
+                companies_for_crawler = None
+
+            else:
+
+                companies_for_crawler = (
+                    selected_crawl_companies
+                )
+
+
+            try:
 
                 started = (
                     scoreman_crawler
@@ -277,51 +340,18 @@ if not status["running"]:
                 else:
 
                     st.warning(
-                        "수집 작업을 시작하지 못했습니다."
+                        "이미 수집 작업이 실행 중입니다."
                     )
 
+            except Exception as e:
 
-    with c2:
+                st.error(
+                    "수집 시작 오류"
+                )
 
-        if st.button(
-            "🔄 상태 새로고침",
-            use_container_width=True
-        ):
-
-            st.rerun()
-
-
-else:
-
-    st.error("🔴 현재 수집중입니다.")
-
-
-    if st.button(
-        "🛑 수집 중지",
-        type="secondary",
-        use_container_width=True
-    ):
-
-        stopped = (
-            scoreman_crawler
-            .stop_background_collection()
-        )
-
-
-        if stopped:
-
-            st.warning(
-                "🛑 수집 중지 요청을 보냈습니다."
-            )
-
-        else:
-
-            st.info(
-                "현재 실행 중인 수집 작업이 없습니다."
-            )
-
-
-        st.rerun()
+                st.code(
+                    str(e)
+                )
 
 
 # =========================================================
@@ -331,11 +361,16 @@ else:
 status = scoreman_crawler.get_job_status()
 
 
-if status["running"] or status["finished"]:
+if (
+    status["running"]
+    or status["finished"]
+):
 
     st.divider()
 
-    st.subheader("📡 수집 진행상황")
+    st.subheader(
+        "📡 수집 진행상황"
+    )
 
 
     total = int(
@@ -377,7 +412,7 @@ if status["running"] or status["finished"]:
 
 
     # =====================================================
-    # 수집 상태 표시
+    # 상태 표시
     # =====================================================
 
     if status["running"]:
@@ -386,7 +421,10 @@ if status["running"] or status["finished"]:
             "🔴 수집중"
         )
 
-    elif status.get("stopped"):
+    elif status.get(
+        "stopped",
+        False
+    ):
 
         st.warning(
             "🛑 수집 중지됨"
@@ -400,7 +438,7 @@ if status["running"] or status["finished"]:
 
 
     # =====================================================
-    # 숫자 현황
+    # 수집 통계
     # =====================================================
 
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -464,29 +502,27 @@ if status["running"] or status["finished"]:
 
 
     # =====================================================
-    # 업체
+    # 수집 업체
     # =====================================================
 
-    selected_status_companies = (
-        status.get(
-            "selected_companies",
-            []
-        )
+    status_companies = status.get(
+        "selected_companies",
+        []
     )
 
 
-    if selected_status_companies:
+    if status_companies:
 
         st.write(
             "**수집 업체:** "
             + " / ".join(
-                selected_status_companies
+                status_companies
             )
         )
 
 
     # =====================================================
-    # 로그
+    # 로그 버튼
     # =====================================================
 
     st.subheader(
@@ -494,24 +530,33 @@ if status["running"] or status["finished"]:
     )
 
 
-    log_text = status.get(
-        "log",
-        ""
+    show_log = st.checkbox(
+        "📜 수집 로그 보기",
+        value=st.session_state.show_collection_log,
+        key="show_collection_log"
     )
 
 
-    if log_text:
+    if show_log:
 
-        st.code(
-            log_text,
-            language="text"
+        log_text = status.get(
+            "log",
+            ""
         )
 
-    else:
 
-        st.info(
-            "수집 로그가 없습니다."
-        )
+        if log_text:
+
+            st.code(
+                log_text,
+                language="text"
+            )
+
+        else:
+
+            st.info(
+                "아직 수집 로그가 없습니다."
+            )
 
 
     # =====================================================
@@ -529,49 +574,27 @@ if status["running"] or status["finished"]:
 
 
     # =====================================================
-    # 완료 결과
+    # 완료 / 중지
     # =====================================================
 
-    if (
-        status["finished"]
-        and status.get("result")
-    ):
+    if status["finished"]:
 
-        result = status["result"]
-
-
-        if status.get("stopped"):
+        if status.get(
+            "stopped",
+            False
+        ):
 
             st.warning(
                 "🛑 사용자가 수집을 중지했습니다."
             )
 
-        else:
+        elif not status.get(
+            "error"
+        ):
 
             st.success(
                 "✅ 수집 작업이 완료되었습니다."
             )
-
-
-# =========================================================
-# 자동 새로고침
-# =========================================================
-
-status = scoreman_crawler.get_job_status()
-
-
-if status["running"]:
-
-    st.markdown(
-        """
-        <script>
-        setTimeout(function() {
-            window.parent.location.reload();
-        }, 3000);
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
 
 
 st.divider()
@@ -581,7 +604,9 @@ st.divider()
 # 저장 경기
 # =========================================================
 
-st.header("📋 저장된 전체 경기")
+st.header(
+    "📋 저장된 전체 경기"
+)
 
 
 matches = database.get_all_matches()
@@ -641,7 +666,9 @@ else:
 
 st.divider()
 
-st.header("🌎 해외배당업체 선택")
+st.header(
+    "🌎 해외배당업체 선택"
+)
 
 
 selected_companies = st.multiselect(
@@ -668,7 +695,7 @@ if selected_companies:
 
 
     st.info(
-        "입력한 승/무/패 배당과 동일한 배당을 가진 "
+        "입력한 승/무/패 배당과 동일한 "
         "DB의 전체 경기를 검색합니다."
     )
 
@@ -739,10 +766,15 @@ if selected_companies:
         }
 
 
+    # =====================================================
+    # 검색
+    # =====================================================
+
     if st.button(
         "🔎 동일 배당 경기 검색 및 확률 분석",
         type="primary",
-        use_container_width=True
+        use_container_width=True,
+        key="search_odds"
     ):
 
         result = analysis.run_search(
@@ -753,7 +785,9 @@ if selected_companies:
 
         if result["success"]:
 
-            st.session_state.search_result = result
+            st.session_state.search_result = (
+                result
+            )
 
         else:
 
@@ -769,7 +803,10 @@ if selected_companies:
 search = st.session_state.search_result
 
 
-if search and search.get("success"):
+if (
+    search
+    and search.get("success")
+):
 
     results = search["results"]
 
@@ -789,16 +826,13 @@ if search and search.get("success"):
 
 
     # =====================================================
-    # 전체 요약
+    # 전체 경기 요약
     # =====================================================
 
     counts = statistics.get(
         "counts",
         {}
     )
-
-
-    c1, c2, c3, c4 = st.columns(4)
 
 
     total = counts.get(
@@ -823,6 +857,9 @@ if search and search.get("success"):
         "away",
         0
     )
+
+
+    c1, c2, c3, c4 = st.columns(4)
 
 
     with c1:
@@ -899,7 +936,8 @@ if search and search.get("success"):
         if not company_stats:
 
             st.warning(
-                f"{company}: 동일 배당 경기 데이터가 없습니다."
+                f"{company}: "
+                "동일 배당 경기 데이터가 없습니다."
             )
 
             continue
@@ -914,7 +952,8 @@ if search and search.get("success"):
 
 
         st.write(
-            f"동일 배당 분석 경기: **{n:,}건**"
+            f"동일 배당 분석 경기: "
+            f"**{n:,}건**"
         )
 
 
@@ -932,17 +971,22 @@ if search and search.get("success"):
         ]:
 
             expected = (
-                company_stats["expected"][key]
+                company_stats[
+                    "expected"
+                ][key]
             )
 
 
             actual = (
-                company_stats["actual"][key]
+                company_stats[
+                    "actual"
+                ][key]
             )
 
 
             difference = (
-                actual - expected
+                actual
+                - expected
             )
 
 
@@ -961,7 +1005,9 @@ if search and search.get("success"):
                     f"{difference:+.2f}%",
 
                 "발생 건수":
-                    company_stats["counts"][key],
+                    company_stats[
+                        "counts"
+                    ][key],
 
                 "전체 건수":
                     n
@@ -976,9 +1022,15 @@ if search and search.get("success"):
 
 
         best_key = max(
-            ["home", "draw", "away"],
+            [
+                "home",
+                "draw",
+                "away"
+            ],
             key=lambda x:
-                company_stats["actual"][x]
+                company_stats[
+                    "actual"
+                ][x]
         )
 
 
@@ -1090,7 +1142,7 @@ if search and search.get("success"):
 
 
 # =========================================================
-# DB 배당
+# DB 최종배당
 # =========================================================
 
 st.header(
@@ -1099,10 +1151,13 @@ st.header(
 
 
 if st.checkbox(
-    "DB 최종배당 데이터 보기"
+    "DB 최종배당 데이터 보기",
+    key="show_db_odds"
 ):
 
-    odds_rows = database.get_all_odds()
+    odds_rows = (
+        database.get_all_odds()
+    )
 
 
     table = []
@@ -1142,19 +1197,19 @@ if st.checkbox(
 
 st.divider()
 
-
 st.header(
     "🏢 해외업체별 저장 데이터"
 )
 
 
-counts = database.get_company_counts()
+company_counts = (
+    database.get_company_counts()
+)
 
 
-if counts:
+if company_counts:
 
     st.dataframe(
-
         [
 
             {
@@ -1168,12 +1223,10 @@ if counts:
             }
 
             for company, count
-            in counts.items()
+            in company_counts.items()
 
         ],
-
         use_container_width=True,
-
         hide_index=True
     )
 
@@ -1182,3 +1235,24 @@ else:
     st.info(
         "아직 업체별 배당 데이터가 없습니다."
     )
+
+
+# =========================================================
+# 자동 새로고침
+# =========================================================
+
+status = scoreman_crawler.get_job_status()
+
+
+if status["running"]:
+
+    st.markdown(
+        """
+        <script>
+        setTimeout(function() {
+            window.parent.location.reload();
+        }, 3000);
+        </script>
+        """,
+        unsafe_allow_html=True
+                )
