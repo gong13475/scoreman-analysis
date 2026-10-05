@@ -1,12 +1,20 @@
 import database
 
 
+# =========================================================
+# 업체 목록
+# =========================================================
+
 def get_company_list():
 
     return database.get_company_names()
 
 
-def implied_probability(
+# =========================================================
+# 배당 → 확률
+# =========================================================
+
+def odds_to_probability(
     home,
     draw,
     away
@@ -14,25 +22,161 @@ def implied_probability(
 
     try:
 
-        h = 1 / float(home)
-        d = 1 / float(draw)
-        a = 1 / float(away)
+        home = float(home)
+        draw = float(draw)
+        away = float(away)
 
-        total = h + d + a
+        if (
+            home <= 0
+            or draw <= 0
+            or away <= 0
+        ):
+
+            return None
+
+        h = 1 / home
+        d = 1 / draw
+        a = 1 / away
+
+        total = (
+            h + d + a
+        )
 
         if total <= 0:
             return None
 
         return {
-            "home": h / total * 100,
-            "draw": d / total * 100,
-            "away": a / total * 100
+
+            "home":
+                h / total * 100,
+
+            "draw":
+                d / total * 100,
+
+            "away":
+                a / total * 100
         }
 
     except Exception:
 
         return None
 
+
+# =========================================================
+# 입력 배당 평균
+# =========================================================
+
+def average_input_probability(
+    odds_input,
+    companies
+):
+
+    values = []
+
+    for company in companies:
+
+        data = odds_input.get(
+            company
+        )
+
+        if not data:
+            continue
+
+        probability = odds_to_probability(
+
+            data.get("home"),
+            data.get("draw"),
+            data.get("away")
+        )
+
+        if probability:
+
+            values.append(
+                probability
+            )
+
+    if not values:
+        return None
+
+    return {
+
+        "home":
+            sum(
+                x["home"]
+                for x in values
+            ) / len(values),
+
+        "draw":
+            sum(
+                x["draw"]
+                for x in values
+            ) / len(values),
+
+        "away":
+            sum(
+                x["away"]
+                for x in values
+            ) / len(values)
+    }
+
+
+# =========================================================
+# 저장 배당과 입력값 비교
+# =========================================================
+
+def _matches_odds(
+    row,
+    target,
+    tolerance=0.005
+):
+
+    try:
+
+        rh = float(
+            row["home_odds"]
+        )
+
+        rd = float(
+            row["draw_odds"]
+        )
+
+        ra = float(
+            row["away_odds"]
+        )
+
+        th = float(
+            target["home"]
+        )
+
+        td = float(
+            target["draw"]
+        )
+
+        ta = float(
+            target["away"]
+        )
+
+        return (
+
+            abs(rh - th) <= tolerance
+
+            and
+
+            abs(rd - td) <= tolerance
+
+            and
+
+            abs(ra - ta) <= tolerance
+        )
+
+    except Exception:
+
+        return False
+
+
+# =========================================================
+# 검색
+# =========================================================
 
 def run_search(
     companies,
@@ -42,47 +186,53 @@ def run_search(
     if not companies:
 
         return {
+
             "success": False,
-            "message": "업체를 선택하세요.",
+
+            "message":
+                "분석 업체를 선택하세요.",
+
             "results": [],
+
             "statistics": None
         }
 
+    all_matches = database.get_all_matches()
 
-    all_odds = database.get_all_odds()
+    if not all_matches:
 
-    matches = {
-        str(row["schedule_id"]):
-            row
-        for row in database.get_all_matches()
-    }
+        return {
 
+            "success": False,
+
+            "message":
+                "저장된 경기가 없습니다.",
+
+            "results": [],
+
+            "statistics": None
+        }
 
     results = []
 
+    for match in all_matches:
 
-    for schedule_id, match in matches.items():
+        schedule_id = str(
+            match["schedule_id"]
+        )
 
-        rows = [
-            row
-            for row in all_odds
-            if str(row["schedule_id"])
-            == schedule_id
-            and row["bookmaker"]
-            in companies
-        ]
+        odds_rows = database.get_odds_by_match(
+            schedule_id
+        )
 
-
-        if not rows:
+        if not odds_rows:
             continue
-
 
         matched_companies = []
 
+        matched_odds = []
 
-        for row in rows:
-
-            company = row["bookmaker"]
+        for company in companies:
 
             target = odds_input.get(
                 company
@@ -91,178 +241,161 @@ def run_search(
             if not target:
                 continue
 
+            for row in odds_rows:
 
-            def close(a, b):
+                if (
+                    str(
+                        row["bookmaker"]
+                    ).strip().lower()
+                    !=
+                    str(
+                        company
+                    ).strip().lower()
+                ):
 
-                try:
+                    continue
 
-                    return abs(
-                        float(a)
-                        - float(b)
-                    ) < 0.001
+                if _matches_odds(
+                    row,
+                    target
+                ):
 
-                except Exception:
-
-                    return False
-
-
-            if (
-                close(
-                    row["home_odds"],
-                    target["home"]
-                )
-                and
-                close(
-                    row["draw_odds"],
-                    target["draw"]
-                )
-                and
-                close(
-                    row["away_odds"],
-                    target["away"]
-                )
-            ):
-
-                matched_companies.append(
-                    company
-                )
-
-
-        if matched_companies:
-
-            results.append({
-                "schedule_id":
-                    schedule_id,
-
-                "match_date":
-                    match.get(
-                        "match_date",
-                        ""
-                    ),
-
-                "home_team":
-                    match.get(
-                        "home_team",
-                        ""
-                    ),
-
-                "away_team":
-                    match.get(
-                        "away_team",
-                        ""
-                    ),
-
-                "home_score":
-                    match.get(
-                        "home_score"
-                    ),
-
-                "away_score":
-                    match.get(
-                        "away_score"
-                    ),
-
-                "result":
-                    match.get(
-                        "result",
-                        ""
-                    ),
-
-                "업체":
-                    ", ".join(
-                        matched_companies
+                    matched_companies.append(
+                        company
                     )
-            })
 
+                    matched_odds.append(
+                        row
+                    )
+
+                    break
+
+        if not matched_companies:
+            continue
+
+        results.append({
+
+            "경기ID":
+                match["schedule_id"],
+
+            "경기일":
+                match["match_date"],
+
+            "홈팀":
+                match["home_team"],
+
+            "원정팀":
+                match["away_team"],
+
+            "홈점수":
+                match["home_score"],
+
+            "원정점수":
+                match["away_score"],
+
+            "실제결과":
+                match["result"],
+
+            "매칭업체":
+                ", ".join(
+                    matched_companies
+                )
+        })
 
     statistics = calculate_statistics(
-        results
+        results,
+        odds_input,
+        companies
     )
 
-
     return {
+
         "success": True,
-        "message": "",
-        "results": results,
-        "statistics": statistics
+
+        "message":
+            "",
+
+        "results":
+            results,
+
+        "statistics":
+            statistics
     }
 
 
-def calculate_statistics(results):
+# =========================================================
+# 통계
+# =========================================================
+
+def calculate_statistics(
+    results,
+    odds_input,
+    companies
+):
 
     if not results:
 
         return None
 
-
-    home = sum(
-        1
-        for row in results
-        if row["result"] == "승"
+    total = len(
+        results
     )
 
-    draw = sum(
-        1
-        for row in results
-        if row["result"] == "무"
-    )
+    home_count = 0
+    draw_count = 0
+    away_count = 0
 
-    away = sum(
-        1
-        for row in results
-        if row["result"] == "패"
-    )
+    for row in results:
 
+        result = row.get(
+            "실제결과"
+        )
 
-    total = len(results)
+        if result == "승":
 
+            home_count += 1
+
+        elif result == "무":
+
+            draw_count += 1
+
+        elif result == "패":
+
+            away_count += 1
 
     actual = {
 
         "home":
-            home / total * 100,
+            home_count
+            / total
+            * 100,
 
         "draw":
-            draw / total * 100,
+            draw_count
+            / total
+            * 100,
 
         "away":
-            away / total * 100
+            away_count
+            / total
+            * 100
     }
 
+    probability = (
+        average_input_probability(
+            odds_input,
+            companies
+        )
+    )
 
-    probability_home = 0
-    probability_draw = 0
-    probability_away = 0
+    if probability is None:
 
-    probability_count = 0
+        probability = {
 
-
-    for row in results:
-
-        # 검색 결과에는 배당값을 넣지 않았으므로
-        # 실제 결과 비율을 기준으로 계산
-        probability_count += 1
-
-
-    if probability_count:
-
-        probability_home = actual["home"]
-        probability_draw = actual["draw"]
-        probability_away = actual["away"]
-
-
-    probability = {
-
-        "home":
-            probability_home,
-
-        "draw":
-            probability_draw,
-
-        "away":
-            probability_away
-    }
-
+            "home": 0,
+            "draw": 0,
+            "away": 0
+        }
 
     shortage = {
 
@@ -279,7 +412,6 @@ def calculate_statistics(results):
             - probability["away"]
     }
 
-
     return {
 
         "actual":
@@ -289,29 +421,49 @@ def calculate_statistics(results):
             probability,
 
         "shortage":
-            shortage
+            shortage,
+
+        "count":
+            total
     }
 
 
+# =========================================================
+# 가장 부족한 결과
+# =========================================================
+
 def get_highest_shortage(stats):
 
-    shortage = stats["shortage"]
+    if not stats:
+        return ""
 
+    shortage = stats.get(
+        "shortage",
+        {}
+    )
 
     values = {
 
         "승":
-            shortage["home"],
+            shortage.get(
+                "home",
+                0
+            ),
 
         "무":
-            shortage["draw"],
+            shortage.get(
+                "draw",
+                0
+            ),
 
         "패":
-            shortage["away"]
+            shortage.get(
+                "away",
+                0
+            )
     }
 
-
-    return max(
+    return min(
         values,
         key=values.get
     )
