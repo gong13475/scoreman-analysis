@@ -89,7 +89,6 @@ def _execute(
             rows = None
 
             if fetch:
-
                 rows = cur.fetchall()
 
             conn.commit()
@@ -118,6 +117,9 @@ def _execute_dict(
                 sql,
                 params
             )
+
+            if cur.description is None:
+                return None
 
             columns = [
                 x[0]
@@ -238,101 +240,106 @@ def get_storage_usage():
 
     try:
 
-        # -------------------------------------------------
-        # Turso
-        # -------------------------------------------------
-
-        if _use_turso():
-
-            with _DB_LOCK:
-
-                conn = get_connection()
-
-                try:
-
-                    cur = conn.cursor()
-
-                    cur.execute(
-                        "PRAGMA page_count"
-                    )
-
-                    page_count = int(
-                        cur.fetchone()[0]
-                    )
-
-                    cur.execute(
-                        "PRAGMA page_size"
-                    )
-
-                    page_size = int(
-                        cur.fetchone()[0]
-                    )
-
-                    size_bytes = (
-                        page_count * page_size
-                    )
-
-                finally:
-
-                    conn.close()
-
-        # -------------------------------------------------
+        # ---------------------------------------------
         # SQLite
-        # -------------------------------------------------
+        # ---------------------------------------------
 
-        else:
+        if not _use_turso():
 
             if not SQLITE_PATH.exists():
 
                 return {
                     "success": True,
-                    "mode": "SQLite",
-                    "size_bytes": 0,
                     "size_mb": 0.0,
-                    "size_gb": 0.0
+                    "size_gb": 0.0,
+                    "storage": "SQLite"
                 }
 
             size_bytes = (
                 SQLITE_PATH.stat().st_size
             )
 
-        size_mb = (
-            size_bytes
-            / 1024
-            / 1024
-        )
+            size_mb = (
+                size_bytes
+                / 1024
+                / 1024
+            )
 
-        size_gb = (
-            size_bytes
-            / 1024
-            / 1024
-            / 1024
-        )
+            size_gb = (
+                size_bytes
+                / 1024
+                / 1024
+                / 1024
+            )
+
+            return {
+                "success": True,
+                "size_mb": size_mb,
+                "size_gb": size_gb,
+                "storage": "SQLite"
+            }
+
+        # ---------------------------------------------
+        # Turso / libSQL
+        # ---------------------------------------------
+
+        try:
+
+            rows = _execute(
+                "PRAGMA page_count",
+                fetch=True
+            )
+
+            page_count = int(
+                rows[0][0]
+            )
+
+            rows = _execute(
+                "PRAGMA page_size",
+                fetch=True
+            )
+
+            page_size = int(
+                rows[0][0]
+            )
+
+            size_bytes = (
+                page_count
+                * page_size
+            )
+
+            size_mb = (
+                size_bytes
+                / 1024
+                / 1024
+            )
+
+            size_gb = (
+                size_bytes
+                / 1024
+                / 1024
+                / 1024
+            )
+
+        except Exception:
+
+            size_mb = 0.0
+            size_gb = 0.0
 
         return {
             "success": True,
-            "mode": (
-                "Turso"
-                if _use_turso()
-                else "SQLite"
-            ),
-            "size_bytes": size_bytes,
             "size_mb": size_mb,
-            "size_gb": size_gb
+            "size_gb": size_gb,
+            "storage": "Turso"
         }
 
     except Exception as e:
 
         return {
             "success": False,
-            "mode": (
-                "Turso"
-                if _use_turso()
-                else "SQLite"
-            ),
-            "size_bytes": 0,
             "size_mb": 0.0,
             "size_gb": 0.0,
+            "storage": "Unknown",
             "error": str(e)
         }
 
@@ -392,7 +399,9 @@ def get_all_matches():
     ]
 
     return [
-        dict(zip(columns, row))
+        dict(
+            zip(columns, row)
+        )
         for row in rows
     ]
 
@@ -481,13 +490,32 @@ def save_match_with_odds(
                 """,
                 (
                     str(match["schedule_id"]),
-                    match.get("match_date", ""),
-                    match.get("home_team", ""),
-                    match.get("away_team", ""),
-                    match.get("home_score"),
-                    match.get("away_score"),
-                    match.get("result", ""),
-                    match.get("source", "scoreman")
+                    match.get(
+                        "match_date",
+                        ""
+                    ),
+                    match.get(
+                        "home_team",
+                        ""
+                    ),
+                    match.get(
+                        "away_team",
+                        ""
+                    ),
+                    match.get(
+                        "home_score"
+                    ),
+                    match.get(
+                        "away_score"
+                    ),
+                    match.get(
+                        "result",
+                        ""
+                    ),
+                    match.get(
+                        "source",
+                        "scoreman"
+                    )
                 )
             )
 
@@ -506,20 +534,40 @@ def save_match_with_odds(
                         away_odds
                     )
                     VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(schedule_id, bookmaker)
+                    ON CONFLICT(
+                        schedule_id,
+                        bookmaker
+                    )
                     DO UPDATE SET
-                        bookmaker_id=excluded.bookmaker_id,
-                        home_odds=excluded.home_odds,
-                        draw_odds=excluded.draw_odds,
-                        away_odds=excluded.away_odds
+                        bookmaker_id=
+                            excluded.bookmaker_id,
+                        home_odds=
+                            excluded.home_odds,
+                        draw_odds=
+                            excluded.draw_odds,
+                        away_odds=
+                            excluded.away_odds
                     """,
                     (
-                        str(match["schedule_id"]),
+                        str(
+                            match[
+                                "schedule_id"
+                            ]
+                        ),
                         row["company_name"],
-                        row.get("company_id", ""),
-                        float(row["final_home"]),
-                        float(row["final_draw"]),
-                        float(row["final_away"])
+                        row.get(
+                            "company_id",
+                            ""
+                        ),
+                        float(
+                            row["final_home"]
+                        ),
+                        float(
+                            row["final_draw"]
+                        ),
+                        float(
+                            row["final_away"]
+                        )
                     )
                 )
 
@@ -538,7 +586,9 @@ def save_match_with_odds(
 # 경기별 배당
 # =========================================================
 
-def get_odds_by_match(schedule_id):
+def get_odds_by_match(
+    schedule_id
+):
 
     rows = _execute(
         """
@@ -565,7 +615,9 @@ def get_odds_by_match(schedule_id):
     ]
 
     return [
-        dict(zip(columns, row))
+        dict(
+            zip(columns, row)
+        )
         for row in rows
     ]
 
@@ -620,11 +672,14 @@ def search_odds(
             for _ in companies
         )
 
-        sql += f"""
-            AND o.bookmaker IN ({placeholders})
-        """
+        sql += (
+            " AND o.bookmaker IN "
+            f"({placeholders})"
+        )
 
-        params.extend(companies)
+        params.extend(
+            companies
+        )
 
     sql += """
         ORDER BY
@@ -652,7 +707,9 @@ def search_odds(
     ]
 
     return [
-        dict(zip(columns, row))
+        dict(
+            zip(columns, row)
+        )
         for row in rows
     ]
 
@@ -732,7 +789,9 @@ def get_collection_state():
 
     try:
 
-        row["selected_companies"] = json.loads(
+        row[
+            "selected_companies"
+        ] = json.loads(
             row.get(
                 "selected_companies",
                 "[]"
@@ -741,6 +800,8 @@ def get_collection_state():
 
     except Exception:
 
-        row["selected_companies"] = []
+        row[
+            "selected_companies"
+        ] = []
 
     return row
