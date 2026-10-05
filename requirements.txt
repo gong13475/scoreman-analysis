@@ -1,4 +1,4 @@
 streamlit
-requests
 pandas
-libsql-experimental
+requests
+libsql-experimental==0.0.55
