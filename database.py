@@ -1,12 +1,7 @@
 import os
 import sqlite3
 import threading
-from typing import Any
 
-
-# =========================================================
-# 설정
-# =========================================================
 
 TURSO_DATABASE_URL = os.getenv(
     "TURSO_DATABASE_URL",
@@ -39,7 +34,6 @@ def _get_turso_connection():
         return None
 
     try:
-
         import turso_serverless
 
         conn = turso_serverless.connect(
@@ -50,12 +44,7 @@ def _get_turso_connection():
         return conn
 
     except Exception as e:
-
-        print(
-            "[Turso 연결 실패]",
-            repr(e)
-        )
-
+        print("[Turso 연결 실패]", repr(e))
         return None
 
 
@@ -105,10 +94,7 @@ def is_turso_connected():
 
         cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT 1"
-        )
-
+        cursor.execute("SELECT 1")
         cursor.fetchone()
 
         try:
@@ -132,10 +118,7 @@ def is_turso_connected():
 # 테이블 컬럼 확인
 # =========================================================
 
-def _get_columns(
-    conn,
-    table_name
-):
+def _get_columns(conn, table_name):
 
     columns = set()
 
@@ -153,34 +136,20 @@ def _get_columns(
 
             try:
 
-                # sqlite3.Row
-                if isinstance(
-                    row,
-                    sqlite3.Row
-                ):
+                if isinstance(row, sqlite3.Row):
 
                     name = row["name"]
 
-                elif isinstance(
-                    row,
-                    dict
-                ):
+                elif isinstance(row, dict):
 
-                    name = row.get(
-                        "name"
-                    )
+                    name = row.get("name")
 
                 else:
 
-                    # PRAGMA table_info
-                    # cid, name, type...
                     name = row[1]
 
                 if name:
-
-                    columns.add(
-                        str(name)
-                    )
+                    columns.add(str(name))
 
             except Exception:
                 continue
@@ -254,13 +223,7 @@ def _ensure_column(
 # DB 마이그레이션
 # =========================================================
 
-def _migrate_database(
-    conn
-):
-
-    # -----------------------------------------------------
-    # matches
-    # -----------------------------------------------------
+def _migrate_database(conn):
 
     match_columns = _get_columns(
         conn,
@@ -269,72 +232,27 @@ def _migrate_database(
 
     if match_columns:
 
-        _ensure_column(
-            conn,
-            "matches",
-            "match_date",
-            "TEXT"
-        )
+        for column, column_type in [
 
-        _ensure_column(
-            conn,
-            "matches",
-            "home_team",
-            "TEXT"
-        )
+            ("match_date", "TEXT"),
+            ("home_team", "TEXT"),
+            ("away_team", "TEXT"),
+            ("home_score", "INTEGER"),
+            ("away_score", "INTEGER"),
+            ("result", "TEXT"),
+            ("source", "TEXT"),
+            ("created_at", "TEXT"),
+            ("updated_at", "TEXT"),
 
-        _ensure_column(
-            conn,
-            "matches",
-            "away_team",
-            "TEXT"
-        )
+        ]:
 
-        _ensure_column(
-            conn,
-            "matches",
-            "home_score",
-            "INTEGER"
-        )
+            _ensure_column(
+                conn,
+                "matches",
+                column,
+                column_type
+            )
 
-        _ensure_column(
-            conn,
-            "matches",
-            "away_score",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "matches",
-            "result",
-            "TEXT"
-        )
-
-        _ensure_column(
-            conn,
-            "matches",
-            "source",
-            "TEXT"
-        )
-
-        _ensure_column(
-            conn,
-            "matches",
-            "created_at",
-            "TEXT"
-        )
-
-        _ensure_column(
-            conn,
-            "matches",
-            "updated_at",
-            "TEXT"
-        )
-
-    # -----------------------------------------------------
-    # odds
-    # -----------------------------------------------------
 
     odds_columns = _get_columns(
         conn,
@@ -343,75 +261,27 @@ def _migrate_database(
 
     if odds_columns:
 
-        # 핵심 오류 수정
-        _ensure_column(
-            conn,
-            "odds",
-            "company_id",
-            "TEXT"
-        )
+        for column, column_type in [
 
-        _ensure_column(
-            conn,
-            "odds",
-            "bookmaker",
-            "TEXT"
-        )
+            ("company_id", "TEXT"),
+            ("bookmaker", "TEXT"),
+            ("home_odds", "REAL"),
+            ("draw_odds", "REAL"),
+            ("away_odds", "REAL"),
+            ("created_at", "TEXT"),
+            ("final_home", "REAL"),
+            ("final_draw", "REAL"),
+            ("final_away", "REAL"),
 
-        _ensure_column(
-            conn,
-            "odds",
-            "home_odds",
-            "REAL"
-        )
+        ]:
 
-        _ensure_column(
-            conn,
-            "odds",
-            "draw_odds",
-            "REAL"
-        )
+            _ensure_column(
+                conn,
+                "odds",
+                column,
+                column_type
+            )
 
-        _ensure_column(
-            conn,
-            "odds",
-            "away_odds",
-            "REAL"
-        )
-
-        _ensure_column(
-            conn,
-            "odds",
-            "created_at",
-            "TEXT"
-        )
-
-        # 예전 코드에서 사용했을 가능성이 있는
-        # final_* 컬럼도 유지
-        _ensure_column(
-            conn,
-            "odds",
-            "final_home",
-            "REAL"
-        )
-
-        _ensure_column(
-            conn,
-            "odds",
-            "final_draw",
-            "REAL"
-        )
-
-        _ensure_column(
-            conn,
-            "odds",
-            "final_away",
-            "REAL"
-        )
-
-    # -----------------------------------------------------
-    # collection_state
-    # -----------------------------------------------------
 
     state_columns = _get_columns(
         conn,
@@ -420,96 +290,30 @@ def _migrate_database(
 
     if state_columns:
 
-        _ensure_column(
-            conn,
-            "collection_state",
-            "start_id",
-            "INTEGER"
-        )
+        for column, column_type in [
 
-        _ensure_column(
-            conn,
-            "collection_state",
-            "end_id",
-            "INTEGER"
-        )
+            ("start_id", "INTEGER"),
+            ("end_id", "INTEGER"),
+            ("last_completed_id", "INTEGER"),
+            ("current", "INTEGER"),
+            ("total", "INTEGER"),
+            ("success", "INTEGER"),
+            ("exists_count", "INTEGER"),
+            ("failed", "INTEGER"),
+            ("odds", "INTEGER"),
+            ("running", "INTEGER"),
+            ("stopped", "INTEGER"),
+            ("finished", "INTEGER"),
+            ("updated_at", "TEXT"),
 
-        _ensure_column(
-            conn,
-            "collection_state",
-            "last_completed_id",
-            "INTEGER"
-        )
+        ]:
 
-        _ensure_column(
-            conn,
-            "collection_state",
-            "current",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "total",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "success",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "exists_count",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "failed",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "odds",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "running",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "stopped",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "finished",
-            "INTEGER"
-        )
-
-        _ensure_column(
-            conn,
-            "collection_state",
-            "updated_at",
-            "TEXT"
-        )
+            _ensure_column(
+                conn,
+                "collection_state",
+                column,
+                column_type
+            )
 
     try:
         conn.commit()
@@ -530,10 +334,6 @@ def init_database():
         try:
 
             cursor = conn.cursor()
-
-            # =================================================
-            # 경기
-            # =================================================
 
             cursor.execute(
                 """
@@ -564,9 +364,6 @@ def init_database():
                 """
             )
 
-            # =================================================
-            # 배당
-            # =================================================
 
             cursor.execute(
                 """
@@ -603,9 +400,6 @@ def init_database():
                 """
             )
 
-            # =================================================
-            # 수집 상태
-            # =================================================
 
             cursor.execute(
                 """
@@ -643,22 +437,15 @@ def init_database():
                 """
             )
 
+
             try:
                 conn.commit()
             except Exception:
                 pass
 
-            # =================================================
-            # 기존 DB 자동 마이그레이션
-            # =================================================
 
-            _migrate_database(
-                conn
-            )
+            _migrate_database(conn)
 
-            # =================================================
-            # 인덱스
-            # =================================================
 
             try:
 
@@ -811,9 +598,7 @@ def _execute(
 # 경기 저장
 # =========================================================
 
-def save_match(
-    match
-):
+def save_match(match):
 
     sql = """
         INSERT INTO matches (
@@ -873,34 +658,13 @@ def save_match(
                 )
             ),
 
-            match.get(
-                "match_date"
-            ),
-
-            match.get(
-                "home_team"
-            ),
-
-            match.get(
-                "away_team"
-            ),
-
-            match.get(
-                "home_score"
-            ),
-
-            match.get(
-                "away_score"
-            ),
-
-            match.get(
-                "result"
-            ),
-
-            match.get(
-                "source",
-                "scoreman"
-            )
+            match.get("match_date"),
+            match.get("home_team"),
+            match.get("away_team"),
+            match.get("home_score"),
+            match.get("away_score"),
+            match.get("result"),
+            match.get("source", "scoreman")
         )
     )
 
@@ -920,10 +684,7 @@ def save_match_with_odds(
 
         try:
 
-            # 혹시 기존 DB라면 여기서도 마이그레이션
-            _migrate_database(
-                conn
-            )
+            _migrate_database(conn)
 
             cursor = conn.cursor()
 
@@ -934,9 +695,6 @@ def save_match_with_odds(
                 )
             )
 
-            # -------------------------------------------------
-            # 경기 저장
-            # -------------------------------------------------
 
             cursor.execute(
                 """
@@ -990,46 +748,21 @@ def save_match_with_odds(
 
                     schedule_id,
 
-                    match.get(
-                        "match_date"
-                    ),
-
-                    match.get(
-                        "home_team"
-                    ),
-
-                    match.get(
-                        "away_team"
-                    ),
-
-                    match.get(
-                        "home_score"
-                    ),
-
-                    match.get(
-                        "away_score"
-                    ),
-
-                    match.get(
-                        "result"
-                    ),
-
-                    match.get(
-                        "source",
-                        "scoreman"
-                    )
+                    match.get("match_date"),
+                    match.get("home_team"),
+                    match.get("away_team"),
+                    match.get("home_score"),
+                    match.get("away_score"),
+                    match.get("result"),
+                    match.get("source", "scoreman")
                 )
             )
 
+
             saved = 0
 
-            # -------------------------------------------------
-            # 배당 저장
-            # -------------------------------------------------
 
-            for odds in (
-                odds_list or []
-            ):
+            for odds in odds_list or []:
 
                 bookmaker = str(
                     odds.get(
@@ -1044,32 +777,28 @@ def save_match_with_odds(
                 if not bookmaker:
                     continue
 
+
                 company_id = odds.get(
                     "company_id",
                     ""
                 )
 
-                # 숫자/문자 모두 안전하게 저장
+
                 final_home = odds.get(
                     "final_home",
-                    odds.get(
-                        "home_odds"
-                    )
+                    odds.get("home_odds")
                 )
 
                 final_draw = odds.get(
                     "final_draw",
-                    odds.get(
-                        "draw_odds"
-                    )
+                    odds.get("draw_odds")
                 )
 
                 final_away = odds.get(
                     "final_away",
-                    odds.get(
-                        "away_odds"
-                    )
+                    odds.get("away_odds")
                 )
+
 
                 cursor.execute(
                     """
@@ -1126,28 +855,24 @@ def save_match_with_odds(
                     (
 
                         schedule_id,
-
                         bookmaker,
-
                         company_id,
 
                         final_home,
-
                         final_draw,
-
                         final_away,
 
                         final_home,
-
                         final_draw,
-
                         final_away
                     )
                 )
 
                 saved += 1
 
+
             conn.commit()
+
 
             print(
                 f"[저장 완료] "
@@ -1161,6 +886,7 @@ def save_match_with_odds(
 
             return saved
 
+
         except Exception as e:
 
             try:
@@ -1171,6 +897,7 @@ def save_match_with_odds(
             raise RuntimeError(
                 f"SQLite error: {e}"
             ) from e
+
 
         finally:
 
@@ -1184,9 +911,7 @@ def save_match_with_odds(
 # 경기 조회
 # =========================================================
 
-def get_match(
-    schedule_id
-):
+def get_match(schedule_id):
 
     rows = _execute(
         """
@@ -1195,14 +920,11 @@ def get_match(
         WHERE schedule_id = ?
         LIMIT 1
         """,
-        (
-            str(schedule_id),
-        ),
+        (str(schedule_id),),
         fetch=True
     ) or []
 
     if rows:
-
         return rows[0]
 
     return None
@@ -1240,14 +962,10 @@ def get_match_count():
     ) or []
 
     if not rows:
-
         return 0
 
     return int(
-        rows[0].get(
-            "cnt",
-            0
-        ) or 0
+        rows[0].get("cnt", 0) or 0
     )
 
 
@@ -1287,9 +1005,7 @@ def get_all_odds():
 # 경기별 배당
 # =========================================================
 
-def get_odds_by_match(
-    schedule_id
-):
+def get_odds_by_match(schedule_id):
 
     return _execute(
         """
@@ -1313,9 +1029,7 @@ def get_odds_by_match(
 
         ORDER BY bookmaker
         """,
-        (
-            str(schedule_id),
-        ),
+        (str(schedule_id),),
         fetch=True
     ) or []
 
@@ -1324,9 +1038,7 @@ def get_odds_by_match(
 # 기존 app.py 호환
 # =========================================================
 
-def get_match_final_odds(
-    schedule_id
-):
+def get_match_final_odds(schedule_id):
 
     rows = get_odds_by_match(
         schedule_id
@@ -1353,25 +1065,19 @@ def get_match_final_odds(
             "final_home":
                 row.get(
                     "final_home",
-                    row.get(
-                        "home_odds"
-                    )
+                    row.get("home_odds")
                 ),
 
             "final_draw":
                 row.get(
                     "final_draw",
-                    row.get(
-                        "draw_odds"
-                    )
+                    row.get("draw_odds")
                 ),
 
             "final_away":
                 row.get(
                     "final_away",
-                    row.get(
-                        "away_odds"
-                    )
+                    row.get("away_odds")
                 )
         })
 
@@ -1393,14 +1099,10 @@ def get_odds_count():
     ) or []
 
     if not rows:
-
         return 0
 
     return int(
-        rows[0].get(
-            "cnt",
-            0
-        ) or 0
+        rows[0].get("cnt", 0) or 0
     )
 
 
@@ -1408,9 +1110,7 @@ def get_odds_count():
 # 경기별 배당 수
 # =========================================================
 
-def get_odds_count_by_match(
-    schedule_id
-):
+def get_odds_count_by_match(schedule_id):
 
     rows = _execute(
         """
@@ -1418,21 +1118,15 @@ def get_odds_count_by_match(
         FROM odds
         WHERE schedule_id = ?
         """,
-        (
-            str(schedule_id),
-        ),
+        (str(schedule_id),),
         fetch=True
     ) or []
 
     if not rows:
-
         return 0
 
     return int(
-        rows[0].get(
-            "cnt",
-            0
-        ) or 0
+        rows[0].get("cnt", 0) or 0
     )
 
 
@@ -1457,17 +1151,9 @@ def get_company_names():
     ) or []
 
     return [
-
-        row.get(
-            "bookmaker",
-            ""
-        )
-
+        row.get("bookmaker", "")
         for row in rows
-
-        if row.get(
-            "bookmaker"
-        )
+        if row.get("bookmaker")
     ]
 
 
@@ -1498,23 +1184,14 @@ def get_company_counts():
 
     return {
 
-        row.get(
-            "bookmaker",
-            ""
-        ):
-
+        row.get("bookmaker", ""):
         int(
-            row.get(
-                "cnt",
-                0
-            ) or 0
+            row.get("cnt", 0) or 0
         )
 
         for row in rows
 
-        if row.get(
-            "bookmaker"
-        )
+        if row.get("bookmaker")
     }
 
 
@@ -1553,12 +1230,7 @@ def get_storage_usage():
         if is_turso_connected():
 
             matches = get_match_count()
-
             odds = get_odds_count()
-
-            # Turso 화면에서 정확한 물리 용량을
-            # 이 방식으로 직접 가져오는 것이 아니므로
-            # 앱 내부에서는 논리 데이터 추정값 표시
 
             estimated_bytes = (
                 matches * 512
@@ -1568,16 +1240,13 @@ def get_storage_usage():
 
             size_mb = (
                 estimated_bytes
-                /
-                1024
-                /
-                1024
+                / 1024
+                / 1024
             )
 
             return {
 
-                "success":
-                    True,
+                "success": True,
 
                 "size_mb":
                     size_mb,
@@ -1594,10 +1263,8 @@ def get_storage_usage():
             LOCAL_DB_PATH
         ):
 
-            size_bytes = (
-                os.path.getsize(
-                    LOCAL_DB_PATH
-                )
+            size_bytes = os.path.getsize(
+                LOCAL_DB_PATH
             )
 
         else:
@@ -1607,17 +1274,14 @@ def get_storage_usage():
 
         size_mb = (
             size_bytes
-            /
-            1024
-            /
-            1024
+            / 1024
+            / 1024
         )
 
 
         return {
 
-            "success":
-                True,
+            "success": True,
 
             "size_mb":
                 size_mb,
@@ -1634,17 +1298,13 @@ def get_storage_usage():
 
         return {
 
-            "success":
-                False,
+            "success": False,
 
-            "size_mb":
-                0,
+            "size_mb": 0,
 
-            "size_gb":
-                0,
+            "size_gb": 0,
 
-            "message":
-                str(e)
+            "message": str(e)
         }
 
 
@@ -1658,24 +1318,13 @@ def save_collection_state(
 ):
 
     if state is None:
-
         state = {}
 
-
-    data = dict(
-        state
-    )
+    data = dict(state)
+    data.update(kwargs)
 
 
-    data.update(
-        kwargs
-    )
-
-
-    def val(
-        name,
-        default=None
-    ):
+    def val(name, default=None):
 
         return data.get(
             name,
@@ -1713,7 +1362,6 @@ def save_collection_state(
             1,
 
             ?, ?,
-
             ?,
 
             ?, ?, ?, ?, ?, ?,
@@ -1768,32 +1416,17 @@ def save_collection_state(
 
         (
 
-            val(
-                "start_id"
-            ),
+            val("start_id"),
 
-            val(
-                "end_id"
-            ),
+            val("end_id"),
 
-            val(
-                "last_completed_id"
-            ),
+            val("last_completed_id"),
 
-            val(
-                "current",
-                0
-            ),
+            val("current", 0),
 
-            val(
-                "total",
-                0
-            ),
+            val("total", 0),
 
-            val(
-                "success",
-                0
-            ),
+            val("success", 0),
 
             val(
                 "exists",
@@ -1803,15 +1436,9 @@ def save_collection_state(
                 )
             ),
 
-            val(
-                "failed",
-                0
-            ),
+            val("failed", 0),
 
-            val(
-                "odds",
-                0
-            ),
+            val("odds", 0),
 
             1 if val(
                 "running",
@@ -1851,7 +1478,6 @@ def get_collection_state():
 
 
     if not rows:
-
         return None
 
 
@@ -1869,27 +1495,18 @@ def get_collection_state():
         )
 
         try:
-
-            return int(
-                value or 0
-            )
-
+            return int(value or 0)
         except Exception:
-
             return default
 
 
     return {
 
         "start_id":
-            row.get(
-                "start_id"
-            ),
+            row.get("start_id"),
 
         "end_id":
-            row.get(
-                "end_id"
-            ),
+            row.get("end_id"),
 
         "last_completed_id":
             row.get(
@@ -1897,59 +1514,39 @@ def get_collection_state():
             ),
 
         "current":
-            integer(
-                "current"
-            ),
+            integer("current"),
 
         "total":
-            integer(
-                "total"
-            ),
+            integer("total"),
 
         "success":
-            integer(
-                "success"
-            ),
+            integer("success"),
 
         "exists":
-            integer(
-                "exists_count"
-            ),
+            integer("exists_count"),
 
         "exists_count":
-            integer(
-                "exists_count"
-            ),
+            integer("exists_count"),
 
         "failed":
-            integer(
-                "failed"
-            ),
+            integer("failed"),
 
         "odds":
-            integer(
-                "odds"
-            ),
+            integer("odds"),
 
         "running":
             bool(
-                integer(
-                    "running"
-                )
+                integer("running")
             ),
 
         "stopped":
             bool(
-                integer(
-                    "stopped"
-                )
+                integer("stopped")
             ),
 
         "finished":
             bool(
-                integer(
-                    "finished"
-                )
+                integer("finished")
             )
     }
 
