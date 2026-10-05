@@ -102,7 +102,10 @@ c3.metric(
     f"{status['bookmakers']:,}"
 )
 
-if database.TURSO_DATABASE_URL:
+if (
+    database.TURSO_DATABASE_URL
+    and database.TURSO_AUTH_TOKEN
+):
 
     c4.metric(
         "DB",
@@ -122,7 +125,7 @@ else:
 # =========================================================
 
 st.subheader(
-    "🗄️ DB 상태"
+    "🗄️ 데이터베이스 상태"
 )
 
 if (
@@ -130,9 +133,20 @@ if (
     and database.TURSO_AUTH_TOKEN
 ):
 
-    st.success(
-        "🟢 Turso 영구 DB 연결 설정됨"
-    )
+    db_test = database.test_database()
+
+    if db_test["success"]:
+
+        st.success(
+            "🟢 Turso DB 연결 정상"
+        )
+
+    else:
+
+        st.error(
+            "🔴 Turso 연결 실패: "
+            + db_test["message"]
+        )
 
 else:
 
@@ -151,8 +165,9 @@ st.subheader(
 )
 
 st.write(
-    "시작 ID와 마지막 ID를 입력하면 "
-    "백그라운드에서 경기와 최종배당을 수집합니다."
+    "시작 ID와 마지막 ID를 입력한 뒤 "
+    "수집 시작 버튼을 누르면 "
+    "백그라운드에서 수집합니다."
 )
 
 
@@ -172,7 +187,7 @@ with col2:
     end_id = st.number_input(
         "마지막 경기 ID",
         min_value=1,
-        value=3001120,
+        value=3001118,
         step=1
     )
 
@@ -202,7 +217,6 @@ mode = st.radio(
     horizontal=True
 )
 
-
 companies = analysis.get_company_list()
 
 
@@ -218,12 +232,15 @@ else:
     selected = None
 
 
-st.info(
-    "전체 업체 자동수집을 선택하면 "
-    "Scoreman 배당 API에서 확인되는 업체의 "
-    "최종배당을 저장합니다."
+st.success(
+    "✅ Scoreman에서 제공하는 업체의 "
+    "최종배당을 자동으로 수집합니다."
 )
 
+
+# =========================================================
+# 요청 간격
+# =========================================================
 
 delay = st.number_input(
     "요청 간격(초)",
@@ -235,7 +252,7 @@ delay = st.number_input(
 
 
 # =========================================================
-# 시작 / 중지
+# 버튼
 # =========================================================
 
 b1, b2 = st.columns(2)
@@ -304,7 +321,7 @@ with b2:
         else:
 
             st.info(
-                "실행 중인 수집 작업이 없습니다."
+                "현재 실행 중인 수집 작업이 없습니다."
             )
 
 
@@ -332,8 +349,8 @@ if job["running"]:
 
     st.progress(
         min(
-            max(progress, 0),
-            1
+            progress,
+            1.0
         )
     )
 
@@ -351,8 +368,8 @@ if job["running"]:
     )
 
     c.metric(
-        "실패/배당없음",
-        f"{job['failed']:,}"
+        "기존",
+        f"{job['exists']:,}"
     )
 
     d.metric(
@@ -360,17 +377,10 @@ if job["running"]:
         f"{job['odds']:,}"
     )
 
-    if job["last_completed_id"]:
-
-        st.caption(
-            "마지막 저장 경기 ID: "
-            f"{job['last_completed_id']:,}"
-        )
-
     st.text_area(
         "수집 로그",
         job["log"],
-        height=350
+        height=300
     )
 
     time.sleep(1)
@@ -401,19 +411,13 @@ elif job["finished"]:
         )
 
         c.metric(
-            "실패/배당없음",
-            f"{r['failed']:,}"
+            "기존",
+            f"{r['exists']:,}"
         )
 
         d.metric(
             "최종배당",
             f"{r['odds']:,}"
-        )
-
-    if job["stopped"]:
-
-        st.warning(
-            "수집이 중지되었습니다."
         )
 
     if job["error"]:
@@ -425,12 +429,12 @@ elif job["finished"]:
     st.text_area(
         "로그",
         job["log"],
-        height=300
+        height=250
     )
 
 
 # =========================================================
-# 저장 경기
+# 저장된 경기
 # =========================================================
 
 st.subheader(
@@ -456,12 +460,18 @@ else:
 
 
 # =========================================================
-# 경기 조회
+# 경기별 최종배당
 # =========================================================
 
 st.subheader(
     "📱 경기별 최종배당 확인"
 )
+
+st.write(
+    "경기 ID를 입력하면 해당 경기의 "
+    "저장된 해외업체 최종배당을 확인할 수 있습니다."
+)
+
 
 lookup_id = st.number_input(
     "경기 ID",
@@ -541,6 +551,15 @@ if st.button(
                         {match.get("result", "")}
                     </b>
 
+                    <br>
+
+                    스코어:
+                    <b>
+                        {match.get("home_score", "")}
+                        :
+                        {match.get("away_score", "")}
+                    </b>
+
                 </div>
 
             </div>
@@ -555,7 +574,8 @@ if st.button(
         if not odds:
 
             st.error(
-                "❌ 저장된 최종배당이 없습니다."
+                "❌ 이 경기에는 저장된 "
+                "최종배당이 없습니다."
             )
 
         else:
@@ -574,14 +594,17 @@ if st.button(
                     "업체":
                         row["bookmaker"],
 
+                    "업체ID":
+                        row["company_id"],
+
                     "홈":
-                        row["final_home"],
+                        row["home_odds"],
 
                     "무":
-                        row["final_draw"],
+                        row["draw_odds"],
 
                     "원정":
-                        row["final_away"]
+                        row["away_odds"]
                 })
 
             st.dataframe(
@@ -592,7 +615,7 @@ if st.button(
 
 
 # =========================================================
-# 분석
+# 배당 분석
 # =========================================================
 
 st.subheader(
@@ -770,4 +793,11 @@ if analysis_companies:
                     result["results"],
                     use_container_width=True,
                     hide_index=True
-    )
+                )
+
+            else:
+
+                st.info(
+                    "입력한 배당과 일치하는 "
+                    "저장 경기가 없습니다."
+)
