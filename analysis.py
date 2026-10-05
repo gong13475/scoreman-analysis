@@ -6,39 +6,42 @@ import database
 # =========================================================
 
 def get_company_list():
-    return database.get_company_names()
+    return database.get_company_names() or []
 
 
 # =========================================================
-# 배당 → 확률
+# 배당 → 정규화 확률
 # =========================================================
 
-def odds_to_probability(
-    home,
-    draw,
-    away
-):
-    home = float(home)
-    draw = float(draw)
-    away = float(away)
+def odds_to_probability(home, draw, away):
+    try:
+        home = float(home)
+        draw = float(draw)
+        away = float(away)
+    except Exception:
+        return {
+            "home": 0.0,
+            "draw": 0.0,
+            "away": 0.0
+        }
 
     if home <= 0 or draw <= 0 or away <= 0:
         return {
-            "home": 0,
-            "draw": 0,
-            "away": 0
+            "home": 0.0,
+            "draw": 0.0,
+            "away": 0.0
         }
 
-    raw_h = 1 / home
-    raw_d = 1 / draw
-    raw_a = 1 / away
+    raw_home = 1.0 / home
+    raw_draw = 1.0 / draw
+    raw_away = 1.0 / away
 
-    total = raw_h + raw_d + raw_a
+    total = raw_home + raw_draw + raw_away
 
     return {
-        "home": raw_h / total * 100,
-        "draw": raw_d / total * 100,
-        "away": raw_a / total * 100
+        "home": raw_home / total * 100,
+        "draw": raw_draw / total * 100,
+        "away": raw_away / total * 100
     }
 
 
@@ -67,46 +70,58 @@ def run_search(
             "statistics": None
         }
 
-    # 여러 업체를 입력하면
-    # 각 업체의 조건을 OR 검색
     all_results = []
 
     for company in companies:
+
         value = odds_input.get(company)
 
         if not value:
             continue
 
-        rows = database.search_odds(
-            value["home"],
-            value["draw"],
-            value["away"],
-            companies=[company],
-            tolerance=tolerance
-        )
+        try:
+            rows = database.search_odds(
+                value["home"],
+                value["draw"],
+                value["away"],
+                companies=[company],
+                tolerance=tolerance
+            ) or []
+
+        except Exception:
+            rows = []
 
         for row in rows:
-            row["검색업체"] = company
-            all_results.append(row)
 
-    # 중복 경기/업체 제거
+            item = dict(row)
+
+            item["검색업체"] = company
+
+            all_results.append(item)
+
+    # 경기 + 업체 중복 제거
     unique = {}
 
     for row in all_results:
+
         key = (
-            str(row["schedule_id"]),
-            str(row["bookmaker"])
+            str(row.get("schedule_id", "")),
+            str(row.get("bookmaker", ""))
         )
 
         unique[key] = row
 
-    results = list(
-        unique.values()
+    results = list(unique.values())
+
+    # 날짜순
+    results.sort(
+        key=lambda x: str(
+            x.get("match_date", "")
+        ),
+        reverse=True
     )
 
-    statistics = calculate_statistics(
-        results
-    )
+    statistics = calculate_statistics(results)
 
     return {
         "success": True,
@@ -121,46 +136,58 @@ def run_search(
 # =========================================================
 
 def calculate_statistics(results):
+
     if not results:
         return None
 
     total = len(results)
 
-    home_count = sum(
-        1
-        for x in results
-        if x.get("result") == "승"
-    )
+    home_count = 0
+    draw_count = 0
+    away_count = 0
 
-    draw_count = sum(
-        1
-        for x in results
-        if x.get("result") == "무"
-    )
+    for row in results:
 
-    away_count = sum(
-        1
-        for x in results
-        if x.get("result") == "패"
-    )
+        result = str(
+            row.get("result", "")
+        ).strip()
+
+        if result == "승":
+            home_count += 1
+
+        elif result == "무":
+            draw_count += 1
+
+        elif result == "패":
+            away_count += 1
 
     actual = {
-        "home": home_count / total * 100,
-        "draw": draw_count / total * 100,
-        "away": away_count / total * 100
+        "home":
+            home_count / total * 100,
+
+        "draw":
+            draw_count / total * 100,
+
+        "away":
+            away_count / total * 100
     }
 
-    # 검색된 실제 배당의 평균 내재확률
+    # -----------------------------------------------------
+    # 검색된 실제 배당의 평균 확률
+    # -----------------------------------------------------
+
     p_home = []
     p_draw = []
     p_away = []
 
     for row in results:
+
         try:
+
             p = odds_to_probability(
-                row["home_odds"],
-                row["draw_odds"],
-                row["away_odds"]
+                row.get("home_odds"),
+                row.get("draw_odds"),
+                row.get("away_odds")
             )
 
             p_home.append(p["home"])
@@ -168,9 +195,10 @@ def calculate_statistics(results):
             p_away.append(p["away"])
 
         except Exception:
-            pass
+            continue
 
     if p_home:
+
         probability = {
             "home":
                 sum(p_home) / len(p_home),
@@ -181,11 +209,13 @@ def calculate_statistics(results):
             "away":
                 sum(p_away) / len(p_away)
         }
+
     else:
+
         probability = {
-            "home": 0,
-            "draw": 0,
-            "away": 0
+            "home": 0.0,
+            "draw": 0.0,
+            "away": 0.0
         }
 
     shortage = {
@@ -215,14 +245,21 @@ def calculate_statistics(results):
 # =========================================================
 
 def get_highest_shortage(stats):
+
     if not stats:
         return ""
 
-    values = stats["shortage"]
+    shortage = stats.get(
+        "shortage",
+        {}
+    )
+
+    if not shortage:
+        return ""
 
     key = max(
-        values,
-        key=lambda x: values[x]
+        shortage,
+        key=shortage.get
     )
 
     names = {
@@ -231,4 +268,7 @@ def get_highest_shortage(stats):
         "away": "패"
     }
 
-    return names[key]
+    return names.get(
+        key,
+        ""
+    )
