@@ -18,6 +18,11 @@ st.set_page_config(
     layout="wide"
 )
 
+
+# =========================================================
+# DB 초기화
+# =========================================================
+
 database.init_database()
 
 
@@ -103,6 +108,7 @@ except Exception as e:
 
 c1, c2, c3, c4 = st.columns(4)
 
+
 c1.metric(
     "저장 경기",
     f"{status.get('matches', 0):,}"
@@ -117,6 +123,7 @@ c3.metric(
     "실제 저장 업체",
     f"{status.get('bookmakers', 0):,}"
 )
+
 
 if database._use_turso():
 
@@ -134,17 +141,23 @@ else:
 
 
 # =========================================================
-# 데이터베이스 상태
+# DB 상태
 # =========================================================
 
 st.subheader(
     "🗄️ 데이터베이스 상태"
 )
 
+
 if database._use_turso():
 
     st.success(
         "🟢 Turso DB 연결 정상"
+    )
+
+    st.caption(
+        "현재 앱은 Turso DB에 연결되어 "
+        "데이터를 저장하고 있습니다."
     )
 
 else:
@@ -155,8 +168,63 @@ else:
 
     st.caption(
         "TURSO_DATABASE_URL / "
-        "TURSO_AUTH_TOKEN 환경변수를 설정하면 "
-        "Turso를 사용합니다."
+        "TURSO_AUTH_TOKEN이 없거나 "
+        "libsql 연결 모듈을 사용할 수 없어 "
+        "SQLite로 동작하고 있습니다."
+    )
+
+
+# =========================================================
+# DB 상세 정보
+# =========================================================
+
+try:
+
+    db_info = database.get_database_info()
+
+except Exception:
+
+    db_info = {}
+
+
+with st.expander(
+    "🔧 DB 연결 상세정보"
+):
+
+    st.write(
+        "Turso URL 설정:",
+        "✅"
+        if db_info.get(
+            "database_url_configured"
+        )
+        else "❌"
+    )
+
+    st.write(
+        "Turso Token 설정:",
+        "✅"
+        if db_info.get(
+            "auth_token_configured"
+        )
+        else "❌"
+    )
+
+    st.write(
+        "libSQL 모듈:",
+        "✅"
+        if db_info.get(
+            "libsql_available"
+        )
+        else "❌"
+    )
+
+    st.write(
+        "현재 사용 DB:",
+        "Turso"
+        if db_info.get(
+            "using_turso"
+        )
+        else "SQLite"
     )
 
 
@@ -168,6 +236,7 @@ st.subheader(
     "💾 DB 저장 용량"
 )
 
+
 try:
 
     usage = database.get_storage_usage()
@@ -176,69 +245,51 @@ except Exception as e:
 
     usage = {
         "success": False,
-        "is_turso": False,
-        "storage_type": "확인 불가",
         "size_mb": 0,
         "size_gb": 0,
-        "message": str(e)
+        "storage_type": "SQLite",
+        "error": str(e)
     }
 
 
 if usage.get("success"):
 
-    # -----------------------------------------------------
-    # Turso
-    # -----------------------------------------------------
+    u1, u2 = st.columns(2)
 
-    if usage.get("is_turso"):
+    u1.metric(
+        "현재 DB 저장 크기",
+        f"{usage.get('size_mb', 0):.2f} MB"
+    )
 
-        u1, u2 = st.columns(2)
-
-        u1.metric(
-            "DB 연결",
-            "🟢 Turso"
+    u2.metric(
+        "저장 방식",
+        usage.get(
+            "storage_type",
+            "SQLite"
         )
+    )
 
-        u2.metric(
-            "로컬 SQLite",
-            "사용량 아님"
-        )
 
-        st.success(
-            "🟢 현재 데이터 저장 DB는 Turso입니다."
+    if usage.get(
+        "storage_type"
+    ) == "Turso":
+
+        st.caption(
+            "현재 표시되는 크기는 연결된 "
+            "Turso DB의 논리적 저장 크기입니다."
         )
 
         st.info(
-            "Turso 실제 저장 용량과 무료 플랜 "
-            "사용량/남은 한도는 Turso 콘솔에서 "
-            "확인해야 합니다."
+            "ℹ️ Turso 무료 플랜의 전체 사용량과 "
+            "남은 무료 한도는 이 값과 다를 수 있습니다. "
+            "무료 플랜 전체 사용량/남은 한도는 "
+            "Turso 콘솔에서 확인하세요."
         )
-
-        st.caption(
-            "※ 로컬 scoreman.db 파일 크기는 "
-            "Turso 사용량으로 표시하지 않습니다."
-        )
-
-    # -----------------------------------------------------
-    # SQLite
-    # -----------------------------------------------------
 
     else:
 
-        u1, u2 = st.columns(2)
-
-        u1.metric(
-            "현재 DB 저장 크기",
-            f"{usage.get('size_mb', 0):.2f} MB"
-        )
-
-        u2.metric(
-            "저장 방식",
-            "SQLite"
-        )
-
         st.caption(
-            f"현재 SQLite DB 저장 크기: "
+            "현재 SQLite DB 저장 크기: "
             f"{usage.get('size_gb', 0):.4f} GB"
         )
 
@@ -248,10 +299,10 @@ else:
         "DB 저장 용량을 확인할 수 없습니다."
     )
 
-    if usage.get("message"):
+    if usage.get("error"):
 
         st.caption(
-            str(usage.get("message"))
+            usage.get("error")
         )
 
 
@@ -262,6 +313,7 @@ else:
 st.subheader(
     "🏢 업체별 저장 경기 수"
 )
+
 
 try:
 
@@ -303,9 +355,11 @@ else:
 
 state = database.get_collection_state()
 
+
 last_id = state.get(
     "last_completed_id"
 )
+
 
 try:
 
@@ -327,6 +381,7 @@ saved_start = state.get(
 saved_end = state.get(
     "end_id"
 )
+
 
 try:
 
@@ -362,6 +417,7 @@ st.subheader(
     "📥 Scoreman 경기 ID 구간 자동수집"
 )
 
+
 col1, col2 = st.columns(2)
 
 
@@ -369,7 +425,8 @@ with col1:
 
     default_start = (
         saved_start
-        if saved_start and saved_start > 0
+        if saved_start
+        and saved_start > 0
         else 3001118
     )
 
@@ -385,7 +442,8 @@ with col2:
 
     default_end = (
         saved_end
-        if saved_end and saved_end >= start_id
+        if saved_end
+        and saved_end >= start_id
         else start_id
     )
 
@@ -435,12 +493,13 @@ else:
 
 
 # =========================================================
-# 업체
+# 수집 업체
 # =========================================================
 
 st.subheader(
     "🏢 수집 업체"
 )
+
 
 try:
 
@@ -467,9 +526,10 @@ mode = st.radio(
 if mode == "특정 업체만 수집":
 
     selected = st.multiselect(
-        "업체 선택",
+        "🏢 업체 선택",
         companies,
-        key="collector_companies"
+        key="collector_companies",
+        placeholder="수집할 업체를 선택하세요"
     )
 
 else:
@@ -634,11 +694,13 @@ if job.get("running"):
     )
 
     total = int(
-        job.get("total", 0) or 0
+        job.get("total", 0)
+        or 0
     )
 
     current = int(
-        job.get("current", 0) or 0
+        job.get("current", 0)
+        or 0
     )
 
     progress = (
@@ -685,6 +747,7 @@ if job.get("running"):
         f"{int(job.get('odds', 0) or 0):,}"
     )
 
+
     current_last = job.get(
         "last_completed_id"
     )
@@ -696,6 +759,7 @@ if job.get("running"):
             f"{int(current_last):,}"
         )
 
+
     if (
         "show_collection_log"
         not in st.session_state
@@ -705,13 +769,15 @@ if job.get("running"):
             "show_collection_log"
         ] = False
 
+
     if st.button(
         (
             "📝 로그 보기"
             if not st.session_state[
                 "show_collection_log"
             ]
-            else "🙈 로그 숨기기"
+            else
+            "🙈 로그 숨기기"
         ),
         key="running_log"
     ):
@@ -722,6 +788,7 @@ if job.get("running"):
             "show_collection_log"
         ]
 
+
     if st.session_state[
         "show_collection_log"
     ]:
@@ -731,6 +798,7 @@ if job.get("running"):
             job.get("log", ""),
             height=300
         )
+
 
     time.sleep(1)
 
@@ -747,19 +815,23 @@ elif job.get("finished"):
         "✅ 마지막 수집 결과"
     )
 
+
     if job.get("stopped"):
 
         st.warning(
             "🛑 수집이 중지되었습니다."
         )
 
+
     result = job.get(
         "result"
     )
 
+
     if result:
 
         a, b, c, d, e = st.columns(5)
+
 
         a.metric(
             "전체",
@@ -786,14 +858,17 @@ elif job.get("finished"):
             f"{int(result.get('no_odds', 0)):,}"
         )
 
+
         st.metric(
             "최종배당",
             f"{int(result.get('odds', 0)):,}"
         )
 
+
     finished_last = job.get(
         "last_completed_id"
     )
+
 
     if finished_last:
 
@@ -802,11 +877,13 @@ elif job.get("finished"):
             f"{int(finished_last):,}"
         )
 
+
     if job.get("error"):
 
         st.error(
             job.get("error")
         )
+
 
     if (
         "show_finished_log"
@@ -817,13 +894,15 @@ elif job.get("finished"):
             "show_finished_log"
         ] = False
 
+
     if st.button(
         (
             "📝 로그 보기"
             if not st.session_state[
                 "show_finished_log"
             ]
-            else "🙈 로그 숨기기"
+            else
+            "🙈 로그 숨기기"
         ),
         key="finished_log"
     ):
@@ -833,6 +912,7 @@ elif job.get("finished"):
         ] = not st.session_state[
             "show_finished_log"
         ]
+
 
     if st.session_state[
         "show_finished_log"
@@ -846,7 +926,7 @@ elif job.get("finished"):
 
 
 # =========================================================
-# 저장된 경기
+# 저장된 경기 전체 조회
 # =========================================================
 
 st.divider()
@@ -854,6 +934,7 @@ st.divider()
 st.subheader(
     "📋 저장된 경기 전체 조회"
 )
+
 
 try:
 
@@ -894,6 +975,7 @@ st.subheader(
     "🔎 경기별 최종배당 조회"
 )
 
+
 lookup_id = st.number_input(
     "경기 ID",
     min_value=1,
@@ -916,6 +998,7 @@ if st.button(
         lookup_id
     )
 
+
     if not match:
 
         st.error(
@@ -927,6 +1010,7 @@ if st.button(
         st.success(
             "⚽ 경기 정보를 찾았습니다."
         )
+
 
         st.markdown(
             f"""
@@ -986,12 +1070,14 @@ if st.button(
             unsafe_allow_html=True
         )
 
+
         odds = (
             database.get_odds_by_match(
                 lookup_id
             )
             or []
         )
+
 
         if not odds:
 
@@ -1005,6 +1091,7 @@ if st.button(
                 f"저장된 최종배당 "
                 f"{len(odds)}개"
             )
+
 
             st.dataframe(
                 [
@@ -1046,15 +1133,16 @@ st.subheader(
 )
 
 
-# =========================================================
-# 업체 선택
-# =========================================================
+st.markdown(
+    "### 🏢 분석 업체 선택"
+)
+
 
 analysis_companies = st.multiselect(
-    "🏢 분석 업체",
+    "분석 업체",
     companies,
     key="analysis_companies",
-    placeholder="업체를 선택하세요"
+    placeholder="분석할 업체를 선택하세요"
 )
 
 
@@ -1062,13 +1150,16 @@ if analysis_companies:
 
     odds_input = {}
 
+
     for company in analysis_companies:
 
         st.markdown(
             f"### 🏢 {company}"
         )
 
+
         a, b, c = st.columns(3)
+
 
         with a:
 
@@ -1081,6 +1172,7 @@ if analysis_companies:
                 key=f"{company}_h"
             )
 
+
         with b:
 
             d = st.number_input(
@@ -1091,6 +1183,7 @@ if analysis_companies:
                 format="%.2f",
                 key=f"{company}_d"
             )
+
 
         with c:
 
@@ -1103,16 +1196,13 @@ if analysis_companies:
                 key=f"{company}_a"
             )
 
+
         odds_input[company] = {
             "home": h,
             "draw": d,
             "away": aw
         }
 
-
-    # =====================================================
-    # 검색
-    # =====================================================
 
     if st.button(
         "🔎 검색",
@@ -1136,9 +1226,11 @@ if analysis_companies:
                 "statistics": None
             }
 
+
         st.session_state[
             "analysis_result"
         ] = result
+
 
         if not result.get(
             "success",
@@ -1163,10 +1255,12 @@ if analysis_companies:
                 "statistics"
             )
 
+
             st.success(
                 f"검색 경기: "
                 f"{len(results):,}개"
             )
+
 
             if stats:
 
@@ -1185,74 +1279,91 @@ if analysis_companies:
                     {}
                 )
 
+
                 st.write(
                     "### 실제 결과 확률"
                 )
 
+
                 a, b, c = st.columns(3)
+
 
                 a.metric(
                     "실제 승률",
                     f"{actual.get('home', 0):.2f}%"
                 )
 
+
                 b.metric(
                     "실제 무승률",
                     f"{actual.get('draw', 0):.2f}%"
                 )
+
 
                 c.metric(
                     "실제 패율",
                     f"{actual.get('away', 0):.2f}%"
                 )
 
+
                 st.write(
                     "### 배당 기반 확률"
                 )
 
+
                 a, b, c = st.columns(3)
+
 
                 a.metric(
                     "승",
                     f"{probability.get('home', 0):.2f}%"
                 )
 
+
                 b.metric(
                     "무",
                     f"{probability.get('draw', 0):.2f}%"
                 )
+
 
                 c.metric(
                     "패",
                     f"{probability.get('away', 0):.2f}%"
                 )
 
+
                 st.write(
                     "### 실제 결과 - 배당 확률"
                 )
 
+
                 a, b, c = st.columns(3)
+
 
                 a.metric(
                     "승",
                     f"{shortage.get('home', 0):+.2f}%"
                 )
 
+
                 b.metric(
                     "무",
                     f"{shortage.get('draw', 0):+.2f}%"
                 )
+
 
                 c.metric(
                     "패",
                     f"{shortage.get('away', 0):+.2f}%"
                 )
 
+
                 highest = (
                     analysis.get_highest_shortage(
                         stats
                     )
                 )
+
 
                 if highest:
 
@@ -1261,11 +1372,13 @@ if analysis_companies:
                         + highest
                     )
 
+
             if results:
 
                 st.write(
                     "### 📋 검색 결과"
                 )
+
 
                 st.dataframe(
                     [
@@ -1333,6 +1446,7 @@ if analysis_companies:
                     "조건에 맞는 경기가 없습니다."
                 )
 
+
 else:
 
     st.info(
@@ -1341,7 +1455,7 @@ else:
 
 
 # =========================================================
-# 음성 배당 입력 / 결과 듣기
+# 음성 배당 입력
 # =========================================================
 
 st.divider()
@@ -1349,6 +1463,7 @@ st.divider()
 st.subheader(
     "🎙️ 음성 배당 입력 / 결과 듣기"
 )
+
 
 st.caption(
     "폰에서 🎤 말하기 버튼을 누르고 "
@@ -1363,7 +1478,10 @@ st.caption(
 
 try:
 
-    from streamlit_mic_recorder import mic_recorder
+    from streamlit_mic_recorder import (
+        mic_recorder
+    )
+
 
     audio = mic_recorder(
         start_prompt="🎤 말하기",
@@ -1373,11 +1491,13 @@ try:
         key="odds_voice"
     )
 
+
     if audio:
 
         st.success(
             "🎤 음성이 입력되었습니다."
         )
+
 
         st.audio(
             audio["bytes"],
@@ -1392,9 +1512,17 @@ except ImportError:
         "streamlit-mic-recorder를 설치하세요."
     )
 
+
     st.code(
         "pip install streamlit-mic-recorder",
         language="bash"
+    )
+
+
+except Exception as e:
+
+    st.error(
+        f"마이크 기능 오류: {e}"
     )
 
 
@@ -1412,6 +1540,7 @@ if st.button(
         "analysis_result"
     )
 
+
     if not saved_result:
 
         st.warning(
@@ -1423,6 +1552,7 @@ if st.button(
         stats = saved_result.get(
             "statistics"
         )
+
 
         if not stats:
 
@@ -1447,11 +1577,13 @@ if st.button(
                 {}
             )
 
+
             highest = (
                 analysis.get_highest_shortage(
                     stats
                 )
             )
+
 
             speech_text = (
                 "배당 분석 결과입니다. "
@@ -1480,6 +1612,7 @@ if st.button(
                 f"패 {shortage.get('away', 0):+.1f} 퍼센트입니다. "
             )
 
+
             if highest:
 
                 speech_text += (
@@ -1487,9 +1620,11 @@ if st.button(
                     f"{highest}입니다."
                 )
 
+
             encoded = base64.b64encode(
                 speech_text.encode("utf-8")
             ).decode("ascii")
+
 
             st.markdown(
                 f"""
@@ -1510,6 +1645,7 @@ if st.button(
                         new TextDecoder(
                             "utf-8"
                         ).decode(bytes);
+
 
                     if (
                         "speechSynthesis"
@@ -1552,6 +1688,7 @@ if st.button(
 # =========================================================
 
 st.divider()
+
 
 if st.button(
     "🔄 화면 새로고침",
