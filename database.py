@@ -1,10 +1,11 @@
 import os
 import sqlite3
 import threading
+from typing import Any, Dict, List, Optional
 
 
 # =========================================================
-# 환경설정
+# 설정
 # =========================================================
 
 TURSO_DATABASE_URL = os.getenv(
@@ -22,7 +23,6 @@ LOCAL_DB_PATH = os.getenv(
     "scoreman.db"
 )
 
-
 _DB_LOCK = threading.RLock()
 
 
@@ -31,7 +31,6 @@ _DB_LOCK = threading.RLock()
 # =========================================================
 
 def _get_turso_connection():
-
     if not TURSO_DATABASE_URL:
         return None
 
@@ -44,14 +43,10 @@ def _get_turso_connection():
         return None
 
     try:
-
-        conn = libsql.connect(
+        return libsql.connect(
             TURSO_DATABASE_URL,
             auth_token=TURSO_AUTH_TOKEN
         )
-
-        return conn
-
     except Exception:
         return None
 
@@ -79,72 +74,7 @@ def _get_connection():
 
 
 # =========================================================
-# Row 안전 변환
-# =========================================================
-
-def _row_to_dict(row, description=None):
-
-    if row is None:
-        return None
-
-    if isinstance(row, dict):
-        return dict(row)
-
-    try:
-        return dict(row)
-    except Exception:
-        pass
-
-    if description:
-
-        try:
-
-            columns = [
-                item[0]
-                for item in description
-            ]
-
-            return dict(
-                zip(columns, row)
-            )
-
-        except Exception:
-            pass
-
-    try:
-
-        return {
-            str(i): value
-            for i, value in enumerate(row)
-        }
-
-    except Exception:
-
-        return {}
-
-
-# =========================================================
-# 여러 Row 안전 변환
-# =========================================================
-
-def _rows_to_dicts(rows, description=None):
-
-    result = []
-
-    for row in rows or []:
-
-        result.append(
-            _row_to_dict(
-                row,
-                description
-            )
-        )
-
-    return result
-
-
-# =========================================================
-# SQL 실행
+# 실행
 # =========================================================
 
 def _execute(
@@ -163,47 +93,55 @@ def _execute(
             cursor = conn.cursor()
 
             if many:
-
                 cursor.executemany(
                     sql,
                     params
                 )
-
             else:
-
                 cursor.execute(
                     sql,
                     params
                 )
 
+            result = None
+
             if fetch:
 
                 rows = cursor.fetchall()
 
-                result = _rows_to_dicts(
-                    rows,
-                    getattr(
-                        cursor,
-                        "description",
-                        None
-                    )
-                )
+                result = []
 
-            else:
+                for row in rows:
 
-                result = None
+                    if isinstance(row, dict):
+                        result.append(dict(row))
+                    else:
+                        try:
+                            result.append(
+                                dict(row)
+                            )
+                        except Exception:
+
+                            result.append(
+                                {
+                                    str(
+                                        cursor.description[i][0]
+                                    ): value
+                                    for i, value
+                                    in enumerate(row)
+                                }
+                            )
 
             conn.commit()
 
             return result
 
         finally:
-
             conn.close()
 
 
 # =========================================================
-# DB 초기화
+# 초기화
 # =========================================================
 
 def init_database():
@@ -240,11 +178,9 @@ def init_database():
 
                     source TEXT DEFAULT 'scoreman',
 
-                    created_at TEXT
-                        DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
-                    updated_at TEXT
-                        DEFAULT CURRENT_TIMESTAMP
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
@@ -271,13 +207,49 @@ def init_database():
 
                     away_odds REAL,
 
-                    created_at TEXT
-                        DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
-                    UNIQUE (
+                    UNIQUE(
                         schedule_id,
                         bookmaker
                     )
+                )
+                """
+            )
+
+            # -------------------------------------------------
+            # 작업 상태
+            # -------------------------------------------------
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS collection_state (
+
+                    id INTEGER PRIMARY KEY,
+
+                    start_id INTEGER,
+
+                    end_id INTEGER,
+
+                    current_id INTEGER,
+
+                    last_completed_id INTEGER,
+
+                    status TEXT,
+
+                    selected_companies TEXT,
+
+                    total INTEGER DEFAULT 0,
+
+                    success INTEGER DEFAULT 0,
+
+                    exists_count INTEGER DEFAULT 0,
+
+                    failed INTEGER DEFAULT 0,
+
+                    odds INTEGER DEFAULT 0,
+
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
@@ -302,14 +274,6 @@ def init_database():
                 """
             )
 
-            cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_matches_date
-                ON matches(match_date)
-                """
-            )
-
             conn.commit()
 
         finally:
@@ -325,17 +289,8 @@ def init_database():
 
 def save_match(match):
 
-    schedule_id = str(
-        match.get(
-            "schedule_id",
-            ""
-        )
-    ).strip()
-
-    if not schedule_id:
-        return False
-
-    sql = """
+    _execute(
+        """
         INSERT INTO matches (
 
             schedule_id,
@@ -353,58 +308,30 @@ def save_match(match):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 
         ON CONFLICT(schedule_id)
+
         DO UPDATE SET
 
-            match_date =
-                excluded.match_date,
+            match_date = excluded.match_date,
+            home_team = excluded.home_team,
+            away_team = excluded.away_team,
+            home_score = excluded.home_score,
+            away_score = excluded.away_score,
+            result = excluded.result,
+            source = excluded.source,
+            updated_at = CURRENT_TIMESTAMP
+        """,
 
-            home_team =
-                excluded.home_team,
-
-            away_team =
-                excluded.away_team,
-
-            home_score =
-                excluded.home_score,
-
-            away_score =
-                excluded.away_score,
-
-            result =
-                excluded.result,
-
-            source =
-                excluded.source,
-
-            updated_at =
-                CURRENT_TIMESTAMP
-    """
-
-    _execute(
-        sql,
         (
-            schedule_id,
-
+            str(match.get("schedule_id")),
             match.get("match_date"),
-
             match.get("home_team"),
-
             match.get("away_team"),
-
             match.get("home_score"),
-
             match.get("away_score"),
-
             match.get("result"),
-
-            match.get(
-                "source",
-                "scoreman"
-            )
+            match.get("source", "scoreman")
         )
     )
-
-    return True
 
 
 # =========================================================
@@ -424,20 +351,7 @@ def save_match_with_odds(
 
             cursor = conn.cursor()
 
-            # -------------------------------------------------
             # 경기
-            # -------------------------------------------------
-
-            schedule_id = str(
-                match.get(
-                    "schedule_id",
-                    ""
-                )
-            ).strip()
-
-            if not schedule_id:
-                return 0
-
             cursor.execute(
                 """
                 INSERT INTO matches (
@@ -457,61 +371,34 @@ def save_match_with_odds(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 
                 ON CONFLICT(schedule_id)
+
                 DO UPDATE SET
 
-                    match_date =
-                        excluded.match_date,
-
-                    home_team =
-                        excluded.home_team,
-
-                    away_team =
-                        excluded.away_team,
-
-                    home_score =
-                        excluded.home_score,
-
-                    away_score =
-                        excluded.away_score,
-
-                    result =
-                        excluded.result,
-
-                    source =
-                        excluded.source,
-
-                    updated_at =
-                        CURRENT_TIMESTAMP
+                    match_date = excluded.match_date,
+                    home_team = excluded.home_team,
+                    away_team = excluded.away_team,
+                    home_score = excluded.home_score,
+                    away_score = excluded.away_score,
+                    result = excluded.result,
+                    source = excluded.source,
+                    updated_at = CURRENT_TIMESTAMP
                 """,
+
                 (
-                    schedule_id,
-
+                    str(match.get("schedule_id")),
                     match.get("match_date"),
-
                     match.get("home_team"),
-
                     match.get("away_team"),
-
                     match.get("home_score"),
-
                     match.get("away_score"),
-
                     match.get("result"),
-
-                    match.get(
-                        "source",
-                        "scoreman"
-                    )
+                    match.get("source", "scoreman")
                 )
             )
 
-            # -------------------------------------------------
-            # 배당
-            # -------------------------------------------------
-
             saved = 0
 
-            for odds in odds_list or []:
+            for odds in odds_list:
 
                 bookmaker = str(
                     odds.get(
@@ -557,8 +444,13 @@ def save_match_with_odds(
                         away_odds =
                             excluded.away_odds
                     """,
+
                     (
-                        schedule_id,
+                        str(
+                            match.get(
+                                "schedule_id"
+                            )
+                        ),
 
                         bookmaker,
 
@@ -587,12 +479,6 @@ def save_match_with_odds(
 
             return saved
 
-        except Exception:
-
-            conn.rollback()
-
-            raise
-
         finally:
 
             conn.close()
@@ -606,31 +492,16 @@ def get_match(schedule_id):
 
     rows = _execute(
         """
-        SELECT
-            schedule_id,
-            match_date,
-            home_team,
-            away_team,
-            home_score,
-            away_score,
-            result,
-            source,
-            created_at,
-            updated_at
+        SELECT *
         FROM matches
         WHERE schedule_id = ?
         LIMIT 1
         """,
-        (
-            str(schedule_id),
-        ),
+        (str(schedule_id),),
         fetch=True
     )
 
-    if rows:
-        return rows[0]
-
-    return None
+    return rows[0] if rows else None
 
 
 # =========================================================
@@ -641,24 +512,10 @@ def get_all_matches():
 
     return _execute(
         """
-        SELECT
-            schedule_id,
-            match_date,
-            home_team,
-            away_team,
-            home_score,
-            away_score,
-            result,
-            source,
-            created_at,
-            updated_at
+        SELECT *
         FROM matches
         ORDER BY
-            CASE
-                WHEN schedule_id GLOB '[0-9]*'
-                THEN CAST(schedule_id AS INTEGER)
-                ELSE 0
-            END DESC
+            CAST(schedule_id AS INTEGER) DESC
         """,
         fetch=True
     ) or []
@@ -676,34 +533,17 @@ def get_match_count():
         FROM matches
         """,
         fetch=True
-    )
+    ) or []
 
     if not rows:
         return 0
 
-    row = rows[0]
-
-    # 정상적인 경우
-    if "cnt" in row:
+    try:
         return int(
-            row["cnt"] or 0
+            rows[0].get("cnt", 0)
         )
-
-    # 혹시 드라이버가 컬럼명을
-    # 이상하게 반환하는 경우
-    values = list(
-        row.values()
-    )
-
-    if values:
-        try:
-            return int(
-                values[0] or 0
-            )
-        except Exception:
-            pass
-
-    return 0
+    except Exception:
+        return 0
 
 
 # =========================================================
@@ -727,13 +567,7 @@ def get_all_odds():
         FROM odds
 
         ORDER BY
-
-            CASE
-                WHEN schedule_id GLOB '[0-9]*'
-                THEN CAST(schedule_id AS INTEGER)
-                ELSE 0
-            END DESC,
-
+            CAST(schedule_id AS INTEGER) DESC,
             bookmaker
         """,
         fetch=True
@@ -741,7 +575,7 @@ def get_all_odds():
 
 
 # =========================================================
-# 특정 경기 배당
+# 경기별 배당
 # =========================================================
 
 def get_odds_by_match(schedule_id):
@@ -764,87 +598,27 @@ def get_odds_by_match(schedule_id):
 
         ORDER BY bookmaker
         """,
-        (
-            str(schedule_id),
-        ),
+        (str(schedule_id),),
         fetch=True
     ) or []
 
 
 # =========================================================
-# app.py 호환용
+# 앱 호환용
 # =========================================================
 
 def get_match_final_odds(schedule_id):
 
-    rows = get_odds_by_match(
+    return get_odds_by_match(
         schedule_id
     )
-
-    result = []
-
-    for row in rows:
-
-        result.append({
-
-            "schedule_id":
-                row.get(
-                    "schedule_id"
-                ),
-
-            "bookmaker":
-                row.get(
-                    "bookmaker"
-                ),
-
-            "company_id":
-                row.get(
-                    "company_id"
-                ),
-
-            # 기존 컬럼
-            "home_odds":
-                row.get(
-                    "home_odds"
-                ),
-
-            "draw_odds":
-                row.get(
-                    "draw_odds"
-                ),
-
-            "away_odds":
-                row.get(
-                    "away_odds"
-                ),
-
-            # app.py에서 사용하는 이름
-            "final_home":
-                row.get(
-                    "home_odds"
-                ),
-
-            "final_draw":
-                row.get(
-                    "draw_odds"
-                ),
-
-            "final_away":
-                row.get(
-                    "away_odds"
-                )
-        })
-
-    return result
 
 
 # =========================================================
 # 특정 경기 배당 수
 # =========================================================
 
-def get_odds_count_by_match(
-    schedule_id
-):
+def get_odds_count_by_match(schedule_id):
 
     rows = _execute(
         """
@@ -852,30 +626,23 @@ def get_odds_count_by_match(
         FROM odds
         WHERE schedule_id = ?
         """,
-        (
-            str(schedule_id),
-        ),
+        (str(schedule_id),),
         fetch=True
-    )
+    ) or []
 
     if not rows:
         return 0
 
-    row = rows[0]
-
-    if "cnt" in row:
-        try:
-            return int(
-                row["cnt"] or 0
-            )
-        except Exception:
-            return 0
-
-    return 0
+    try:
+        return int(
+            rows[0].get("cnt", 0)
+        )
+    except Exception:
+        return 0
 
 
 # =========================================================
-# 전체 배당 수
+# 배당 수
 # =========================================================
 
 def get_odds_count():
@@ -886,23 +653,17 @@ def get_odds_count():
         FROM odds
         """,
         fetch=True
-    )
+    ) or []
 
     if not rows:
         return 0
 
-    row = rows[0]
-
-    if "cnt" in row:
-
-        try:
-            return int(
-                row["cnt"] or 0
-            )
-        except Exception:
-            return 0
-
-    return 0
+    try:
+        return int(
+            rows[0].get("cnt", 0)
+        )
+    except Exception:
+        return 0
 
 
 # =========================================================
@@ -916,30 +677,21 @@ def get_company_names():
         SELECT DISTINCT bookmaker
         FROM odds
         WHERE bookmaker IS NOT NULL
-          AND bookmaker != ''
+        AND bookmaker != ''
         ORDER BY bookmaker
         """,
         fetch=True
     ) or []
 
-    result = []
-
-    for row in rows:
-
-        name = row.get(
-            "bookmaker"
-        )
-
-        if name:
-            result.append(
-                str(name)
-            )
-
-    return result
+    return [
+        row.get("bookmaker", "")
+        for row in rows
+        if row.get("bookmaker")
+    ]
 
 
 # =========================================================
-# 업체별 저장량
+# 업체별 수
 # =========================================================
 
 def get_company_counts():
@@ -968,26 +720,14 @@ def get_company_counts():
             "bookmaker"
         )
 
-        if not bookmaker:
-            continue
+        if bookmaker:
 
-        try:
-
-            count = int(
-                row.get(
-                    "cnt",
-                    0
+            try:
+                result[bookmaker] = int(
+                    row.get("cnt", 0)
                 )
-                or 0
-            )
-
-        except Exception:
-
-            count = 0
-
-        result[
-            bookmaker
-        ] = count
+            except Exception:
+                result[bookmaker] = 0
 
     return result
 
@@ -1009,74 +749,197 @@ def get_database_status():
         "bookmakers":
             len(
                 get_company_names()
+            ),
+
+        "turso":
+            bool(
+                _get_turso_connection()
             )
     }
 
 
 # =========================================================
-# 저장용량
+# 작업 상태 저장
+# =========================================================
+
+def save_collection_state(
+    start_id,
+    end_id,
+    current_id,
+    last_completed_id,
+    status,
+    selected_companies,
+    total,
+    success,
+    exists_count,
+    failed,
+    odds
+):
+
+    import json
+
+    companies = json.dumps(
+        selected_companies or [],
+        ensure_ascii=False
+    )
+
+    _execute(
+        """
+        INSERT INTO collection_state (
+
+            id,
+            start_id,
+            end_id,
+            current_id,
+            last_completed_id,
+            status,
+            selected_companies,
+            total,
+            success,
+            exists_count,
+            failed,
+            odds,
+            updated_at
+
+        )
+
+        VALUES (
+            1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+        )
+
+        ON CONFLICT(id)
+
+        DO UPDATE SET
+
+            start_id = excluded.start_id,
+            end_id = excluded.end_id,
+            current_id = excluded.current_id,
+            last_completed_id = excluded.last_completed_id,
+            status = excluded.status,
+            selected_companies = excluded.selected_companies,
+            total = excluded.total,
+            success = excluded.success,
+            exists_count = excluded.exists_count,
+            failed = excluded.failed,
+            odds = excluded.odds,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+
+        (
+            int(start_id),
+            int(end_id),
+            int(current_id) if current_id is not None else None,
+            int(last_completed_id)
+            if last_completed_id is not None
+            else None,
+            status,
+            companies,
+            int(total),
+            int(success),
+            int(exists_count),
+            int(failed),
+            int(odds)
+        )
+    )
+
+
+# =========================================================
+# 작업 상태 조회
+# =========================================================
+
+def get_collection_state():
+
+    rows = _execute(
+        """
+        SELECT *
+        FROM collection_state
+        WHERE id = 1
+        LIMIT 1
+        """,
+        fetch=True
+    ) or []
+
+    if not rows:
+        return None
+
+    row = rows[0]
+
+    import json
+
+    try:
+
+        row["selected_companies"] = json.loads(
+            row.get(
+                "selected_companies",
+                "[]"
+            )
+        )
+
+    except Exception:
+
+        row["selected_companies"] = []
+
+    return row
+
+
+# =========================================================
+# 마지막 완료 ID
+# =========================================================
+
+def get_last_completed_id():
+
+    state = get_collection_state()
+
+    if not state:
+        return None
+
+    value = state.get(
+        "last_completed_id"
+    )
+
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+# =========================================================
+# 저장공간
 # =========================================================
 
 def get_storage_usage():
 
-    try:
+    """
+    정확한 Turso 청구/스토리지 API가 없는 환경에서는
+    SQLite 파일 크기 또는 논리적인 추정값을 표시한다.
+    """
 
-        # ---------------------------------------------
-        # 로컬 SQLite
-        # ---------------------------------------------
+    try:
 
         if not TURSO_DATABASE_URL:
 
             if os.path.exists(
                 LOCAL_DB_PATH
             ):
-
                 size_bytes = os.path.getsize(
                     LOCAL_DB_PATH
                 )
-
             else:
-
                 size_bytes = 0
-
-        # ---------------------------------------------
-        # Turso
-        # ---------------------------------------------
 
         else:
 
-            # Turso는 로컬 DB 파일이 아니므로
-            # SQLite 파일 크기를 사용할 수 없음.
-            #
-            # 여기서는 테이블 수를 이용한
-            # 논리적 표시값만 제공.
-            rows = _execute(
-                """
-                SELECT COUNT(*) AS cnt
-                FROM sqlite_master
-                WHERE type='table'
-                """,
-                fetch=True
-            )
+            # Turso에서는 로컬 DB 파일이 없으므로
+            # 저장 행 기반의 보수적 추정값을 사용한다.
 
-            table_count = 0
+            match_count = get_match_count()
+            odds_count = get_odds_count()
 
-            if rows:
-
-                try:
-                    table_count = int(
-                        rows[0].get(
-                            "cnt",
-                            0
-                        )
-                        or 0
-                    )
-                except Exception:
-                    table_count = 0
-
+            # 경기 1건당 1KB
+            # 배당 1건당 300B
             size_bytes = (
-                table_count
-                * 1024
+                match_count * 1024
+                + odds_count * 300
             )
 
         size_mb = (
@@ -1095,11 +958,24 @@ def get_storage_usage():
             "success":
                 True,
 
+            "size_bytes":
+                size_bytes,
+
             "size_mb":
                 size_mb,
 
             "size_gb":
                 size_gb,
+
+            "limit_gb":
+                5.0,
+
+            "used_percent":
+                (
+                    size_gb
+                    / 5.0
+                    * 100
+                ),
 
             "message":
                 ""
@@ -1112,50 +988,20 @@ def get_storage_usage():
             "success":
                 False,
 
+            "size_bytes":
+                0,
+
             "size_mb":
                 0,
 
             "size_gb":
                 0,
 
-            "message":
-                str(e)
-        }
+            "limit_gb":
+                5.0,
 
-
-# =========================================================
-# DB 테스트
-# =========================================================
-
-def test_database():
-
-    try:
-
-        init_database()
-
-        status = get_database_status()
-
-        return {
-
-            "success":
-                True,
-
-            "status":
-                status,
-
-            "message":
-                "DB 정상"
-        }
-
-    except Exception as e:
-
-        return {
-
-            "success":
-                False,
-
-            "status":
-                {},
+            "used_percent":
+                0,
 
             "message":
                 str(e)
@@ -1163,7 +1009,7 @@ def test_database():
 
 
 # =========================================================
-# 시작 시 초기화
+# 초기화
 # =========================================================
 
 init_database()
