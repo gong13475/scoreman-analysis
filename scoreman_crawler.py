@@ -6,6 +6,7 @@ import requests
 import threading
 import traceback
 
+
 import database
 
 
@@ -15,14 +16,33 @@ import database
 
 BASE_URL = "https://www.scoreman123.com"
 
+
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Linux; Android 10; K) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/130.0 Mobile Safari/537.36"
-    ),
-    "Referer": BASE_URL + "/"
+
+    "User-Agent":
+        (
+            "Mozilla/5.0 "
+            "(Linux; Android 10; K) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/130.0 Mobile Safari/537.36"
+        ),
+
+    "Accept":
+        (
+            "text/html,"
+            "application/xhtml+xml,"
+            "application/xml;q=0.9,"
+            "image/avif,"
+            "image/webp,"
+            "*/*;q=0.8"
+        ),
+
+    "Accept-Language":
+        "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+
+    "Referer":
+        BASE_URL + "/"
 }
 
 
@@ -30,41 +50,65 @@ HEADERS = {
 # 작업 상태
 # =========================================================
 
-_JOB_LOCK = threading.Lock()
+_JOB_LOCK = threading.RLock()
 
 _STOP_EVENT = threading.Event()
 
 
 _JOB = {
-    "running": False,
-    "finished": False,
-    "stopped": False,
 
-    "current": 0,
-    "total": 0,
+    "running":
+        False,
 
-    "success": 0,
-    "exists": 0,
-    "failed": 0,
-    "odds": 0,
+    "finished":
+        False,
 
-    "start_id": None,
-    "end_id": None,
+    "stopped":
+        False,
 
-    "last_completed_id": None,
+    "current":
+        0,
 
-    "selected_companies": [],
+    "total":
+        0,
 
-    "log": "",
+    "success":
+        0,
 
-    "result": None,
+    "exists":
+        0,
 
-    "error": ""
+    "failed":
+        0,
+
+    "odds":
+        0,
+
+    "start_id":
+        None,
+
+    "end_id":
+        None,
+
+    "last_completed_id":
+        None,
+
+    "selected_companies":
+        [],
+
+    "log":
+        "",
+
+    "result":
+        None,
+
+    "error":
+        ""
 }
 
 
 # =========================================================
-# 상태 가져오기
+# 상태
 # =========================================================
 
 def get_job_status():
@@ -74,19 +118,17 @@ def get_job_status():
         return dict(_JOB)
 
 
-# =========================================================
-# 상태 변경
-# =========================================================
-
 def _set_job(**kwargs):
 
     with _JOB_LOCK:
 
-        _JOB.update(kwargs)
+        _JOB.update(
+            kwargs
+        )
 
 
 # =========================================================
-# 로그 추가
+# 로그
 # =========================================================
 
 def _append_log(message):
@@ -100,7 +142,7 @@ def _append_log(message):
 
 
 # =========================================================
-# 숫자 변환
+# 숫자
 # =========================================================
 
 def to_float(value):
@@ -110,14 +152,19 @@ def to_float(value):
         if value is None:
             return None
 
-        value = str(value).strip()
+        value = str(
+            value
+        ).strip()
 
         if not value:
             return None
 
-        return float(
-            value.replace(",", "")
+        value = value.replace(
+            ",",
+            ""
         )
+
+        return float(value)
 
     except Exception:
 
@@ -138,7 +185,7 @@ def to_int(value):
 
 
 # =========================================================
-# 문자열 정리
+# 문자열
 # =========================================================
 
 def clean_text(value):
@@ -176,7 +223,7 @@ def clean_text(value):
 
 
 # =========================================================
-# 실제 결과 계산
+# 결과
 # =========================================================
 
 def calculate_result(
@@ -201,7 +248,22 @@ def calculate_result(
 
 
 # =========================================================
-# 경기 페이지 가져오기
+# HTTP Session
+# =========================================================
+
+def create_session():
+
+    session = requests.Session()
+
+    session.headers.update(
+        HEADERS
+    )
+
+    return session
+
+
+# =========================================================
+# 경기 페이지
 # =========================================================
 
 def get_match_page(
@@ -222,8 +284,10 @@ def get_match_page(
         )
 
         _append_log(
-            f"[페이지] ID={schedule_id} "
-            f"HTTP={response.status_code}"
+            f"[페이지] "
+            f"ID={schedule_id} "
+            f"HTTP={response.status_code} "
+            f"SIZE={len(response.text):,}"
         )
 
         if response.status_code != 200:
@@ -245,7 +309,7 @@ def get_match_page(
 
 
 # =========================================================
-# 일반 값 찾기
+# 일반 값
 # =========================================================
 
 def find_value(
@@ -270,7 +334,6 @@ def find_value(
 
         ]
 
-
         for pattern in patterns:
 
             match = re.search(
@@ -288,18 +351,16 @@ def find_value(
                 if value:
                     return value
 
-
     return ""
 
 
 # =========================================================
-# JSON 객체 검색
+# JSON 객체
 # =========================================================
 
 def search_json_objects(html):
 
     objects = []
-
 
     scripts = re.findall(
         r"<script[^>]*>(.*?)</script>",
@@ -307,15 +368,12 @@ def search_json_objects(html):
         re.I | re.S
     )
 
-
     for script in scripts:
 
         script = script.strip()
 
-
         if not script:
             continue
-
 
         try:
 
@@ -327,9 +385,9 @@ def search_json_objects(html):
 
             pass
 
-
+        # 중괄호 하나짜리 객체
         for match in re.finditer(
-            r"\{[^{}]{20,5000}\}",
+            r"\{[^{}]{20,10000}\}",
             script,
             re.S
         ):
@@ -346,18 +404,22 @@ def search_json_objects(html):
 
                 pass
 
-
     return objects
 
 
 # =========================================================
-# JSON 재귀 검색
+# 재귀 JSON 검색
 # =========================================================
 
 def recursive_find(
     obj,
     wanted_keys
 ):
+
+    wanted = {
+        str(x).lower()
+        for x in wanted_keys
+    }
 
     if isinstance(
         obj,
@@ -370,8 +432,7 @@ def recursive_find(
                 key
             ).lower()
 
-
-            if key_lower in wanted_keys:
+            if key_lower in wanted:
 
                 if isinstance(
                     value,
@@ -389,16 +450,13 @@ def recursive_find(
                     if value:
                         return value
 
-
             result = recursive_find(
                 value,
-                wanted_keys
+                wanted
             )
-
 
             if result:
                 return result
-
 
     elif isinstance(
         obj,
@@ -409,13 +467,11 @@ def recursive_find(
 
             result = recursive_find(
                 item,
-                wanted_keys
+                wanted
             )
-
 
             if result:
                 return result
-
 
     return ""
 
@@ -427,22 +483,26 @@ def recursive_find(
 def find_team_names(html):
 
     home_keys = {
+
         "hometeamname",
         "home_team_name",
         "hometeam",
         "home_team",
         "homename",
-        "hname"
+        "hname",
+        "homeName"
     }
 
 
     away_keys = {
+
         "awayteamname",
         "away_team_name",
         "awayteam",
         "away_team",
         "awayname",
-        "aname"
+        "aname",
+        "awayName"
     }
 
 
@@ -450,7 +510,6 @@ def find_team_names(html):
         html,
         list(home_keys)
     )
-
 
     away = find_value(
         html,
@@ -460,7 +519,9 @@ def find_team_names(html):
 
     if not home or not away:
 
-        for obj in search_json_objects(html):
+        for obj in search_json_objects(
+            html
+        ):
 
             if not home:
 
@@ -469,14 +530,12 @@ def find_team_names(html):
                     home_keys
                 )
 
-
             if not away:
 
                 away = recursive_find(
                     obj,
                     away_keys
                 )
-
 
             if home and away:
                 break
@@ -489,7 +548,7 @@ def find_team_names(html):
 
 
 # =========================================================
-# 스코어
+# 점수
 # =========================================================
 
 def find_scores(html):
@@ -524,12 +583,17 @@ def find_scores(html):
             re.I | re.S
         )
 
-
         if match:
 
             return (
-                to_int(match.group(1)),
-                to_int(match.group(2))
+
+                to_int(
+                    match.group(1)
+                ),
+
+                to_int(
+                    match.group(2)
+                )
             )
 
 
@@ -549,7 +613,6 @@ def find_scores(html):
             re.I | re.S
         )
 
-
         if matches:
 
             hs, aws = matches[-1]
@@ -564,7 +627,7 @@ def find_scores(html):
 
 
 # =========================================================
-# 경기 날짜
+# 날짜
 # =========================================================
 
 def find_match_date(html):
@@ -580,7 +643,6 @@ def find_match_date(html):
         ]
     )
 
-
     if value:
         return value
 
@@ -590,7 +652,6 @@ def find_match_date(html):
         r"(?:\s+\d{1,2}:\d{2})?)",
         html
     )
-
 
     if match:
 
@@ -615,16 +676,13 @@ def parse_match_info(
         html
     )
 
-
     hs, aws = find_scores(
         html
     )
 
-
     match_date = find_match_date(
         html
     )
-
 
     result = calculate_result(
         hs,
@@ -664,8 +722,439 @@ def parse_match_info(
             aws,
 
         "result":
-            result
+            result,
+
+        "source":
+            "scoreman"
     }
+
+
+# =========================================================
+# 숫자 재귀 변환
+# =========================================================
+
+def _recursive_find_value(
+    obj,
+    keys
+):
+
+    wanted = {
+        str(k).lower()
+        for k in keys
+    }
+
+    if isinstance(
+        obj,
+        dict
+    ):
+
+        for key, value in obj.items():
+
+            key_lower = str(
+                key
+            ).lower()
+
+            if key_lower in wanted:
+
+                if isinstance(
+                    value,
+                    (
+                        str,
+                        int,
+                        float
+                    )
+                ):
+
+                    return value
+
+            found = _recursive_find_value(
+                value,
+                wanted
+            )
+
+            if found is not None:
+                return found
+
+    elif isinstance(
+        obj,
+        list
+    ):
+
+        for item in obj:
+
+            found = _recursive_find_value(
+                item,
+                wanted
+            )
+
+            if found is not None:
+                return found
+
+    return None
+
+
+# =========================================================
+# 업체 하나의 배당 추출
+# =========================================================
+
+def _parse_bookmaker_item(
+    item
+):
+
+    if not isinstance(
+        item,
+        dict
+    ):
+
+        return None
+
+
+    company_name = _recursive_find_value(
+        item,
+        [
+            "cn",
+            "companyname",
+            "company_name",
+            "bookmaker",
+            "bookmakername",
+            "name"
+        ]
+    )
+
+
+    if company_name is None:
+        company_name = ""
+
+
+    company_name = clean_text(
+        company_name
+    )
+
+
+    if not company_name:
+        return None
+
+
+    company_id = _recursive_find_value(
+        item,
+        [
+            "cid",
+            "companyid",
+            "company_id"
+        ]
+    )
+
+
+    # -----------------------------------------------------
+    # 원래 Scoreman 구조
+    # euro -> l -> u/g/d
+    # -----------------------------------------------------
+
+    final = None
+
+
+    euro = item.get(
+        "euro"
+    )
+
+
+    if isinstance(
+        euro,
+        dict
+    ):
+
+        final = euro.get(
+            "l"
+        )
+
+
+    if not isinstance(
+        final,
+        dict
+    ):
+
+        final = item.get(
+            "l"
+        )
+
+
+    if not isinstance(
+        final,
+        dict
+    ):
+
+        final = item.get(
+            "final"
+        )
+
+
+    # -----------------------------------------------------
+    # 배당 직접 검색
+    # -----------------------------------------------------
+
+    home = None
+    draw = None
+    away = None
+
+
+    if isinstance(
+        final,
+        dict
+    ):
+
+        home = final.get(
+            "u"
+        )
+
+        draw = final.get(
+            "g"
+        )
+
+        away = final.get(
+            "d"
+        )
+
+
+    # 다른 키 이름
+    if home is None:
+
+        home = _recursive_find_value(
+            item,
+            [
+                "final_home",
+                "homeodds",
+                "home_odds",
+                "home"
+            ]
+        )
+
+
+    if draw is None:
+
+        draw = _recursive_find_value(
+            item,
+            [
+                "final_draw",
+                "drawodds",
+                "draw_odds",
+                "draw"
+            ]
+        )
+
+
+    if away is None:
+
+        away = _recursive_find_value(
+            item,
+            [
+                "final_away",
+                "awayodds",
+                "away_odds",
+                "away"
+            ]
+        )
+
+
+    home = to_float(home)
+    draw = to_float(draw)
+    away = to_float(away)
+
+
+    if (
+        home is None
+        or draw is None
+        or away is None
+    ):
+
+        return None
+
+
+    return {
+
+        "company_id":
+            (
+                str(company_id)
+                if company_id is not None
+                else ""
+            ),
+
+        "company_name":
+            company_name,
+
+        "final_home":
+            home,
+
+        "final_draw":
+            draw,
+
+        "final_away":
+            away
+    }
+
+
+# =========================================================
+# 배당 응답에서 업체 목록 찾기
+# =========================================================
+
+def _find_mixodds(
+    data
+):
+
+    if isinstance(
+        data,
+        dict
+    ):
+
+        # 가장 일반적인 위치
+        mixodds = data.get(
+            "mixodds"
+        )
+
+        if isinstance(
+            mixodds,
+            list
+        ):
+
+            return mixodds
+
+
+        block = data.get(
+            "Data"
+        )
+
+        if isinstance(
+            block,
+            dict
+        ):
+
+            mixodds = block.get(
+                "mixodds"
+            )
+
+            if isinstance(
+                mixodds,
+                list
+            ):
+
+                return mixodds
+
+
+        # 재귀 탐색
+        for value in data.values():
+
+            result = _find_mixodds(
+                value
+            )
+
+            if result:
+                return result
+
+
+    elif isinstance(
+        data,
+        list
+    ):
+
+        # 업체 배열인지 확인
+        parsed = []
+
+        for item in data:
+
+            if isinstance(
+                item,
+                dict
+            ):
+
+                if (
+                    item.get("cn")
+                    or item.get("companyName")
+                    or item.get("bookmaker")
+                ):
+
+                    parsed.append(
+                        item
+                    )
+
+        if parsed:
+            return parsed
+
+
+        for item in data:
+
+            result = _find_mixodds(
+                item
+            )
+
+            if result:
+                return result
+
+
+    return []
+
+
+# =========================================================
+# 배당 JSON 파싱
+# =========================================================
+
+def _parse_odds_json(
+    data,
+    schedule_id
+):
+
+    if isinstance(
+        data,
+        dict
+    ):
+
+        err_code = data.get(
+            "ErrCode"
+        )
+
+        if (
+            err_code is not None
+            and str(err_code) != "0"
+        ):
+
+            _append_log(
+                f"[배당 API] "
+                f"ID={schedule_id} "
+                f"ErrCode={err_code}"
+            )
+
+
+    mixodds = _find_mixodds(
+        data
+    )
+
+
+    if not mixodds:
+
+        _append_log(
+            f"[배당 API] "
+            f"ID={schedule_id} "
+            f"mixodds 없음"
+        )
+
+        return []
+
+
+    result = []
+
+
+    for item in mixodds:
+
+        parsed = _parse_bookmaker_item(
+            item
+        )
+
+        if parsed:
+
+            result.append(
+                parsed
+            )
+
+
+    return result
 
 
 # =========================================================
@@ -679,89 +1168,111 @@ def get_odds(
 ):
 
     url = (
-        f"{BASE_URL}/ajax/soccerajax"
-        f"?type=14&t=1&id={schedule_id}&h=0"
+        f"{BASE_URL}"
+        f"/ajax/soccerajax"
+        f"?type=14"
+        f"&t=1"
+        f"&id={schedule_id}"
+        f"&h=0"
     )
+
+
+    headers = {
+
+        "Accept":
+            "application/json, text/plain, */*",
+
+        "X-Requested-With":
+            "XMLHttpRequest",
+
+        "Referer":
+            (
+                f"{BASE_URL}"
+                f"/match/data-{schedule_id}"
+            )
+    }
 
 
     try:
 
         response = session.get(
             url,
+            headers=headers,
             timeout=20
+        )
+
+
+        _append_log(
+            f"[배당 HTTP] "
+            f"ID={schedule_id} "
+            f"HTTP={response.status_code} "
+            f"SIZE={len(response.text):,} "
+            f"TYPE={response.headers.get('Content-Type', '')}"
         )
 
 
         if response.status_code != 200:
 
-            _append_log(
-                f"[배당 HTTP 오류] "
-                f"ID={schedule_id} "
-                f"HTTP={response.status_code}"
-            )
+            return []
+
+
+        text = response.text.strip()
+
+
+        if not text:
 
             return []
 
 
-        data = response.json()
+        # -------------------------------------------------
+        # JSON
+        # -------------------------------------------------
+
+        try:
+
+            data = response.json()
+
+        except Exception:
+
+            try:
+
+                data = json.loads(
+                    text
+                )
+
+            except Exception as e:
+
+                _append_log(
+                    f"[배당 JSON 오류] "
+                    f"ID={schedule_id}: {e}"
+                )
+
+                _append_log(
+                    "[배당 응답 앞부분] "
+                    + text[:500]
+                )
+
+                return []
+
+
+        odds = _parse_odds_json(
+            data,
+            schedule_id
+        )
 
 
     except Exception as e:
 
         _append_log(
-            f"[배당 오류] "
+            f"[배당 요청 오류] "
             f"ID={schedule_id}: {e}"
         )
 
         return []
 
 
-    if not isinstance(
-        data,
-        dict
-    ):
-
-        return []
-
-
-    if data.get(
-        "ErrCode"
-    ) != 0:
-
-        return []
-
-
-    block = data.get(
-        "Data",
-        {}
-    )
-
-
-    if not isinstance(
-        block,
-        dict
-    ):
-
-        return []
-
-
-    mixodds = block.get(
-        "mixodds",
-        []
-    )
-
-
-    if not isinstance(
-        mixodds,
-        list
-    ):
-
-        return []
-
-
     # =====================================================
-    # 업체 선택
-    # None = 전체 업체
+    # 업체 필터
     # =====================================================
 
     if selected_companies:
@@ -773,144 +1284,73 @@ def get_odds(
             .lower()
 
             for x in selected_companies
-
         }
 
-    else:
+        filtered = []
 
-        wanted = None
-
-
-    result = []
-
-
-    for item in mixodds:
-
-        if not isinstance(
-            item,
-            dict
-        ):
-
-            continue
-
-
-        company_id = item.get(
-            "cid"
-        )
-
-
-        company_name = clean_text(
-            item.get(
-                "cn",
-                ""
-            )
-        )
-
-
-        if not company_name:
-            continue
-
-
-        if wanted is not None:
+        for row in odds:
 
             if (
-                company_name
+                row["company_name"]
                 .strip()
                 .lower()
-                not in wanted
+                in wanted
             ):
 
-                continue
+                filtered.append(
+                    row
+                )
+
+        odds = filtered
 
 
-        euro = item.get(
-            "euro",
-            {}
+    # =====================================================
+    # 중복 제거
+    # =====================================================
+
+    unique = {}
+
+    for row in odds:
+
+        key = (
+            row["company_name"]
+            .strip()
+            .lower()
         )
 
-
-        if not isinstance(
-            euro,
-            dict
-        ):
-
-            continue
+        unique[key] = row
 
 
-        final = euro.get(
-            "l",
-            {}
-        )
-
-
-        if not isinstance(
-            final,
-            dict
-        ):
-
-            continue
-
-
-        home = to_float(
-            final.get("u")
-        )
-
-
-        draw = to_float(
-            final.get("g")
-        )
-
-
-        away = to_float(
-            final.get("d")
-        )
-
-
-        if (
-            home is None
-            or draw is None
-            or away is None
-        ):
-
-            continue
-
-
-        result.append({
-
-            "company_id":
-                (
-                    str(company_id)
-                    if company_id is not None
-                    else ""
-                ),
-
-            "company_name":
-                company_name,
-
-            "final_home":
-                home,
-
-            "final_draw":
-                draw,
-
-            "final_away":
-                away
-        })
-
-
-    _append_log(
-        f"[배당 확인] "
-        f"ID={schedule_id} "
-        f"전체업체={len(mixodds)} "
-        f"저장대상={len(result)}"
+    odds = list(
+        unique.values()
     )
 
 
-    return result
+    _append_log(
+        f"[배당 결과] "
+        f"ID={schedule_id} "
+        f"수집업체={len(odds)}"
+    )
+
+
+    if odds:
+
+        names = [
+            x["company_name"]
+            for x in odds
+        ]
+
+        _append_log(
+            "[업체] "
+            + " / ".join(names)
+        )
+
+
+    return odds
 
 
 # =========================================================
-# 경기 + 배당 저장
+# 저장
 # =========================================================
 
 def save_match_data(
@@ -934,14 +1374,20 @@ def collect_one(
     session
 ):
 
-    # 중지 여부 확인
     if _STOP_EVENT.is_set():
 
         return {
-            "status": "stopped",
-            "odds": 0
+            "status":
+                "stopped",
+
+            "odds":
+                0
         }
 
+
+    # -----------------------------------------------------
+    # 경기 페이지
+    # -----------------------------------------------------
 
     html = get_match_page(
         schedule_id,
@@ -952,19 +1398,28 @@ def collect_one(
     if not html:
 
         return {
-            "status": "skip",
-            "odds": 0
+            "status":
+                "skip",
+
+            "odds":
+                0
         }
 
 
-    # 다시 중지 확인
     if _STOP_EVENT.is_set():
 
         return {
-            "status": "stopped",
-            "odds": 0
+            "status":
+                "stopped",
+
+            "odds":
+                0
         }
 
+
+    # -----------------------------------------------------
+    # 기존 경기
+    # -----------------------------------------------------
 
     existing_row = database.get_match(
         schedule_id
@@ -982,6 +1437,23 @@ def collect_one(
             existing_row
         )
 
+        # 혹시 기존 데이터에 결과가 없으면
+        # 현재 페이지에서 다시 파싱
+        if match.get("result") not in {
+            "승",
+            "무",
+            "패"
+        }:
+
+            parsed = parse_match_info(
+                html,
+                schedule_id
+            )
+
+            if parsed:
+
+                match = parsed
+
     else:
 
         match = parse_match_info(
@@ -989,41 +1461,57 @@ def collect_one(
             schedule_id
         )
 
-
         if not match:
 
             return {
-                "status": "skip",
-                "odds": 0
+                "status":
+                    "skip",
+
+                "odds":
+                    0
             }
 
 
-        if match["result"] not in {
-            "승",
-            "무",
-            "패"
-        }:
+    # -----------------------------------------------------
+    # 완료 경기만 저장
+    # -----------------------------------------------------
 
-            _append_log(
-                f"[경기 제외] "
-                f"ID={schedule_id} "
-                f"완료 경기 결과 없음"
-            )
+    if match.get("result") not in {
+        "승",
+        "무",
+        "패"
+    }:
 
-            return {
-                "status": "skip",
-                "odds": 0
-            }
+        _append_log(
+            f"[경기 제외] "
+            f"ID={schedule_id} "
+            f"완료 경기 결과 없음"
+        )
+
+        return {
+            "status":
+                "skip",
+
+            "odds":
+                0
+        }
 
 
-    # 중지 확인
     if _STOP_EVENT.is_set():
 
         return {
-            "status": "stopped",
-            "odds": 0
+            "status":
+                "stopped",
+
+            "odds":
+                0
         }
 
+
+    # -----------------------------------------------------
+    # ★ 핵심
+    # 기존 경기라도 배당을 무조건 다시 확인
+    # -----------------------------------------------------
 
     odds_list = get_odds(
         schedule_id,
@@ -1034,18 +1522,28 @@ def collect_one(
 
     if not odds_list:
 
+        _append_log(
+            f"[배당 없음] "
+            f"ID={schedule_id}"
+        )
+
         return {
-            "status": "skip",
-            "odds": 0
+            "status":
+                "skip",
+
+            "odds":
+                0
         }
 
 
-    # 중지 확인
     if _STOP_EVENT.is_set():
 
         return {
-            "status": "stopped",
-            "odds": 0
+            "status":
+                "stopped",
+
+            "odds":
+                0
         }
 
 
@@ -1056,12 +1554,13 @@ def collect_one(
 
 
     _append_log(
-        f"[저장] "
+        f"[저장 완료] "
         f"ID={schedule_id} "
-        f"{match['home_team']} vs "
-        f"{match['away_team']} "
-        f"{match['result']} "
-        f"/ 최종배당 {saved}개"
+        f"{match.get('home_team')} "
+        f"vs "
+        f"{match.get('away_team')} "
+        f"/ 결과={match.get('result')} "
+        f"/ 최종배당={saved}개"
     )
 
 
@@ -1080,7 +1579,7 @@ def collect_one(
 
 
 # =========================================================
-# 백그라운드 수집
+# 백그라운드
 # =========================================================
 
 def _run_background(
@@ -1090,11 +1589,7 @@ def _run_background(
     delay
 ):
 
-    session = requests.Session()
-
-    session.headers.update(
-        HEADERS
-    )
+    session = create_session()
 
 
     total = (
@@ -1116,10 +1611,6 @@ def _run_background(
             "전체 업체 자동수집"
         ]
 
-
-    # =====================================================
-    # 시작 상태
-    # =====================================================
 
     _STOP_EVENT.clear()
 
@@ -1165,18 +1656,15 @@ def _run_background(
         "========================================"
     )
 
-
     _append_log(
         "⚽ Scoreman 백그라운드 수집 시작"
     )
-
 
     _append_log(
         f"범위: "
         f"{start_id:,} ~ "
         f"{end_id:,}"
     )
-
 
     if selected_companies:
 
@@ -1190,21 +1678,16 @@ def _run_background(
     else:
 
         _append_log(
-            "수집 업체: "
-            "전체 업체 자동수집"
+            "수집 업체: 전체 업체 자동수집"
         )
-
 
     _append_log(
         "초기배당: 저장하지 않음"
     )
 
-
     _append_log(
-        "최종배당: "
-        "선택 업체 또는 전체 업체"
+        "최종배당: 저장"
     )
-
 
     _append_log(
         "========================================"
@@ -1227,65 +1710,12 @@ def _run_background(
             ),
 
             start=1
-
         ):
 
-            # =================================================
-            # 수집 중지 확인
-            # =================================================
 
             if _STOP_EVENT.is_set():
 
-                _append_log(
-                    "========================================"
-                )
-
-                _append_log(
-                    "🛑 사용자가 수집을 중지했습니다."
-                )
-
-                _append_log(
-                    f"중지 ID: {schedule_id:,}"
-                )
-
-                _append_log(
-                    f"마지막 완료 ID: "
-                    f"{_JOB.get('last_completed_id')}"
-                )
-
-                _append_log(
-                    "========================================"
-                )
-
-                _set_job(
-
-                    running=False,
-
-                    finished=True,
-
-                    stopped=True,
-
-                    result={
-
-                        "total":
-                            total,
-
-                        "success":
-                            success,
-
-                        "exists":
-                            exists,
-
-                        "failed":
-                            failed,
-
-                        "odds":
-                            odds_total
-                    }
-
-                )
-
-                return
+                break
 
 
             status_name = "skip"
@@ -1303,9 +1733,10 @@ def _run_background(
                 )
 
 
-                status_name = result[
-                    "status"
-                ]
+                status_name = result.get(
+                    "status",
+                    "skip"
+                )
 
 
                 odds = int(
@@ -1322,13 +1753,9 @@ def _run_background(
 
                     odds_total += odds
 
-                    last_completed_id = (
-                        schedule_id
-                    )
-
                     _set_job(
                         last_completed_id=
-                            last_completed_id
+                            schedule_id
                     )
 
 
@@ -1338,51 +1765,15 @@ def _run_background(
 
                     odds_total += odds
 
-                    last_completed_id = (
-                        schedule_id
-                    )
-
                     _set_job(
                         last_completed_id=
-                            last_completed_id
+                            schedule_id
                     )
 
 
                 elif status_name == "stopped":
 
-                    _append_log(
-                        "🛑 수집 중지 감지"
-                    )
-
-                    _set_job(
-
-                        running=False,
-
-                        finished=True,
-
-                        stopped=True,
-
-                        result={
-
-                            "total":
-                                total,
-
-                            "success":
-                                success,
-
-                            "exists":
-                                exists,
-
-                            "failed":
-                                failed,
-
-                            "odds":
-                                odds_total
-                        }
-
-                    )
-
-                    return
+                    break
 
 
                 else:
@@ -1395,14 +1786,10 @@ def _run_background(
                 failed += 1
 
                 _append_log(
-                    f"[오류] "
+                    f"[수집 오류] "
                     f"ID={schedule_id}: {e}"
                 )
 
-
-            # =================================================
-            # 진행상태 저장
-            # =================================================
 
             _set_job(
 
@@ -1415,103 +1802,37 @@ def _run_background(
                 failed=failed,
 
                 odds=odds_total
-
             )
 
 
-            # =================================================
-            # 중지 확인
-            # =================================================
+            # -------------------------------------------------
+            # 중지
+            # -------------------------------------------------
 
             if _STOP_EVENT.is_set():
 
-                _append_log(
-                    "🛑 다음 경기 수집 전에 "
-                    "중지 요청을 확인했습니다."
-                )
-
-                _set_job(
-
-                    running=False,
-
-                    finished=True,
-
-                    stopped=True,
-
-                    result={
-
-                        "total":
-                            total,
-
-                        "success":
-                            success,
-
-                        "exists":
-                            exists,
-
-                        "failed":
-                            failed,
-
-                        "odds":
-                            odds_total
-                    }
-
-                )
-
-                return
+                break
 
 
-            # =================================================
+            # -------------------------------------------------
             # 요청 간격
-            # =================================================
+            # -------------------------------------------------
 
             if delay > 0:
 
-                # sleep 대신 Event.wait 사용
-                # 중지 버튼을 누르면 즉시 깨어남
                 if _STOP_EVENT.wait(
                     timeout=delay
                 ):
 
-                    _append_log(
-                        "🛑 대기 중 "
-                        "수집 중지 요청을 확인했습니다."
-                    )
-
-                    _set_job(
-
-                        running=False,
-
-                        finished=True,
-
-                        stopped=True,
-
-                        result={
-
-                            "total":
-                                total,
-
-                            "success":
-                                success,
-
-                            "exists":
-                                exists,
-
-                            "failed":
-                                failed,
-
-                            "odds":
-                                odds_total
-                        }
-
-                    )
-
-                    return
+                    break
 
 
         # =====================================================
-        # 정상 완료
+        # 종료 상태
         # =====================================================
+
+        stopped = _STOP_EVENT.is_set()
+
 
         result = {
 
@@ -1537,35 +1858,38 @@ def _run_background(
         )
 
 
-        _append_log(
-            "✅ 백그라운드 수집 완료"
-        )
+        if stopped:
+
+            _append_log(
+                "🛑 수집 중지됨"
+            )
+
+        else:
+
+            _append_log(
+                "✅ 백그라운드 수집 완료"
+            )
 
 
         _append_log(
             f"전체: {total:,}"
         )
 
-
         _append_log(
             f"신규: {success:,}"
         )
-
 
         _append_log(
             f"기존: {exists:,}"
         )
 
-
         _append_log(
-            f"실패: {failed:,}"
+            f"실패/배당없음: {failed:,}"
         )
-
 
         _append_log(
             f"최종배당: {odds_total:,}"
         )
-
 
         _append_log(
             "========================================"
@@ -1578,18 +1902,20 @@ def _run_background(
 
             finished=True,
 
-            stopped=False,
+            stopped=stopped,
 
             result=result
-
         )
 
 
     except Exception as e:
 
         _append_log(
-            "[백그라운드 치명적 오류]\n"
-            + traceback.format_exc()
+            "[백그라운드 치명적 오류]"
+        )
+
+        _append_log(
+            traceback.format_exc()
         )
 
 
@@ -1602,7 +1928,6 @@ def _run_background(
             stopped=False,
 
             error=str(e)
-
         )
 
 
@@ -1612,7 +1937,7 @@ def _run_background(
 
 
 # =========================================================
-# 백그라운드 수집 시작
+# 시작
 # =========================================================
 
 def start_background_collection(
@@ -1629,7 +1954,16 @@ def start_background_collection(
             return False
 
 
-    if int(end_id) < int(start_id):
+    start_id = int(
+        start_id
+    )
+
+    end_id = int(
+        end_id
+    )
+
+
+    if end_id < start_id:
 
         return False
 
@@ -1637,19 +1971,14 @@ def start_background_collection(
     database.init_database()
 
 
-    # 이전 중지 이벤트 초기화
     _STOP_EVENT.clear()
 
 
-    if selected_companies:
-
-        companies = list(
-            selected_companies
-        )
-
-    else:
-
-        companies = None
+    companies = (
+        list(selected_companies)
+        if selected_companies
+        else None
+    )
 
 
     thread = threading.Thread(
@@ -1658,18 +1987,16 @@ def start_background_collection(
 
         args=(
 
-            int(start_id),
+            start_id,
 
-            int(end_id),
+            end_id,
 
             companies,
 
             float(delay)
-
         ),
 
         daemon=False
-
     )
 
 
@@ -1680,7 +2007,7 @@ def start_background_collection(
 
 
 # =========================================================
-# 백그라운드 수집 중지
+# 중지
 # =========================================================
 
 def stop_background_collection():
@@ -1693,7 +2020,6 @@ def stop_background_collection():
 
 
     if not running:
-
         return False
 
 
@@ -1722,7 +2048,7 @@ def is_running():
 
 
 # =========================================================
-# 작업 초기화
+# 초기화
 # =========================================================
 
 def reset_job():
@@ -1730,7 +2056,6 @@ def reset_job():
     with _JOB_LOCK:
 
         if _JOB["running"]:
-
             return False
 
 
@@ -1830,7 +2155,6 @@ if __name__ == "__main__":
             for x in mode.split(",")
 
             if x.strip()
-
         ]
 
     else:
@@ -1847,7 +2171,6 @@ if __name__ == "__main__":
         companies,
 
         0.5
-
     )
 
 
@@ -1863,7 +2186,6 @@ if __name__ == "__main__":
 
             time.sleep(1)
 
-
         print(
             get_job_status()
-    )
+)
