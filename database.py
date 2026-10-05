@@ -1,15 +1,18 @@
 # ============================================================
 # database.py
 # 스코어맨 분석기
-# Turso Cloud SQLite 영구저장 버전
+# Turso Cloud SQLite HTTP API 버전
+#
+# libsql-experimental 사용 안 함
+# Python 3.14 호환
 # ============================================================
 
 import streamlit as st
-import libsql_experimental as libsql
+import requests
 
 
 # =========================================================
-# Turso 연결
+# Turso 연결 정보
 # =========================================================
 
 @st.cache_resource
@@ -26,46 +29,387 @@ def get_connection():
     ).strip()
 
     if not url:
+
         raise RuntimeError(
             "TURSO_DATABASE_URL이 없습니다.\n"
-            "Streamlit Cloud → Settings → Secrets를 확인하세요."
+            "Streamlit Cloud → Manage app → Settings → Secrets를 확인하세요."
         )
 
     if not token:
+
         raise RuntimeError(
             "TURSO_AUTH_TOKEN이 없습니다.\n"
-            "Streamlit Cloud → Settings → Secrets를 확인하세요."
+            "Streamlit Cloud → Manage app → Settings → Secrets를 확인하세요."
         )
 
+    # -----------------------------------------------------
     # libsql:// → https://
+    # -----------------------------------------------------
+
     if url.startswith("libsql://"):
-        url = "https://" + url[len("libsql://"):]
 
-    conn = libsql.connect(
-        "historical-odds.db",
-        sync_url=url,
-        auth_token=token
-    )
+        url = (
+            "https://"
+            + url[len("libsql://"):]
+        )
 
-    return conn
+    # -----------------------------------------------------
+    # /v2/pipeline
+    # -----------------------------------------------------
+
+    if not url.endswith("/v2/pipeline"):
+
+        url = (
+            url.rstrip("/")
+            + "/v2/pipeline"
+        )
+
+    return {
+        "url": url,
+        "token": token
+    }
 
 
 # =========================================================
-# SQL 실행
+# 값 → Turso HTTP API 타입
 # =========================================================
 
-def execute(sql, params=()):
+def _encode_value(value):
+
+    if value is None:
+
+        return {
+            "type": "null"
+        }
+
+    if isinstance(value, bool):
+
+        return {
+            "type": "integer",
+            "value": "1" if value else "0"
+        }
+
+    if isinstance(value, int):
+
+        return {
+            "type": "integer",
+            "value": str(value)
+        }
+
+    if isinstance(value, float):
+
+        return {
+            "type": "float",
+            "value": str(value)
+        }
+
+    return {
+        "type": "text",
+        "value": str(value)
+    }
+
+
+# =========================================================
+# Turso HTTP 실행
+# =========================================================
+
+def _request(
+    sql,
+    params=()
+):
 
     conn = get_connection()
 
-    cursor = conn.execute(
+    args = [
+        _encode_value(value)
+        for value in params
+    ]
+
+    payload = {
+
+        "requests": [
+
+            {
+                "type": "execute",
+
+                "stmt": {
+
+                    "sql":
+                        sql,
+
+                    "args":
+                        args
+                }
+            },
+
+            {
+                "type":
+                    "close"
+            }
+        ]
+    }
+
+    headers = {
+
+        "Authorization":
+            "Bearer "
+            + conn["token"],
+
+        "Content-Type":
+            "application/json"
+    }
+
+    response = requests.post(
+        conn["url"],
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
+
+    if response.status_code != 200:
+
+        raise RuntimeError(
+            "Turso HTTP 오류 "
+            f"{response.status_code}: "
+            f"{response.text[:1000]}"
+        )
+
+    data = response.json()
+
+    if "results" not in data:
+
+        raise RuntimeError(
+            "Turso 응답 오류: "
+            + str(data)[:2000]
+        )
+
+    first = data["results"][0]
+
+    if first.get("type") == "error":
+
+        error = first.get(
+            "error",
+            {}
+        )
+
+        raise RuntimeError(
+            "Turso SQL 오류: "
+            + str(error)
+        )
+
+    result = first.get(
+        "result",
+        {}
+    )
+
+    if result.get("type") == "error":
+
+        raise RuntimeError(
+            "Turso SQL 오류: "
+            + str(result)
+        )
+
+    return result
+
+
+# =========================================================
+# 여러 SQL 일괄 실행
+# =========================================================
+
+def _request_many(
+    statements
+):
+
+    conn = get_connection()
+
+    requests_data = []
+
+    for sql, params in statements:
+
+        requests_data.append({
+
+            "type":
+                "execute",
+
+            "stmt": {
+
+                "sql":
+                    sql,
+
+                "args": [
+                    _encode_value(value)
+                    for value in params
+                ]
+            }
+        })
+
+    requests_data.append({
+        "type": "close"
+    })
+
+    payload = {
+        "requests":
+            requests_data
+    }
+
+    headers = {
+
+        "Authorization":
+            "Bearer "
+            + conn["token"],
+
+        "Content-Type":
+            "application/json"
+    }
+
+    response = requests.post(
+        conn["url"],
+        headers=headers,
+        json=payload,
+        timeout=120
+    )
+
+    if response.status_code != 200:
+
+        raise RuntimeError(
+            "Turso HTTP 오류 "
+            f"{response.status_code}: "
+            f"{response.text[:1000]}"
+        )
+
+    data = response.json()
+
+    if "results" not in data:
+
+        raise RuntimeError(
+            "Turso 응답 오류: "
+            + str(data)[:2000]
+        )
+
+    for item in data["results"]:
+
+        if item.get("type") == "error":
+
+            raise RuntimeError(
+                "Turso SQL 오류: "
+                + str(item)
+            )
+
+    return data
+
+
+# =========================================================
+# Turso 행 변환
+# =========================================================
+
+def _decode_value(value):
+
+    if value is None:
+
+        return None
+
+    value_type = value.get(
+        "type"
+    )
+
+    raw = value.get(
+        "value"
+    )
+
+    if value_type == "null":
+
+        return None
+
+    if value_type == "integer":
+
+        try:
+            return int(raw)
+        except Exception:
+            return raw
+
+    if value_type == "float":
+
+        try:
+            return float(raw)
+        except Exception:
+            return raw
+
+    if value_type == "blob":
+
+        return raw
+
+    return raw
+
+
+def _get_rows(result):
+
+    cols = result.get(
+        "cols",
+        []
+    )
+
+    rows = result.get(
+        "rows",
+        []
+    )
+
+    column_names = []
+
+    for col in cols:
+
+        if isinstance(col, dict):
+
+            column_names.append(
+                col.get(
+                    "name",
+                    ""
+                )
+            )
+
+        else:
+
+            column_names.append(
+                str(col)
+            )
+
+    output = []
+
+    for row in rows:
+
+        values = [
+            _decode_value(value)
+            for value in row
+        ]
+
+        output.append(
+            dict(
+                zip(
+                    column_names,
+                    values
+                )
+            )
+        )
+
+    return output
+
+
+# =========================================================
+# SELECT
+# =========================================================
+
+def _select(
+    sql,
+    params=()
+):
+
+    result = _request(
         sql,
         params
     )
 
-    conn.commit()
-
-    return cursor
+    return _get_rows(
+        result
+    )
 
 
 # =========================================================
@@ -76,97 +420,121 @@ def init_database():
 
     try:
 
-        conn = get_connection()
+        statements = [
 
-        # -------------------------------------------------
-        # 경기 테이블
-        # -------------------------------------------------
+            # -------------------------------------------------
+            # 경기
+            # -------------------------------------------------
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS matches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                schedule_id TEXT NOT NULL UNIQUE,
-                match_date TEXT,
-                home_team TEXT,
-                away_team TEXT,
-                home_score INTEGER,
-                away_score INTEGER,
-                result TEXT,
-                source TEXT DEFAULT 'Scoreman',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # -------------------------------------------------
-        # 배당 테이블
-        # -------------------------------------------------
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS odds (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                schedule_id TEXT NOT NULL,
-                bookmaker TEXT NOT NULL,
-                home_odds REAL,
-                draw_odds REAL,
-                away_odds REAL,
-                odds_type TEXT DEFAULT 'final',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (
-                    schedule_id,
-                    bookmaker,
-                    odds_type
+            (
+                """
+                CREATE TABLE IF NOT EXISTS matches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    schedule_id TEXT NOT NULL UNIQUE,
+                    match_date TEXT,
+                    home_team TEXT,
+                    away_team TEXT,
+                    home_score INTEGER,
+                    away_score INTEGER,
+                    result TEXT,
+                    source TEXT DEFAULT 'Scoreman',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
+                """,
+                ()
+            ),
+
+            # -------------------------------------------------
+            # 배당
+            # -------------------------------------------------
+
+            (
+                """
+                CREATE TABLE IF NOT EXISTS odds (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    schedule_id TEXT NOT NULL,
+                    bookmaker TEXT NOT NULL,
+                    home_odds REAL,
+                    draw_odds REAL,
+                    away_odds REAL,
+                    odds_type TEXT DEFAULT 'final',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+                    UNIQUE (
+                        schedule_id,
+                        bookmaker,
+                        odds_type
+                    )
+                )
+                """,
+                ()
+            ),
+
+            # -------------------------------------------------
+            # 인덱스
+            # -------------------------------------------------
+
+            (
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_matches_date
+                ON matches(match_date)
+                """,
+                ()
+            ),
+
+            (
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_matches_result
+                ON matches(result)
+                """,
+                ()
+            ),
+
+            (
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_odds_schedule
+                ON odds(schedule_id)
+                """,
+                ()
+            ),
+
+            (
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_odds_bookmaker
+                ON odds(bookmaker)
+                """,
+                ()
+            ),
+
+            (
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_odds_values
+                ON odds(
+                    bookmaker,
+                    home_odds,
+                    draw_odds,
+                    away_odds
+                )
+                """,
+                ()
             )
-        """)
+        ]
 
-        # -------------------------------------------------
-        # 인덱스
-        # -------------------------------------------------
+        _request_many(
+            statements
+        )
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_matches_date
-            ON matches(match_date)
-        """)
+        # 연결 확인
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_matches_result
-            ON matches(result)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_odds_schedule
-            ON odds(schedule_id)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_odds_bookmaker
-            ON odds(bookmaker)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_odds_values
-            ON odds(
-                bookmaker,
-                home_odds,
-                draw_odds,
-                away_odds
-            )
-        """)
-
-        conn.commit()
-
-        # -------------------------------------------------
-        # 테이블 확인
-        # -------------------------------------------------
-
-        conn.execute(
-            "SELECT 1 FROM matches LIMIT 1"
-        ).fetchone()
-
-        conn.execute(
-            "SELECT 1 FROM odds LIMIT 1"
-        ).fetchone()
+        _select(
+            "SELECT 1 AS test"
+        )
 
         return True
 
@@ -186,41 +554,51 @@ def init_database():
 
 def get_database_status():
 
-    conn = get_connection()
-
-    match_count = conn.execute(
+    match_rows = _select(
         """
-        SELECT COUNT(*)
+        SELECT COUNT(*) AS count
         FROM matches
         """
-    ).fetchone()[0]
+    )
 
-    odds_count = conn.execute(
+    odds_rows = _select(
         """
-        SELECT COUNT(*)
+        SELECT COUNT(*) AS count
         FROM odds
         """
-    ).fetchone()[0]
+    )
 
-    bookmaker_count = conn.execute(
+    bookmaker_rows = _select(
         """
         SELECT COUNT(
             DISTINCT bookmaker
-        )
+        ) AS count
         FROM odds
         """
-    ).fetchone()[0]
+    )
 
     return {
 
         "matches":
-            int(match_count),
+            int(
+                match_rows[0]["count"]
+                if match_rows
+                else 0
+            ),
 
         "odds":
-            int(odds_count),
+            int(
+                odds_rows[0]["count"]
+                if odds_rows
+                else 0
+            ),
 
         "bookmakers":
-            int(bookmaker_count),
+            int(
+                bookmaker_rows[0]["count"]
+                if bookmaker_rows
+                else 0
+            ),
 
         "db_exists":
             True,
@@ -231,26 +609,32 @@ def get_database_status():
 
 
 # =========================================================
-# 실제 DB 사용량
+# DB 사용량
 # =========================================================
 
 def get_storage_usage():
 
     try:
 
-        conn = get_connection()
-
-        page_count = conn.execute(
+        page_rows = _select(
             "PRAGMA page_count"
-        ).fetchone()[0]
+        )
 
-        page_size = conn.execute(
+        size_rows = _select(
             "PRAGMA page_size"
-        ).fetchone()[0]
+        )
+
+        page_count = int(
+            page_rows[0]["page_count"]
+        )
+
+        page_size = int(
+            size_rows[0]["page_size"]
+        )
 
         size_bytes = (
-            int(page_count)
-            * int(page_size)
+            page_count
+            * page_size
         )
 
         return {
@@ -312,9 +696,7 @@ def save_match(
     source="Scoreman"
 ):
 
-    conn = get_connection()
-
-    conn.execute(
+    _request(
         """
         INSERT INTO matches (
             schedule_id,
@@ -352,8 +734,6 @@ def save_match(
         )
     )
 
-    conn.commit()
-
     return True
 
 
@@ -370,9 +750,7 @@ def save_odds(
     final_away
 ):
 
-    conn = get_connection()
-
-    conn.execute(
+    _request(
         """
         INSERT INTO odds (
             schedule_id,
@@ -415,8 +793,6 @@ def save_odds(
         )
     )
 
-    conn.commit()
-
     return True
 
 
@@ -429,17 +805,18 @@ def save_match_with_odds(
     odds_list
 ):
 
-    conn = get_connection()
-
     schedule_id = str(
         match["schedule_id"]
     )
 
+    statements = []
+
     # -----------------------------------------------------
-    # 경기 저장
+    # 경기
     # -----------------------------------------------------
 
-    conn.execute(
+    statements.append((
+
         """
         INSERT INTO matches (
             schedule_id,
@@ -465,20 +842,40 @@ def save_match_with_odds(
             source = excluded.source,
             updated_at = CURRENT_TIMESTAMP
         """,
+
         (
             schedule_id,
-            match.get("match_date", ""),
-            match.get("home_team", ""),
-            match.get("away_team", ""),
-            match.get("home_score"),
-            match.get("away_score"),
-            match.get("result", ""),
-            match.get("source", "Scoreman")
+            match.get(
+                "match_date",
+                ""
+            ),
+            match.get(
+                "home_team",
+                ""
+            ),
+            match.get(
+                "away_team",
+                ""
+            ),
+            match.get(
+                "home_score"
+            ),
+            match.get(
+                "away_score"
+            ),
+            match.get(
+                "result",
+                ""
+            ),
+            match.get(
+                "source",
+                "Scoreman"
+            )
         )
-    )
+    ))
 
     # -----------------------------------------------------
-    # 배당 저장
+    # 배당
     # -----------------------------------------------------
 
     saved = 0
@@ -498,7 +895,8 @@ def save_match_with_odds(
         if not company_name:
             continue
 
-        conn.execute(
+        statements.append((
+
             """
             INSERT INTO odds (
                 schedule_id,
@@ -520,18 +918,31 @@ def save_match_with_odds(
                 draw_odds = excluded.draw_odds,
                 away_odds = excluded.away_odds
             """,
+
             (
                 schedule_id,
                 company_name,
-                odds.get("final_home"),
-                odds.get("final_draw"),
-                odds.get("final_away")
+                odds.get(
+                    "final_home"
+                ),
+                odds.get(
+                    "final_draw"
+                ),
+                odds.get(
+                    "final_away"
+                )
             )
-        )
+        ))
 
         saved += 1
 
-    conn.commit()
+    # -----------------------------------------------------
+    # 한 번의 HTTP 요청으로 저장
+    # -----------------------------------------------------
+
+    _request_many(
+        statements
+    )
 
     return saved
 
@@ -544,40 +955,24 @@ def get_match(
     schedule_id
 ):
 
-    conn = get_connection()
+    rows = _select(
 
-    row = conn.execute(
         """
         SELECT *
         FROM matches
         WHERE schedule_id = ?
         LIMIT 1
         """,
+
         (
             str(schedule_id),
         )
-    ).fetchone()
-
-    if not row:
-        return None
-
-    columns = [
-        "id",
-        "schedule_id",
-        "match_date",
-        "home_team",
-        "away_team",
-        "home_score",
-        "away_score",
-        "result",
-        "source",
-        "created_at",
-        "updated_at"
-    ]
-
-    return dict(
-        zip(columns, row)
     )
+
+    if rows:
+        return rows[0]
+
+    return None
 
 
 # =========================================================
@@ -586,34 +981,14 @@ def get_match(
 
 def get_all_matches():
 
-    conn = get_connection()
+    return _select(
 
-    rows = conn.execute(
         """
         SELECT *
         FROM matches
         ORDER BY match_date DESC
         """
-    ).fetchall()
-
-    columns = [
-        "id",
-        "schedule_id",
-        "match_date",
-        "home_team",
-        "away_team",
-        "home_score",
-        "away_score",
-        "result",
-        "source",
-        "created_at",
-        "updated_at"
-    ]
-
-    return [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    )
 
 
 # =========================================================
@@ -622,31 +997,14 @@ def get_all_matches():
 
 def get_all_odds():
 
-    conn = get_connection()
+    return _select(
 
-    rows = conn.execute(
         """
         SELECT *
         FROM odds
         ORDER BY schedule_id DESC
         """
-    ).fetchall()
-
-    columns = [
-        "id",
-        "schedule_id",
-        "bookmaker",
-        "home_odds",
-        "draw_odds",
-        "away_odds",
-        "odds_type",
-        "created_at"
-    ]
-
-    return [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    )
 
 
 # =========================================================
@@ -657,9 +1015,8 @@ def get_match_final_odds(
     schedule_id
 ):
 
-    conn = get_connection()
+    return _select(
 
-    rows = conn.execute(
         """
         SELECT *
         FROM odds
@@ -667,26 +1024,11 @@ def get_match_final_odds(
         AND odds_type = 'final'
         ORDER BY bookmaker
         """,
+
         (
             str(schedule_id),
         )
-    ).fetchall()
-
-    columns = [
-        "id",
-        "schedule_id",
-        "bookmaker",
-        "home_odds",
-        "draw_odds",
-        "away_odds",
-        "odds_type",
-        "created_at"
-    ]
-
-    return [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    )
 
 
 # =========================================================
@@ -695,15 +1037,17 @@ def get_match_final_odds(
 
 def get_match_count():
 
-    conn = get_connection()
+    rows = _select(
+        """
+        SELECT COUNT(*) AS count
+        FROM matches
+        """
+    )
 
     return int(
-        conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM matches
-            """
-        ).fetchone()[0]
+        rows[0]["count"]
+        if rows
+        else 0
     )
 
 
@@ -713,15 +1057,17 @@ def get_match_count():
 
 def get_odds_count():
 
-    conn = get_connection()
+    rows = _select(
+        """
+        SELECT COUNT(*) AS count
+        FROM odds
+        """
+    )
 
     return int(
-        conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM odds
-            """
-        ).fetchone()[0]
+        rows[0]["count"]
+        if rows
+        else 0
     )
 
 
@@ -731,9 +1077,8 @@ def get_odds_count():
 
 def get_company_names():
 
-    conn = get_connection()
+    rows = _select(
 
-    rows = conn.execute(
         """
         SELECT DISTINCT bookmaker
         FROM odds
@@ -741,10 +1086,12 @@ def get_company_names():
         AND bookmaker != ''
         ORDER BY bookmaker
         """
-    ).fetchall()
+    )
 
     return [
-        str(row[0])
+        str(
+            row["bookmaker"]
+        )
         for row in rows
     ]
 
@@ -755,9 +1102,8 @@ def get_company_names():
 
 def get_company_counts():
 
-    conn = get_connection()
+    rows = _select(
 
-    rows = conn.execute(
         """
         SELECT
             bookmaker,
@@ -768,10 +1114,13 @@ def get_company_counts():
         GROUP BY bookmaker
         ORDER BY cnt DESC
         """
-    ).fetchall()
+    )
 
     return {
-        str(row[0]): int(row[1])
+
+        str(row["bookmaker"]):
+            int(row["cnt"])
+
         for row in rows
     }
 
@@ -786,8 +1135,6 @@ def search_multiple_final_odds(
 
     if not company_odds:
         return []
-
-    conn = get_connection()
 
     schedule_ids = None
 
@@ -809,10 +1156,12 @@ def search_multiple_final_odds(
             odds["away"]
         )
 
-        rows = conn.execute(
+        rows = _select(
+
             """
             SELECT schedule_id
             FROM odds
+
             WHERE bookmaker = ?
             AND odds_type = 'final'
 
@@ -825,6 +1174,7 @@ def search_multiple_final_odds(
             AND away_odds >= ?
             AND away_odds <= ?
             """,
+
             (
                 company_name,
 
@@ -837,10 +1187,14 @@ def search_multiple_final_odds(
                 away - tolerance,
                 away + tolerance
             )
-        ).fetchall()
+        )
 
         ids = {
-            str(row[0])
+
+            str(
+                row["schedule_id"]
+            )
+
             for row in rows
         }
 
@@ -853,16 +1207,19 @@ def search_multiple_final_odds(
             schedule_ids &= ids
 
         if not schedule_ids:
+
             return []
 
     if not schedule_ids:
+
         return []
 
     placeholders = ",".join(
         ["?"] * len(schedule_ids)
     )
 
-    rows = conn.execute(
+    matches = _select(
+
         f"""
         SELECT *
         FROM matches
@@ -871,30 +1228,12 @@ def search_multiple_final_odds(
         )
         ORDER BY match_date DESC
         """,
+
         tuple(schedule_ids)
-    ).fetchall()
-
-    columns = [
-        "id",
-        "schedule_id",
-        "match_date",
-        "home_team",
-        "away_team",
-        "home_score",
-        "away_score",
-        "result",
-        "source",
-        "created_at",
-        "updated_at"
-    ]
-
-    matches = [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    )
 
     # -----------------------------------------------------
-    # 업체별 배당 붙이기
+    # 업체별 배당 추가
     # -----------------------------------------------------
 
     for match in matches:
@@ -903,7 +1242,8 @@ def search_multiple_final_odds(
             match["schedule_id"]
         )
 
-        odds_rows = conn.execute(
+        odds_rows = _select(
+
             """
             SELECT
                 bookmaker,
@@ -914,14 +1254,21 @@ def search_multiple_final_odds(
             WHERE schedule_id = ?
             AND odds_type = 'final'
             """,
-            (sid,)
-        ).fetchall()
 
-        match["company_odds"] = {}
+            (
+                sid,
+            )
+        )
+
+        match[
+            "company_odds"
+        ] = {}
 
         for row in odds_rows:
 
-            company = row[0]
+            company = row.get(
+                "bookmaker"
+            )
 
             if company:
 
@@ -930,13 +1277,19 @@ def search_multiple_final_odds(
                 ][company] = {
 
                     "home":
-                        row[1],
+                        row.get(
+                            "home_odds"
+                        ),
 
                     "draw":
-                        row[2],
+                        row.get(
+                            "draw_odds"
+                        ),
 
                     "away":
-                        row[3]
+                        row.get(
+                            "away_odds"
+                        )
                 }
 
     return matches
@@ -948,17 +1301,21 @@ def search_multiple_final_odds(
 
 def clear_database():
 
-    conn = get_connection()
+    _request_many([
 
-    conn.execute(
-        "DELETE FROM odds"
-    )
+        (
+            "DELETE FROM odds",
+            ()
+        ),
 
-    conn.execute(
-        "DELETE FROM matches"
-    )
+        (
+            "DELETE FROM matches",
+            ()
+        )
 
-    conn.commit()
+    ])
+
+    return True
 
 
 # =========================================================
@@ -986,9 +1343,8 @@ def odds_exists(
     company_name
 ):
 
-    conn = get_connection()
+    rows = _select(
 
-    row = conn.execute(
         """
         SELECT id
         FROM odds
@@ -997,13 +1353,14 @@ def odds_exists(
         AND odds_type = 'final'
         LIMIT 1
         """,
+
         (
             str(schedule_id),
             str(company_name)
         )
-    ).fetchone()
+    )
 
-    return row is not None
+    return bool(rows)
 
 
 # =========================================================
@@ -1014,38 +1371,19 @@ def get_matches_by_result(
     result_value
 ):
 
-    conn = get_connection()
+    return _select(
 
-    rows = conn.execute(
         """
         SELECT *
         FROM matches
         WHERE result = ?
         ORDER BY match_date DESC
         """,
+
         (
             result_value,
         )
-    ).fetchall()
-
-    columns = [
-        "id",
-        "schedule_id",
-        "match_date",
-        "home_team",
-        "away_team",
-        "home_score",
-        "away_score",
-        "result",
-        "source",
-        "created_at",
-        "updated_at"
-    ]
-
-    return [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    )
 
 
 # =========================================================
@@ -1056,9 +1394,8 @@ def get_odds_by_company(
     company_name
 ):
 
-    conn = get_connection()
+    return _select(
 
-    rows = conn.execute(
         """
         SELECT *
         FROM odds
@@ -1066,26 +1403,11 @@ def get_odds_by_company(
         AND odds_type = 'final'
         ORDER BY schedule_id DESC
         """,
+
         (
             company_name,
         )
-    ).fetchall()
-
-    columns = [
-        "id",
-        "schedule_id",
-        "bookmaker",
-        "home_odds",
-        "draw_odds",
-        "away_odds",
-        "odds_type",
-        "created_at"
-    ]
-
-    return [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    )
 
 
 # =========================================================
@@ -1095,6 +1417,10 @@ def get_odds_by_company(
 if __name__ == "__main__":
 
     try:
+
+        print(
+            "Turso 연결 테스트 시작"
+        )
 
         ok = init_database()
 
@@ -1123,4 +1449,4 @@ if __name__ == "__main__":
         print(
             "오류:",
             e
-        )
+    )
