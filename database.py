@@ -5,6 +5,7 @@
 #
 # libsql-experimental 사용 안 함
 # Python 3.14 호환
+# 문자열 배당값 자동 float 변환
 # ============================================================
 
 import streamlit as st
@@ -12,7 +13,7 @@ import requests
 
 
 # =========================================================
-# Turso 연결 정보
+# Turso 연결
 # =========================================================
 
 @st.cache_resource
@@ -29,45 +30,54 @@ def get_connection():
     ).strip()
 
     if not url:
-
         raise RuntimeError(
             "TURSO_DATABASE_URL이 없습니다.\n"
             "Streamlit Cloud → Manage app → Settings → Secrets를 확인하세요."
         )
 
     if not token:
-
         raise RuntimeError(
             "TURSO_AUTH_TOKEN이 없습니다.\n"
             "Streamlit Cloud → Manage app → Settings → Secrets를 확인하세요."
         )
 
-    # -----------------------------------------------------
-    # libsql:// → https://
-    # -----------------------------------------------------
-
     if url.startswith("libsql://"):
-
-        url = (
-            "https://"
-            + url[len("libsql://"):]
-        )
-
-    # -----------------------------------------------------
-    # /v2/pipeline
-    # -----------------------------------------------------
+        url = "https://" + url[len("libsql://"):]
 
     if not url.endswith("/v2/pipeline"):
-
-        url = (
-            url.rstrip("/")
-            + "/v2/pipeline"
-        )
+        url = url.rstrip("/") + "/v2/pipeline"
 
     return {
         "url": url,
         "token": token
     }
+
+
+# =========================================================
+# 숫자 변환
+# =========================================================
+
+def _to_float(value):
+    """
+    None / 빈문자열 / 잘못된 값을 안전하게 처리.
+    '1.38' -> 1.38
+    1.38 -> 1.38
+    """
+
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        value = value.strip()
+
+        if not value:
+            return None
+
+    try:
+        return float(value)
+
+    except (TypeError, ValueError):
+        return None
 
 
 # =========================================================
@@ -77,27 +87,23 @@ def get_connection():
 def _encode_value(value):
 
     if value is None:
-
         return {
             "type": "null"
         }
 
     if isinstance(value, bool):
-
         return {
             "type": "integer",
             "value": "1" if value else "0"
         }
 
     if isinstance(value, int):
-
         return {
             "type": "integer",
             "value": str(value)
         }
 
     if isinstance(value, float):
-
         return {
             "type": "float",
             "value": str(value)
@@ -113,10 +119,7 @@ def _encode_value(value):
 # Turso HTTP 실행
 # =========================================================
 
-def _request(
-    sql,
-    params=()
-):
+def _request(sql, params=()):
 
     conn = get_connection()
 
@@ -126,37 +129,23 @@ def _request(
     ]
 
     payload = {
-
         "requests": [
-
             {
                 "type": "execute",
-
                 "stmt": {
-
-                    "sql":
-                        sql,
-
-                    "args":
-                        args
+                    "sql": sql,
+                    "args": args
                 }
             },
-
             {
-                "type":
-                    "close"
+                "type": "close"
             }
         ]
     }
 
     headers = {
-
-        "Authorization":
-            "Bearer "
-            + conn["token"],
-
-        "Content-Type":
-            "application/json"
+        "Authorization": "Bearer " + conn["token"],
+        "Content-Type": "application/json"
     }
 
     response = requests.post(
@@ -167,7 +156,6 @@ def _request(
     )
 
     if response.status_code != 200:
-
         raise RuntimeError(
             "Turso HTTP 오류 "
             f"{response.status_code}: "
@@ -177,7 +165,6 @@ def _request(
     data = response.json()
 
     if "results" not in data:
-
         raise RuntimeError(
             "Turso 응답 오류: "
             + str(data)[:2000]
@@ -186,24 +173,14 @@ def _request(
     first = data["results"][0]
 
     if first.get("type") == "error":
-
-        error = first.get(
-            "error",
-            {}
-        )
-
         raise RuntimeError(
             "Turso SQL 오류: "
-            + str(error)
+            + str(first)
         )
 
-    result = first.get(
-        "result",
-        {}
-    )
+    result = first.get("result", {})
 
     if result.get("type") == "error":
-
         raise RuntimeError(
             "Turso SQL 오류: "
             + str(result)
@@ -216,9 +193,7 @@ def _request(
 # 여러 SQL 일괄 실행
 # =========================================================
 
-def _request_many(
-    statements
-):
+def _request_many(statements):
 
     conn = get_connection()
 
@@ -227,15 +202,9 @@ def _request_many(
     for sql, params in statements:
 
         requests_data.append({
-
-            "type":
-                "execute",
-
+            "type": "execute",
             "stmt": {
-
-                "sql":
-                    sql,
-
+                "sql": sql,
                 "args": [
                     _encode_value(value)
                     for value in params
@@ -248,18 +217,12 @@ def _request_many(
     })
 
     payload = {
-        "requests":
-            requests_data
+        "requests": requests_data
     }
 
     headers = {
-
-        "Authorization":
-            "Bearer "
-            + conn["token"],
-
-        "Content-Type":
-            "application/json"
+        "Authorization": "Bearer " + conn["token"],
+        "Content-Type": "application/json"
     }
 
     response = requests.post(
@@ -270,7 +233,6 @@ def _request_many(
     )
 
     if response.status_code != 200:
-
         raise RuntimeError(
             "Turso HTTP 오류 "
             f"{response.status_code}: "
@@ -280,7 +242,6 @@ def _request_many(
     data = response.json()
 
     if "results" not in data:
-
         raise RuntimeError(
             "Turso 응답 오류: "
             + str(data)[:2000]
@@ -289,35 +250,35 @@ def _request_many(
     for item in data["results"]:
 
         if item.get("type") == "error":
-
             raise RuntimeError(
                 "Turso SQL 오류: "
                 + str(item)
+            )
+
+        result = item.get("result", {})
+
+        if result.get("type") == "error":
+            raise RuntimeError(
+                "Turso SQL 오류: "
+                + str(result)
             )
 
     return data
 
 
 # =========================================================
-# Turso 행 변환
+# Turso 값 변환
 # =========================================================
 
 def _decode_value(value):
 
     if value is None:
-
         return None
 
-    value_type = value.get(
-        "type"
-    )
-
-    raw = value.get(
-        "value"
-    )
+    value_type = value.get("type")
+    raw = value.get("value")
 
     if value_type == "null":
-
         return None
 
     if value_type == "integer":
@@ -335,7 +296,6 @@ def _decode_value(value):
             return raw
 
     if value_type == "blob":
-
         return raw
 
     return raw
@@ -343,31 +303,18 @@ def _decode_value(value):
 
 def _get_rows(result):
 
-    cols = result.get(
-        "cols",
-        []
-    )
-
-    rows = result.get(
-        "rows",
-        []
-    )
+    cols = result.get("cols", [])
+    rows = result.get("rows", [])
 
     column_names = []
 
     for col in cols:
 
         if isinstance(col, dict):
-
             column_names.append(
-                col.get(
-                    "name",
-                    ""
-                )
+                col.get("name", "")
             )
-
         else:
-
             column_names.append(
                 str(col)
             )
@@ -397,19 +344,14 @@ def _get_rows(result):
 # SELECT
 # =========================================================
 
-def _select(
-    sql,
-    params=()
-):
+def _select(sql, params=()):
 
     result = _request(
         sql,
         params
     )
 
-    return _get_rows(
-        result
-    )
+    return _get_rows(result)
 
 
 # =========================================================
@@ -421,10 +363,6 @@ def init_database():
     try:
 
         statements = [
-
-            # -------------------------------------------------
-            # 경기
-            # -------------------------------------------------
 
             (
                 """
@@ -444,10 +382,6 @@ def init_database():
                 """,
                 ()
             ),
-
-            # -------------------------------------------------
-            # 배당
-            # -------------------------------------------------
 
             (
                 """
@@ -470,10 +404,6 @@ def init_database():
                 """,
                 ()
             ),
-
-            # -------------------------------------------------
-            # 인덱스
-            # -------------------------------------------------
 
             (
                 """
@@ -530,8 +460,6 @@ def init_database():
             statements
         )
 
-        # 연결 확인
-
         _select(
             "SELECT 1 AS test"
         )
@@ -570,9 +498,7 @@ def get_database_status():
 
     bookmaker_rows = _select(
         """
-        SELECT COUNT(
-            DISTINCT bookmaker
-        ) AS count
+        SELECT COUNT(DISTINCT bookmaker) AS count
         FROM odds
         """
     )
@@ -633,8 +559,7 @@ def get_storage_usage():
         )
 
         size_bytes = (
-            page_count
-            * page_size
+            page_count * page_size
         )
 
         return {
@@ -646,15 +571,10 @@ def get_storage_usage():
                 size_bytes,
 
             "size_mb":
-                size_bytes
-                / 1024
-                / 1024,
+                size_bytes / 1024 / 1024,
 
             "size_gb":
-                size_bytes
-                / 1024
-                / 1024
-                / 1024,
+                size_bytes / 1024 / 1024 / 1024,
 
             "message":
                 ""
@@ -750,6 +670,10 @@ def save_odds(
     final_away
 ):
 
+    home = _to_float(final_home)
+    draw = _to_float(final_draw)
+    away = _to_float(final_away)
+
     _request(
         """
         INSERT INTO odds (
@@ -775,21 +699,9 @@ def save_odds(
         (
             str(schedule_id),
             str(company_name or ""),
-            (
-                float(final_home)
-                if final_home is not None
-                else None
-            ),
-            (
-                float(final_draw)
-                if final_draw is not None
-                else None
-            ),
-            (
-                float(final_away)
-                if final_away is not None
-                else None
-            )
+            home,
+            draw,
+            away
         )
     )
 
@@ -845,28 +757,35 @@ def save_match_with_odds(
 
         (
             schedule_id,
+
             match.get(
                 "match_date",
                 ""
             ),
+
             match.get(
                 "home_team",
                 ""
             ),
+
             match.get(
                 "away_team",
                 ""
             ),
+
             match.get(
                 "home_score"
             ),
+
             match.get(
                 "away_score"
             ),
+
             match.get(
                 "result",
                 ""
             ),
+
             match.get(
                 "source",
                 "Scoreman"
@@ -895,6 +814,28 @@ def save_match_with_odds(
         if not company_name:
             continue
 
+        # ★ 핵심 수정
+        # Scoreman에서 "1.38" 문자열로 들어와도
+        # Turso에는 숫자 1.38로 전송
+
+        final_home = _to_float(
+            odds.get(
+                "final_home"
+            )
+        )
+
+        final_draw = _to_float(
+            odds.get(
+                "final_draw"
+            )
+        )
+
+        final_away = _to_float(
+            odds.get(
+                "final_away"
+            )
+        )
+
         statements.append((
 
             """
@@ -922,15 +863,9 @@ def save_match_with_odds(
             (
                 schedule_id,
                 company_name,
-                odds.get(
-                    "final_home"
-                ),
-                odds.get(
-                    "final_draw"
-                ),
-                odds.get(
-                    "final_away"
-                )
+                final_home,
+                final_draw,
+                final_away
             )
         ))
 
@@ -940,9 +875,11 @@ def save_match_with_odds(
     # 한 번의 HTTP 요청으로 저장
     # -----------------------------------------------------
 
-    _request_many(
-        statements
-    )
+    if statements:
+
+        _request_many(
+            statements
+        )
 
     return saved
 
@@ -951,9 +888,7 @@ def save_match_with_odds(
 # 경기 조회
 # =========================================================
 
-def get_match(
-    schedule_id
-):
+def get_match(schedule_id):
 
     rows = _select(
 
@@ -1011,9 +946,7 @@ def get_all_odds():
 # 특정 경기 배당
 # =========================================================
 
-def get_match_final_odds(
-    schedule_id
-):
+def get_match_final_odds(schedule_id):
 
     return _select(
 
@@ -1144,17 +1077,24 @@ def search_multiple_final_odds(
         company_odds.items()
     ):
 
-        home = float(
-            odds["home"]
+        home = _to_float(
+            odds.get("home")
         )
 
-        draw = float(
-            odds["draw"]
+        draw = _to_float(
+            odds.get("draw")
         )
 
-        away = float(
-            odds["away"]
+        away = _to_float(
+            odds.get("away")
         )
+
+        if (
+            home is None
+            or draw is None
+            or away is None
+        ):
+            continue
 
         rows = _select(
 
@@ -1207,11 +1147,9 @@ def search_multiple_final_odds(
             schedule_ids &= ids
 
         if not schedule_ids:
-
             return []
 
     if not schedule_ids:
-
         return []
 
     placeholders = ",".join(
@@ -1260,9 +1198,7 @@ def search_multiple_final_odds(
             )
         )
 
-        match[
-            "company_odds"
-        ] = {}
+        match["company_odds"] = {}
 
         for row in odds_rows:
 
@@ -1322,9 +1258,7 @@ def clear_database():
 # 경기 존재 확인
 # =========================================================
 
-def match_exists(
-    schedule_id
-):
+def match_exists(schedule_id):
 
     return (
         get_match(
