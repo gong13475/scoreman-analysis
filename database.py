@@ -15,6 +15,7 @@ except Exception:
 # =========================================================
 
 BASE_DIR = Path(__file__).resolve().parent
+
 SQLITE_PATH = BASE_DIR / "scoreman.db"
 
 TURSO_DATABASE_URL = os.getenv(
@@ -31,16 +32,21 @@ _DB_LOCK = threading.RLock()
 
 
 # =========================================================
-# DB 연결
+# Turso 사용 여부
 # =========================================================
 
 def _use_turso():
+
     return bool(
         TURSO_DATABASE_URL
         and TURSO_AUTH_TOKEN
         and libsql is not None
     )
 
+
+# =========================================================
+# DB 연결
+# =========================================================
 
 def get_connection():
 
@@ -56,6 +62,10 @@ def get_connection():
         check_same_thread=False
     )
 
+
+# =========================================================
+# 기본 SQL 실행
+# =========================================================
 
 def _execute(
     sql,
@@ -101,6 +111,10 @@ def _execute(
             conn.close()
 
 
+# =========================================================
+# Dictionary 조회
+# =========================================================
+
 def _execute_dict(
     sql,
     params=()
@@ -120,6 +134,7 @@ def _execute_dict(
             )
 
             if not cur.description:
+
                 return None
 
             columns = [
@@ -130,6 +145,7 @@ def _execute_dict(
             row = cur.fetchone()
 
             if not row:
+
                 return None
 
             return dict(
@@ -142,7 +158,7 @@ def _execute_dict(
 
 
 # =========================================================
-# 초기화
+# DB 초기화
 # =========================================================
 
 def init_database():
@@ -196,8 +212,15 @@ def init_database():
     _execute(
         """
         INSERT OR IGNORE INTO collection_state
-        (id, selected_companies)
-        VALUES (1, '[]')
+        (
+            id,
+            selected_companies
+        )
+        VALUES
+        (
+            1,
+            '[]'
+        )
         """
     )
 
@@ -239,7 +262,34 @@ def get_database_status():
 
 def get_storage_usage():
 
-    # SQLite fallback의 실제 파일 크기
+    # -----------------------------------------------------
+    # Turso 사용 중
+    # -----------------------------------------------------
+    if _use_turso():
+
+        return {
+            "success": True,
+
+            "size_bytes": None,
+
+            "size_mb": None,
+
+            "size_gb": None,
+
+            "storage_type": "Turso",
+
+            "is_turso": True,
+
+            "message": (
+                "현재 데이터베이스는 Turso를 사용 중입니다. "
+                "Turso 실제 저장 용량과 무료 플랜 사용량은 "
+                "Turso 콘솔에서 확인하세요."
+            )
+        }
+
+    # -----------------------------------------------------
+    # SQLite 사용 중
+    # -----------------------------------------------------
     try:
 
         if SQLITE_PATH.exists():
@@ -252,13 +302,24 @@ def get_storage_usage():
 
         return {
             "success": True,
+
             "size_bytes": size_bytes,
-            "size_mb": size_bytes / 1024 / 1024,
-            "size_gb": size_bytes / 1024 / 1024 / 1024,
-            "storage_type": (
-                "Turso"
-                if _use_turso()
-                else "SQLite"
+
+            "size_mb": (
+                size_bytes / 1024 / 1024
+            ),
+
+            "size_gb": (
+                size_bytes / 1024 / 1024 / 1024
+            ),
+
+            "storage_type": "SQLite",
+
+            "is_turso": False,
+
+            "message": (
+                "현재 로컬 SQLite 파일의 "
+                "저장 크기입니다."
             )
         }
 
@@ -266,17 +327,24 @@ def get_storage_usage():
 
         return {
             "success": False,
+
             "size_bytes": 0,
+
             "size_mb": 0,
+
             "size_gb": 0,
-            "storage_type": (
-                "Turso"
-                if _use_turso()
-                else "SQLite"
-            ),
-            "error": str(e)
+
+            "storage_type": "SQLite",
+
+            "is_turso": False,
+
+            "message": str(e)
         }
 
+
+# =========================================================
+# DB 정보
+# =========================================================
 
 def get_database_info():
 
@@ -284,19 +352,22 @@ def get_database_info():
 
     return {
         "using_turso": _use_turso(),
+
         "turso_configured": bool(
             TURSO_DATABASE_URL
             and TURSO_AUTH_TOKEN
         ),
+
         "libsql_available": (
             libsql is not None
         ),
+
         "storage": usage
     }
 
 
 # =========================================================
-# 경기
+# 경기 조회
 # =========================================================
 
 def get_match(schedule_id):
@@ -315,7 +386,9 @@ def get_match(schedule_id):
         FROM matches
         WHERE schedule_id = ?
         """,
-        (str(schedule_id),)
+        (
+            str(schedule_id),
+        )
     )
 
 
@@ -461,6 +534,7 @@ def save_match_with_odds(
                 )
 
                 if not company_name:
+
                     continue
 
                 cur.execute(
@@ -475,26 +549,38 @@ def save_match_with_odds(
                     )
                     VALUES (?, ?, ?, ?, ?, ?)
 
-                    ON CONFLICT(schedule_id, bookmaker)
+                    ON CONFLICT(
+                        schedule_id,
+                        bookmaker
+                    )
                     DO UPDATE SET
-                        bookmaker_id=excluded.bookmaker_id,
-                        home_odds=excluded.home_odds,
-                        draw_odds=excluded.draw_odds,
-                        away_odds=excluded.away_odds
+                        bookmaker_id=
+                            excluded.bookmaker_id,
+                        home_odds=
+                            excluded.home_odds,
+                        draw_odds=
+                            excluded.draw_odds,
+                        away_odds=
+                            excluded.away_odds
                     """,
                     (
                         str(match["schedule_id"]),
+
                         company_name,
+
                         row.get(
                             "company_id",
                             ""
                         ),
+
                         float(
                             row["final_home"]
                         ),
+
                         float(
                             row["final_draw"]
                         ),
+
                         float(
                             row["final_away"]
                         )
@@ -530,7 +616,9 @@ def get_odds_by_match(schedule_id):
         WHERE schedule_id = ?
         ORDER BY bookmaker
         """,
-        (str(schedule_id),),
+        (
+            str(schedule_id),
+        ),
         fetch=True
     )
 
@@ -711,6 +799,7 @@ def get_collection_state():
     )
 
     if not row:
+
         return {}
 
     try:
