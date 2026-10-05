@@ -1,9 +1,7 @@
 # ============================================================
 # database.py
 # 스코어맨 분석기
-# SQLite → Supabase 영구저장 버전
-#
-# 기존 scoreman_crawler.py / analysis.py 호환 목적
+# Supabase PostgreSQL 영구저장 버전
 # ============================================================
 
 import streamlit as st
@@ -17,19 +15,19 @@ from supabase import create_client
 @st.cache_resource
 def get_connection():
 
-    url = st.secrets.get("SUPABASE_URL", "")
-    key = st.secrets.get("SUPABASE_KEY", "")
+    url = st.secrets.get("SUPABASE_URL", "").strip()
+    key = st.secrets.get("SUPABASE_KEY", "").strip()
 
     if not url:
         raise RuntimeError(
             "SUPABASE_URL이 없습니다.\n"
-            "Streamlit Secrets에 SUPABASE_URL을 입력하세요."
+            "Streamlit Cloud → Settings → Secrets를 확인하세요."
         )
 
     if not key:
         raise RuntimeError(
             "SUPABASE_KEY가 없습니다.\n"
-            "Streamlit Secrets에 SUPABASE_KEY를 입력하세요."
+            "Streamlit Cloud → Settings → Secrets를 확인하세요."
         )
 
     return create_client(
@@ -56,11 +54,22 @@ def init_database():
             1
         ).execute()
 
+        supabase.table(
+            "odds"
+        ).select(
+            "id"
+        ).limit(
+            1
+        ).execute()
+
         return True
 
     except Exception as e:
 
-        print("Supabase 연결 오류:", e)
+        print(
+            "Supabase 연결 오류:",
+            e
+        )
 
         return False
 
@@ -73,7 +82,10 @@ def get_database_status():
 
     supabase = get_connection()
 
+    # -----------------------------------------------------
     # 경기 수
+    # -----------------------------------------------------
+
     match_result = (
         supabase
         .table("matches")
@@ -84,13 +96,14 @@ def get_database_status():
         .execute()
     )
 
-    match_count = (
-        match_result.count
-        if match_result.count is not None
-        else 0
+    match_count = int(
+        match_result.count or 0
     )
 
+    # -----------------------------------------------------
     # 배당 수
+    # -----------------------------------------------------
+
     odds_result = (
         supabase
         .table("odds")
@@ -101,38 +114,133 @@ def get_database_status():
         .execute()
     )
 
-    odds_count = (
-        odds_result.count
-        if odds_result.count is not None
-        else 0
+    odds_count = int(
+        odds_result.count or 0
     )
 
-    # 업체 목록
+    # -----------------------------------------------------
+    # 업체
+    # -----------------------------------------------------
+
     bookmaker_result = (
         supabase
         .table("odds")
-        .select("bookmaker")
+        .select(
+            "bookmaker"
+        )
         .execute()
     )
 
     companies = set()
 
-    for row in bookmaker_result.data or []:
+    for row in (
+        bookmaker_result.data or []
+    ):
 
-        name = row.get("bookmaker")
+        name = row.get(
+            "bookmaker"
+        )
 
         if name:
+
             companies.add(
                 str(name)
             )
 
     return {
-        "matches": int(match_count),
-        "odds": int(odds_count),
-        "bookmakers": len(companies),
-        "db_exists": True,
-        "db_file": "Supabase PostgreSQL"
+
+        "matches":
+            match_count,
+
+        "odds":
+            odds_count,
+
+        "bookmakers":
+            len(companies),
+
+        "db_exists":
+            True,
+
+        "db_file":
+            "Supabase PostgreSQL"
     }
+
+
+# =========================================================
+# Supabase 실제 DB 사용량
+# =========================================================
+
+def get_storage_usage():
+
+    try:
+
+        supabase = get_connection()
+
+        result = (
+            supabase
+            .rpc(
+                "get_database_size"
+            )
+            .execute()
+        )
+
+        if result.data is None:
+
+            return {
+                "success": False,
+                "size_bytes": 0,
+                "size_mb": 0,
+                "size_gb": 0,
+                "message":
+                    "저장용량 정보를 가져오지 못했습니다."
+            }
+
+        size_bytes = int(
+            result.data
+        )
+
+        return {
+
+            "success":
+                True,
+
+            "size_bytes":
+                size_bytes,
+
+            "size_mb":
+                size_bytes
+                / 1024
+                / 1024,
+
+            "size_gb":
+                size_bytes
+                / 1024
+                / 1024
+                / 1024,
+
+            "message":
+                ""
+        }
+
+    except Exception as e:
+
+        return {
+
+            "success":
+                False,
+
+            "size_bytes":
+                0,
+
+            "size_mb":
+                0,
+
+            "size_gb":
+                0,
+
+            "message":
+                str(e)
+        }
 
 
 # =========================================================
@@ -153,14 +261,30 @@ def save_match(
     supabase = get_connection()
 
     data = {
-        "schedule_id": str(schedule_id),
-        "match_date": match_date,
-        "home_team": home_team,
-        "away_team": away_team,
-        "home_score": home_score,
-        "away_score": away_score,
-        "result": result,
-        "source": source
+
+        "schedule_id":
+            str(schedule_id),
+
+        "match_date":
+            match_date,
+
+        "home_team":
+            home_team,
+
+        "away_team":
+            away_team,
+
+        "home_score":
+            home_score,
+
+        "away_score":
+            away_score,
+
+        "result":
+            result,
+
+        "source":
+            source
     }
 
     return (
@@ -176,8 +300,6 @@ def save_match(
 
 # =========================================================
 # 단일 배당 저장
-#
-# 기존 함수명 유지
 # =========================================================
 
 def save_odds(
@@ -192,26 +314,38 @@ def save_odds(
     supabase = get_connection()
 
     data = {
-        "schedule_id": str(schedule_id),
-        "bookmaker": str(
-            company_name or ""
-        ),
-        "home_odds": (
-            float(final_home)
-            if final_home is not None
-            else None
-        ),
-        "draw_odds": (
-            float(final_draw)
-            if final_draw is not None
-            else None
-        ),
-        "away_odds": (
-            float(final_away)
-            if final_away is not None
-            else None
-        ),
-        "odds_type": "final"
+
+        "schedule_id":
+            str(schedule_id),
+
+        "bookmaker":
+            str(
+                company_name or ""
+            ),
+
+        "home_odds":
+            (
+                float(final_home)
+                if final_home is not None
+                else None
+            ),
+
+        "draw_odds":
+            (
+                float(final_draw)
+                if final_draw is not None
+                else None
+            ),
+
+        "away_odds":
+            (
+                float(final_away)
+                if final_away is not None
+                else None
+            ),
+
+        "odds_type":
+            "final"
     }
 
     return (
@@ -231,8 +365,6 @@ def save_odds(
 
 # =========================================================
 # 경기 + 배당 일괄 저장
-#
-# 스코어맨 크롤러 핵심 저장 함수
 # =========================================================
 
 def save_match_with_odds(
@@ -247,34 +379,53 @@ def save_match_with_odds(
     )
 
     # -----------------------------------------------------
-    # 경기 저장
+    # 경기
     # -----------------------------------------------------
 
     match_data = {
-        "schedule_id": schedule_id,
-        "match_date": match.get(
-            "match_date",
-            ""
-        ),
-        "home_team": match.get(
-            "home_team",
-            ""
-        ),
-        "away_team": match.get(
-            "away_team",
-            ""
-        ),
-        "home_score": match.get(
-            "home_score"
-        ),
-        "away_score": match.get(
-            "away_score"
-        ),
-        "result": match.get(
-            "result",
-            ""
-        ),
-        "source": "Scoreman"
+
+        "schedule_id":
+            schedule_id,
+
+        "match_date":
+            match.get(
+                "match_date",
+                ""
+            ),
+
+        "home_team":
+            match.get(
+                "home_team",
+                ""
+            ),
+
+        "away_team":
+            match.get(
+                "away_team",
+                ""
+            ),
+
+        "home_score":
+            match.get(
+                "home_score"
+            ),
+
+        "away_score":
+            match.get(
+                "away_score"
+            ),
+
+        "result":
+            match.get(
+                "result",
+                ""
+            ),
+
+        "source":
+            match.get(
+                "source",
+                "Scoreman"
+            )
     }
 
     (
@@ -288,12 +439,14 @@ def save_match_with_odds(
     )
 
     # -----------------------------------------------------
-    # 배당 저장
+    # 배당
     # -----------------------------------------------------
 
     rows = []
 
-    for odds in odds_list:
+    for odds in (
+        odds_list or []
+    ):
 
         company_name = str(
             odds.get(
@@ -301,7 +454,7 @@ def save_match_with_odds(
                 ""
             )
             or ""
-        )
+        ).strip()
 
         if not company_name:
             continue
@@ -334,7 +487,7 @@ def save_match_with_odds(
         })
 
     # -----------------------------------------------------
-    # 배당 일괄 저장
+    # 일괄 저장
     # -----------------------------------------------------
 
     if rows:
@@ -508,8 +661,6 @@ def get_odds_count():
 
 # =========================================================
 # 업체 목록
-#
-# 기존 company_name 함수 유지
 # =========================================================
 
 def get_company_names():
@@ -519,13 +670,17 @@ def get_company_names():
     result = (
         supabase
         .table("odds")
-        .select("bookmaker")
+        .select(
+            "bookmaker"
+        )
         .execute()
     )
 
     names = set()
 
-    for row in result.data or []:
+    for row in (
+        result.data or []
+    ):
 
         name = row.get(
             "bookmaker"
@@ -551,13 +706,17 @@ def get_company_counts():
     result = (
         supabase
         .table("odds")
-        .select("bookmaker")
+        .select(
+            "bookmaker"
+        )
         .execute()
     )
 
     counts = {}
 
-    for row in result.data or []:
+    for row in (
+        result.data or []
+    ):
 
         name = row.get(
             "bookmaker"
@@ -583,8 +742,6 @@ def get_company_counts():
 
 # =========================================================
 # 동일 배당 검색
-#
-# 여러 업체가 같은 배당을 가진 경기 검색
 # =========================================================
 
 def search_multiple_final_odds(
@@ -600,10 +757,6 @@ def search_multiple_final_odds(
     schedule_ids = None
 
     tolerance = 0.00001
-
-    # -----------------------------------------------------
-    # 업체별 검색
-    # -----------------------------------------------------
 
     for company_name, odds in (
         company_odds.items()
@@ -621,61 +774,39 @@ def search_multiple_final_odds(
             odds["away"]
         )
 
-        home_min = (
-            home - tolerance
-        )
-
-        home_max = (
-            home + tolerance
-        )
-
-        draw_min = (
-            draw - tolerance
-        )
-
-        draw_max = (
-            draw + tolerance
-        )
-
-        away_min = (
-            away - tolerance
-        )
-
-        away_max = (
-            away + tolerance
-        )
-
         result = (
             supabase
             .table("odds")
-            .select("schedule_id")
+            .select(
+                "schedule_id"
+            )
             .eq(
                 "bookmaker",
                 company_name
             )
             .gte(
                 "home_odds",
-                home_min
+                home - tolerance
             )
             .lte(
                 "home_odds",
-                home_max
+                home + tolerance
             )
             .gte(
                 "draw_odds",
-                draw_min
+                draw - tolerance
             )
             .lte(
                 "draw_odds",
-                draw_max
+                draw + tolerance
             )
             .gte(
                 "away_odds",
-                away_min
+                away - tolerance
             )
             .lte(
                 "away_odds",
-                away_max
+                away + tolerance
             )
             .eq(
                 "odds_type",
@@ -685,7 +816,11 @@ def search_multiple_final_odds(
         )
 
         ids = {
-            str(row["schedule_id"])
+
+            str(
+                row["schedule_id"]
+            )
+
             for row in (
                 result.data or []
             )
@@ -702,10 +837,6 @@ def search_multiple_final_odds(
         if not schedule_ids:
 
             return []
-
-    # -----------------------------------------------------
-    # 경기 정보 가져오기
-    # -----------------------------------------------------
 
     if not schedule_ids:
 
@@ -726,20 +857,81 @@ def search_multiple_final_odds(
         .execute()
     )
 
-    return result.data or []
+    matches = (
+        result.data or []
+    )
+
+    # -----------------------------------------------------
+    # 업체별 배당을 경기 결과에 붙임
+    # -----------------------------------------------------
+
+    for match in matches:
+
+        sid = str(
+            match.get(
+                "schedule_id"
+            )
+        )
+
+        match["company_odds"] = {}
+
+        odds_result = (
+            supabase
+            .table("odds")
+            .select("*")
+            .eq(
+                "schedule_id",
+                sid
+            )
+            .eq(
+                "odds_type",
+                "final"
+            )
+            .execute()
+        )
+
+        for row in (
+            odds_result.data or []
+        ):
+
+            company = row.get(
+                "bookmaker"
+            )
+
+            if company:
+
+                match[
+                    "company_odds"
+                ][company] = {
+
+                    "home":
+                        row.get(
+                            "home_odds"
+                        ),
+
+                    "draw":
+                        row.get(
+                            "draw_odds"
+                        ),
+
+                    "away":
+                        row.get(
+                            "away_odds"
+                        )
+                }
+
+    return matches
 
 
 # =========================================================
-# DB 초기화
-#
-# 기존 clear_database 함수 유지
+# DB 전체 삭제
 # =========================================================
 
 def clear_database():
 
     supabase = get_connection()
 
-    # 배당 먼저 삭제
+    # 배당 삭제
     (
         supabase
         .table("odds")
@@ -773,7 +965,9 @@ def match_exists(
 ):
 
     return (
-        get_match(schedule_id)
+        get_match(
+            schedule_id
+        )
         is not None
     )
 
@@ -894,6 +1088,10 @@ if __name__ == "__main__":
                 get_database_status()
             )
 
+            print(
+                get_storage_usage()
+            )
+
         else:
 
             print(
@@ -905,4 +1103,4 @@ if __name__ == "__main__":
         print(
             "오류:",
             e
-            )
+        )
