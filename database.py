@@ -9,26 +9,45 @@ try:
 except Exception:
     libsql = None
 
+import streamlit as st
+
 
 # =========================================================
-# 설정
+# 기본 설정
 # =========================================================
 
 BASE_DIR = Path(__file__).resolve().parent
 
 SQLITE_PATH = BASE_DIR / "scoreman.db"
 
-TURSO_DATABASE_URL = os.getenv(
-    "TURSO_DATABASE_URL",
-    ""
-).strip()
-
-TURSO_AUTH_TOKEN = os.getenv(
-    "TURSO_AUTH_TOKEN",
-    ""
-).strip()
-
 _DB_LOCK = threading.RLock()
+
+
+# =========================================================
+# 설정값 읽기
+# 환경변수 우선
+# 없으면 Streamlit Secrets 확인
+# =========================================================
+
+def _get_secret(name):
+    try:
+        value = st.secrets.get(name, "")
+        if value is None:
+            return ""
+        return str(value).strip()
+    except Exception:
+        return ""
+
+
+TURSO_DATABASE_URL = (
+    os.getenv("TURSO_DATABASE_URL", "").strip()
+    or _get_secret("TURSO_DATABASE_URL")
+)
+
+TURSO_AUTH_TOKEN = (
+    os.getenv("TURSO_AUTH_TOKEN", "").strip()
+    or _get_secret("TURSO_AUTH_TOKEN")
+)
 
 
 # =========================================================
@@ -36,7 +55,6 @@ _DB_LOCK = threading.RLock()
 # =========================================================
 
 def _use_turso():
-
     return bool(
         TURSO_DATABASE_URL
         and TURSO_AUTH_TOKEN
@@ -64,7 +82,7 @@ def get_connection():
 
 
 # =========================================================
-# 기본 SQL 실행
+# SQL 실행
 # =========================================================
 
 def _execute(
@@ -99,7 +117,6 @@ def _execute(
             rows = None
 
             if fetch:
-
                 rows = cur.fetchall()
 
             conn.commit()
@@ -112,7 +129,7 @@ def _execute(
 
 
 # =========================================================
-# Dictionary 조회
+# 딕셔너리 1행
 # =========================================================
 
 def _execute_dict(
@@ -134,7 +151,7 @@ def _execute_dict(
             )
 
             if not cur.description:
-
+                conn.commit()
                 return None
 
             columns = [
@@ -145,7 +162,7 @@ def _execute_dict(
             row = cur.fetchone()
 
             if not row:
-
+                conn.commit()
                 return None
 
             return dict(
@@ -158,7 +175,7 @@ def _execute_dict(
 
 
 # =========================================================
-# DB 초기화
+# 초기화
 # =========================================================
 
 def init_database():
@@ -212,15 +229,8 @@ def init_database():
     _execute(
         """
         INSERT OR IGNORE INTO collection_state
-        (
-            id,
-            selected_companies
-        )
-        VALUES
-        (
-            1,
-            '[]'
-        )
+        (id, selected_companies)
+        VALUES (1, '[]')
         """
     )
 
@@ -260,85 +270,202 @@ def get_database_status():
 # DB 저장 크기
 # =========================================================
 
-def get_storage_usage():
+def _format_size(size_bytes):
 
-    # -----------------------------------------------------
-    # Turso 사용 중
-    # -----------------------------------------------------
-    if _use_turso():
+    size_bytes = int(size_bytes or 0)
 
-        return {
-            "success": True,
+    return {
+        "size_bytes": size_bytes,
+        "size_mb": size_bytes / 1024 / 1024,
+        "size_gb": size_bytes / 1024 / 1024 / 1024
+    }
 
-            "size_bytes": None,
 
-            "size_mb": None,
+def _get_sqlite_file_size():
 
-            "size_gb": None,
+    if not SQLITE_PATH.exists():
+        return 0
 
-            "storage_type": "Turso",
+    try:
+        return SQLITE_PATH.stat().st_size
+    except Exception:
+        return 0
 
-            "is_turso": True,
 
-            "message": (
-                "현재 데이터베이스는 Turso를 사용 중입니다. "
-                "Turso 실제 저장 용량과 무료 플랜 사용량은 "
-                "Turso 콘솔에서 확인하세요."
-            )
-        }
+def _get_turso_logical_size():
 
-    # -----------------------------------------------------
-    # SQLite 사용 중
-    # -----------------------------------------------------
+    """
+    Turso/libSQL DB 내부의 논리적 페이지 크기를 계산합니다.
+
+    이것은 Turso 계정의 전체 무료 플랜 사용량/남은 quota가 아니라
+    현재 연결된 DB의 논리적 저장 크기입니다.
+    """
+
+    conn = get_connection()
+
     try:
 
-        if SQLITE_PATH.exists():
+        cur = conn.cursor()
 
-            size_bytes = SQLITE_PATH.stat().st_size
+        page_count = 0
+        page_size = 0
+
+        try:
+
+            cur.execute(
+                "PRAGMA page_count"
+            )
+
+            row = cur.fetchone()
+
+            if row:
+                page_count = int(
+                    row[0] or 0
+                )
+
+        except Exception:
+            pass
+
+        try:
+
+            cur.execute(
+                "PRAGMA page_size"
+            )
+
+            row = cur.fetchone()
+
+            if row:
+                page_size = int(
+                    row[0] or 0
+                )
+
+        except Exception:
+            pass
+
+        if page_count > 0 and page_size > 0:
+
+            return page_count * page_size
+
+        # 일부 환경에서 page_count가 안 나오면
+        # 테이블 데이터 크기를 대략 계산
+        total = 0
+
+        try:
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM matches
+                """
+            )
+
+            matches_count = int(
+                cur.fetchone()[0] or 0
+            )
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM odds
+                """
+            )
+
+            odds_count = int(
+                cur.fetchone()[0] or 0
+            )
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM collection_state
+                """
+            )
+
+            state_count = int(
+                cur.fetchone()[0] or 0
+            )
+
+            # fallback 추정치
+            total = (
+                matches_count * 512
+                + odds_count * 256
+                + state_count * 1024
+            )
+
+        except Exception:
+            total = 0
+
+        return total
+
+    finally:
+
+        conn.close()
+
+
+def get_storage_usage():
+
+    """
+    현재 DB 자체의 저장 크기를 반환합니다.
+
+    Turso:
+        Turso DB 내부 논리적 DB 크기
+
+    SQLite:
+        scoreman.db 실제 파일 크기
+
+    주의:
+        Turso 무료 플랜의 전체 quota / 남은 quota가 아닙니다.
+    """
+
+    try:
+
+        if _use_turso():
+
+            size_bytes = _get_turso_logical_size()
+
+            size = _format_size(
+                size_bytes
+            )
+
+            return {
+                "success": True,
+                **size,
+                "storage_type": "Turso",
+                "measurement": "Turso DB 논리적 저장 크기",
+                "quota_available": False
+            }
 
         else:
 
-            size_bytes = 0
+            size_bytes = _get_sqlite_file_size()
 
-        return {
-            "success": True,
-
-            "size_bytes": size_bytes,
-
-            "size_mb": (
-                size_bytes / 1024 / 1024
-            ),
-
-            "size_gb": (
-                size_bytes / 1024 / 1024 / 1024
-            ),
-
-            "storage_type": "SQLite",
-
-            "is_turso": False,
-
-            "message": (
-                "현재 로컬 SQLite 파일의 "
-                "저장 크기입니다."
+            size = _format_size(
+                size_bytes
             )
-        }
+
+            return {
+                "success": True,
+                **size,
+                "storage_type": "SQLite",
+                "measurement": "현재 실행 환경의 SQLite 파일 크기",
+                "quota_available": False
+            }
 
     except Exception as e:
 
         return {
             "success": False,
-
             "size_bytes": 0,
-
             "size_mb": 0,
-
             "size_gb": 0,
-
-            "storage_type": "SQLite",
-
-            "is_turso": False,
-
-            "message": str(e)
+            "storage_type": (
+                "Turso"
+                if _use_turso()
+                else "SQLite"
+            ),
+            "measurement": "",
+            "quota_available": False,
+            "error": str(e)
         }
 
 
@@ -360,6 +487,14 @@ def get_database_info():
 
         "libsql_available": (
             libsql is not None
+        ),
+
+        "database_url_configured": bool(
+            TURSO_DATABASE_URL
+        ),
+
+        "auth_token_configured": bool(
+            TURSO_AUTH_TOKEN
         ),
 
         "storage": usage
@@ -386,9 +521,7 @@ def get_match(schedule_id):
         FROM matches
         WHERE schedule_id = ?
         """,
-        (
-            str(schedule_id),
-        )
+        (str(schedule_id),)
     )
 
 
@@ -513,13 +646,32 @@ def save_match_with_odds(
                 """,
                 (
                     str(match["schedule_id"]),
-                    match.get("match_date", ""),
-                    match.get("home_team", ""),
-                    match.get("away_team", ""),
-                    match.get("home_score"),
-                    match.get("away_score"),
-                    match.get("result", ""),
-                    match.get("source", "scoreman")
+                    match.get(
+                        "match_date",
+                        ""
+                    ),
+                    match.get(
+                        "home_team",
+                        ""
+                    ),
+                    match.get(
+                        "away_team",
+                        ""
+                    ),
+                    match.get(
+                        "home_score"
+                    ),
+                    match.get(
+                        "away_score"
+                    ),
+                    match.get(
+                        "result",
+                        ""
+                    ),
+                    match.get(
+                        "source",
+                        "scoreman"
+                    )
                 )
             )
 
@@ -534,7 +686,6 @@ def save_match_with_odds(
                 )
 
                 if not company_name:
-
                     continue
 
                 cur.execute(
@@ -549,38 +700,26 @@ def save_match_with_odds(
                     )
                     VALUES (?, ?, ?, ?, ?, ?)
 
-                    ON CONFLICT(
-                        schedule_id,
-                        bookmaker
-                    )
+                    ON CONFLICT(schedule_id, bookmaker)
                     DO UPDATE SET
-                        bookmaker_id=
-                            excluded.bookmaker_id,
-                        home_odds=
-                            excluded.home_odds,
-                        draw_odds=
-                            excluded.draw_odds,
-                        away_odds=
-                            excluded.away_odds
+                        bookmaker_id=excluded.bookmaker_id,
+                        home_odds=excluded.home_odds,
+                        draw_odds=excluded.draw_odds,
+                        away_odds=excluded.away_odds
                     """,
                     (
                         str(match["schedule_id"]),
-
                         company_name,
-
                         row.get(
                             "company_id",
                             ""
                         ),
-
                         float(
                             row["final_home"]
                         ),
-
                         float(
                             row["final_draw"]
                         ),
-
                         float(
                             row["final_away"]
                         )
@@ -616,9 +755,7 @@ def get_odds_by_match(schedule_id):
         WHERE schedule_id = ?
         ORDER BY bookmaker
         """,
-        (
-            str(schedule_id),
-        ),
+        (str(schedule_id),),
         fetch=True
     )
 
@@ -799,7 +936,6 @@ def get_collection_state():
     )
 
     if not row:
-
         return {}
 
     try:
