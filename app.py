@@ -6,6 +6,10 @@ import collector
 import analysis
 
 
+# =========================================================
+# 페이지
+# =========================================================
+
 st.set_page_config(
     page_title="Scoreman 해외배당 분석",
     page_icon="⚽",
@@ -99,16 +103,27 @@ c3.metric(
 )
 
 if database.TURSO_DATABASE_URL:
-    c4.metric("DB", "Turso")
+
+    c4.metric(
+        "DB",
+        "Turso"
+    )
+
 else:
-    c4.metric("DB", "SQLite")
+
+    c4.metric(
+        "DB",
+        "SQLite"
+    )
 
 
 # =========================================================
-# Turso 상태
+# DB 상태
 # =========================================================
 
-st.subheader("🗄️ Turso DB 상태")
+st.subheader(
+    "🗄️ DB 상태"
+)
 
 if (
     database.TURSO_DATABASE_URL
@@ -136,8 +151,8 @@ st.subheader(
 )
 
 st.write(
-    "시작 ID와 마지막 ID를 입력한 뒤 "
-    "수집 시작 버튼을 누르면 백그라운드에서 수집합니다."
+    "시작 ID와 마지막 ID를 입력하면 "
+    "백그라운드에서 경기와 최종배당을 수집합니다."
 )
 
 
@@ -148,7 +163,7 @@ with col1:
     start_id = st.number_input(
         "시작 경기 ID",
         min_value=1,
-        value=2005000,
+        value=3001118,
         step=1
     )
 
@@ -157,7 +172,7 @@ with col2:
     end_id = st.number_input(
         "마지막 경기 ID",
         min_value=1,
-        value=3001118,
+        value=3001120,
         step=1
     )
 
@@ -169,6 +184,10 @@ if end_id >= start_id:
         f"{end_id - start_id + 1:,}개 경기 ID"
     )
 
+
+# =========================================================
+# 업체
+# =========================================================
 
 st.subheader(
     "🏢 수집할 해외업체 선택"
@@ -198,9 +217,11 @@ else:
 
     selected = None
 
-st.success(
-    "✅ Scoreman에서 제공하는 업체의 "
-    "최종배당을 자동으로 수집합니다."
+
+st.info(
+    "전체 업체 자동수집을 선택하면 "
+    "Scoreman 배당 API에서 확인되는 업체의 "
+    "최종배당을 저장합니다."
 )
 
 
@@ -212,6 +233,10 @@ delay = st.number_input(
     step=0.1
 )
 
+
+# =========================================================
+# 시작 / 중지
+# =========================================================
 
 b1, b2 = st.columns(2)
 
@@ -240,20 +265,28 @@ with b1:
         else:
 
             ok = collector.start_background_collection(
+
                 start_id,
+
                 end_id,
+
                 selected,
+
                 delay
             )
 
             if ok:
+
                 st.success(
                     "백그라운드 수집을 시작했습니다."
                 )
+
             else:
+
                 st.warning(
                     "이미 수집 작업이 실행 중입니다."
                 )
+
 
 with b2:
 
@@ -271,7 +304,7 @@ with b2:
         else:
 
             st.info(
-                "현재 실행 중인 수집 작업이 없습니다."
+                "실행 중인 수집 작업이 없습니다."
             )
 
 
@@ -281,9 +314,12 @@ with b2:
 
 job = collector.get_job_status()
 
+
 if job["running"]:
 
-    st.subheader("📊 현재 수집 상태")
+    st.subheader(
+        "📊 현재 수집 상태"
+    )
 
     progress = 0
 
@@ -295,14 +331,18 @@ if job["running"]:
         )
 
     st.progress(
-        min(progress, 1.0)
+        min(
+            max(progress, 0),
+            1
+        )
     )
 
     a, b, c, d = st.columns(4)
 
     a.metric(
         "진행",
-        f"{job['current']:,} / {job['total']:,}"
+        f"{job['current']:,} / "
+        f"{job['total']:,}"
     )
 
     b.metric(
@@ -320,10 +360,17 @@ if job["running"]:
         f"{job['odds']:,}"
     )
 
+    if job["last_completed_id"]:
+
+        st.caption(
+            "마지막 저장 경기 ID: "
+            f"{job['last_completed_id']:,}"
+        )
+
     st.text_area(
         "수집 로그",
         job["log"],
-        height=300
+        height=350
     )
 
     time.sleep(1)
@@ -333,7 +380,9 @@ if job["running"]:
 
 elif job["finished"]:
 
-    st.subheader("✅ 마지막 수집 결과")
+    st.subheader(
+        "✅ 마지막 수집 결과"
+    )
 
     if job["result"]:
 
@@ -361,18 +410,27 @@ elif job["finished"]:
             f"{r['odds']:,}"
         )
 
+    if job["stopped"]:
+
+        st.warning(
+            "수집이 중지되었습니다."
+        )
+
     if job["error"]:
-        st.error(job["error"])
+
+        st.error(
+            job["error"]
+        )
 
     st.text_area(
         "로그",
         job["log"],
-        height=250
+        height=300
     )
 
 
 # =========================================================
-# 저장된 경기
+# 저장 경기
 # =========================================================
 
 st.subheader(
@@ -380,6 +438,7 @@ st.subheader(
 )
 
 matches = database.get_all_matches()
+
 
 if matches:
 
@@ -397,18 +456,12 @@ else:
 
 
 # =========================================================
-# 경기별 최종배당
+# 경기 조회
 # =========================================================
 
 st.subheader(
     "📱 경기별 최종배당 확인"
 )
-
-st.write(
-    "휴대폰에서 경기 ID를 입력하면 "
-    "해당 경기의 저장된 해외업체 최종배당을 바로 확인할 수 있습니다."
-)
-
 
 lookup_id = st.number_input(
     "경기 ID",
@@ -445,16 +498,22 @@ if st.button(
             <div class="match-box">
 
                 <div class="team">
+
                     {match.get("home_team", "")}
+
                     <br>
+
                     <span style="
                         font-size:15px;
                         color:#777;
                     ">
                         VS
                     </span>
+
                     <br>
+
                     {match.get("away_team", "")}
+
                 </div>
 
                 <div style="
@@ -496,13 +555,7 @@ if st.button(
         if not odds:
 
             st.error(
-                "❌ 이 경기에는 저장된 "
-                "최종배당이 없습니다."
-            )
-
-            st.caption(
-                "수집 로그에서 해당 경기의 "
-                "최종배당이 0개였는지 확인하세요."
+                "❌ 저장된 최종배당이 없습니다."
             )
 
         else:
@@ -517,6 +570,7 @@ if st.button(
             for row in odds:
 
                 display.append({
+
                     "업체":
                         row["bookmaker"],
 
@@ -538,7 +592,7 @@ if st.button(
 
 
 # =========================================================
-# 배당 분석
+# 분석
 # =========================================================
 
 st.subheader(
@@ -569,6 +623,7 @@ if analysis_companies:
         a, b, c = st.columns(3)
 
         with a:
+
             h = st.number_input(
                 f"{company} 승",
                 min_value=0.01,
@@ -578,6 +633,7 @@ if analysis_companies:
             )
 
         with b:
+
             d = st.number_input(
                 f"{company} 무",
                 min_value=0.01,
@@ -587,6 +643,7 @@ if analysis_companies:
             )
 
         with c:
+
             aw = st.number_input(
                 f"{company} 패",
                 min_value=0.01,
@@ -596,9 +653,15 @@ if analysis_companies:
             )
 
         odds_input[company] = {
-            "home": h,
-            "draw": d,
-            "away": aw
+
+            "home":
+                h,
+
+            "draw":
+                d,
+
+            "away":
+                aw
         }
 
 
@@ -608,7 +671,9 @@ if analysis_companies:
     ):
 
         result = analysis.run_search(
+
             analysis_companies,
+
             odds_input
         )
 
@@ -705,4 +770,4 @@ if analysis_companies:
                     result["results"],
                     use_container_width=True,
                     hide_index=True
-                )
+    )
