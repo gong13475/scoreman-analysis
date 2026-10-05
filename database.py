@@ -1,595 +1,269 @@
 import os
-import math
-import requests
+import sqlite3
+import threading
+from typing import Any, Dict, List, Optional
 
+
+# =========================================================
+# Turso 설정
+# =========================================================
 
 TURSO_DATABASE_URL = os.getenv(
-    "TURSO_DATABASE_URL", ""
-).strip()
+    "TURSO_DATABASE_URL",
+    ""
+)
 
 TURSO_AUTH_TOKEN = os.getenv(
-    "TURSO_AUTH_TOKEN", ""
-).strip()
-
-_initialized = False
-
-
-# =========================================================
-# Turso URL
-# =========================================================
-
-def _get_http_url():
-
-    url = TURSO_DATABASE_URL.strip()
-
-    if not url:
-        raise RuntimeError(
-            "TURSO_DATABASE_URL 환경변수가 없습니다."
-        )
-
-    if url.startswith("libsql://"):
-        return (
-            "https://"
-            + url[len("libsql://"):].rstrip("/")
-        )
-
-    if url.startswith("https://"):
-        return url.rstrip("/")
-
-    if url.startswith("http://"):
-        return url.rstrip("/")
-
-    return "https://" + url.rstrip("/")
+    "TURSO_AUTH_TOKEN",
+    ""
+)
 
 
 # =========================================================
-# Header
+# 로컬 SQLite fallback
 # =========================================================
 
-def _headers():
+LOCAL_DB_PATH = os.getenv(
+    "LOCAL_DB_PATH",
+    "scoreman.db"
+)
 
-    if not TURSO_AUTH_TOKEN:
-        raise RuntimeError(
-            "TURSO_AUTH_TOKEN 환경변수가 없습니다."
-        )
 
-    return {
-        "Authorization":
-            f"Bearer {TURSO_AUTH_TOKEN}",
-        "Content-Type":
-            "application/json"
-    }
+_DB_LOCK = threading.RLock()
 
 
 # =========================================================
-# Turso parameter
-#
-# 중요:
-# Turso /v2/pipeline 에서는 args의 value를
-# 문자열로 보내는 것이 안전합니다.
-#
-# REAL 컬럼의 경우 SQL에서 CAST 합니다.
+# Turso 연결
 # =========================================================
 
-def _turso_param(value):
+def _get_turso_connection():
+    """
+    libsql-experimental이 설치되어 있으면 Turso 사용.
+    """
 
-    if value is None:
-        return {
-            "type": "null"
-        }
-
-    if isinstance(value, bool):
-        return {
-            "type": "integer",
-            "value": "1" if value else "0"
-        }
-
-    if isinstance(value, int):
-        return {
-            "type": "integer",
-            "value": str(value)
-        }
-
-    if isinstance(value, float):
-
-        if not math.isfinite(value):
-            return {
-                "type": "null"
-            }
-
-        # API에서 숫자 value를 직접 보내지 않고
-        # 문자열로 전달
-        return {
-            "type": "text",
-            "value": format(value, ".15g")
-        }
-
-    return {
-        "type": "text",
-        "value": str(value)
-    }
-
-
-# =========================================================
-# Cell 값
-# =========================================================
-
-def _value_from_cell(cell):
-
-    if cell is None:
+    if not TURSO_DATABASE_URL:
         return None
 
-    if isinstance(cell, dict):
+    if not TURSO_AUTH_TOKEN:
+        return None
 
-        if "value" in cell:
-            return cell["value"]
+    try:
 
-        if "text" in cell:
-            return cell["text"]
+        import libsql_experimental as libsql
 
-        if "integer" in cell:
-            return cell["integer"]
+    except ImportError:
 
-        if "real" in cell:
-            return cell["real"]
+        return None
 
-    return cell
+    try:
+
+        conn = libsql.connect(
+            TURSO_DATABASE_URL,
+            auth_token=TURSO_AUTH_TOKEN
+        )
+
+        return conn
+
+    except Exception:
+
+        return None
 
 
 # =========================================================
-# 실행
+# SQLite 연결
 # =========================================================
 
-def _execute(sql, args=None):
+def _get_connection():
 
-    url = _get_http_url()
+    conn = _get_turso_connection()
 
-    params = [
-        _turso_param(x)
-        for x in (args or [])
-    ]
+    if conn is not None:
 
-    payload = {
-        "requests": [
-            {
-                "type": "execute",
-                "stmt": {
-                    "sql": sql,
-                    "args": params
-                }
-            },
-            {
-                "type": "close"
-            }
-        ]
-    }
+        return conn
 
-    response = requests.post(
-        f"{url}/v2/pipeline",
-        headers=_headers(),
-        json=payload,
+    conn = sqlite3.connect(
+        LOCAL_DB_PATH,
+        check_same_thread=False,
         timeout=60
     )
 
-    if response.status_code >= 400:
+    conn.row_factory = sqlite3.Row
 
-        raise RuntimeError(
-            f"Turso HTTP 오류 "
-            f"{response.status_code}: "
-            f"{response.text}"
-        )
-
-    try:
-        data = response.json()
-
-    except Exception:
-        raise RuntimeError(
-            "Turso 응답 JSON 파싱 실패: "
-            + response.text
-        )
-
-    results = data.get(
-        "results",
-        []
-    )
-
-    for item in results:
-
-        if not isinstance(item, dict):
-            continue
-
-        if item.get("type") == "error":
-
-            raise RuntimeError(
-                "Turso SQL 오류: "
-                + str(item)
-            )
-
-    return data
+    return conn
 
 
 # =========================================================
-# 결과 rows
+# SQL 실행
 # =========================================================
 
-def _result_rows(data):
+def _execute(
+    sql,
+    params=(),
+    fetch=False,
+    many=False
+):
 
-    if not data:
-        return []
+    with _DB_LOCK:
 
-    try:
+        conn = _get_connection()
 
-        for item in data.get(
-            "results",
-            []
-        ):
+        try:
 
-            if not isinstance(item, dict):
-                continue
+            cursor = conn.cursor()
 
-            if item.get("type") != "ok":
-                continue
+            if many:
 
-            response = item.get(
-                "response",
-                {}
-            )
+                cursor.executemany(
+                    sql,
+                    params
+                )
 
-            result = response.get(
-                "result",
-                {}
-            )
+            else:
 
-            rows = result.get(
-                "rows",
-                []
-            )
+                cursor.execute(
+                    sql,
+                    params
+                )
 
-            if rows:
-                return rows
+            if fetch:
 
-    except Exception:
-        pass
+                rows = cursor.fetchall()
 
-    return []
+                result = [
+                    dict(row)
+                    if not isinstance(row, dict)
+                    else row
+                    for row in rows
+                ]
 
+            else:
 
-# =========================================================
-# 안전한 문자열
-# =========================================================
+                result = None
 
-def _safe_text(value):
+            conn.commit()
 
-    value = _value_from_cell(value)
+            return result
 
-    if value is None:
-        return None
+        finally:
 
-    value = str(value).strip()
-
-    return value if value else None
+            conn.close()
 
 
 # =========================================================
-# 안전한 정수
-# =========================================================
-
-def _safe_int(value):
-
-    value = _value_from_cell(value)
-
-    if value is None:
-        return None
-
-    try:
-
-        if isinstance(value, str):
-            value = value.strip()
-
-            if not value:
-                return None
-
-        return int(float(value))
-
-    except Exception:
-        return None
-
-
-# =========================================================
-# 안전한 float
-# =========================================================
-
-def _safe_float(value):
-
-    value = _value_from_cell(value)
-
-    if value is None:
-        return None
-
-    try:
-
-        if isinstance(value, str):
-            value = value.strip()
-            value = value.replace(",", "")
-
-        result = float(value)
-
-        if not math.isfinite(result):
-            return None
-
-        return result
-
-    except Exception:
-        return None
-
-
-# =========================================================
-# 배당
-# =========================================================
-
-def _safe_odds(value):
-
-    value = _safe_float(value)
-
-    if value is None:
-        return None
-
-    if value <= 0:
-        return None
-
-    return value
-
-
-# =========================================================
-# 첫 번째 값
-# =========================================================
-
-def _result_value(data):
-
-    rows = _result_rows(data)
-
-    if not rows:
-        return None
-
-    if not rows[0]:
-        return None
-
-    return _value_from_cell(
-        rows[0][0]
-    )
-
-
-# =========================================================
-# 초기화
+# DB 초기화
 # =========================================================
 
 def init_database():
 
-    global _initialized
+    with _DB_LOCK:
 
-    if _initialized:
-        return True
+        conn = _get_connection()
 
-    _execute(
-        """
-        CREATE TABLE IF NOT EXISTS matches (
-            schedule_id INTEGER PRIMARY KEY,
-            match_date TEXT,
-            home_team TEXT,
-            away_team TEXT,
-            home_score INTEGER,
-            away_score INTEGER,
-            result TEXT,
-            source TEXT
-        )
-        """
-    )
+        try:
 
-    _execute(
-        """
-        CREATE TABLE IF NOT EXISTS odds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schedule_id INTEGER NOT NULL,
-            bookmaker TEXT NOT NULL,
-            home_odds REAL,
-            draw_odds REAL,
-            away_odds REAL,
-            UNIQUE(schedule_id, bookmaker)
-        )
-        """
-    )
+            cursor = conn.cursor()
 
-    _execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-        idx_odds_schedule_id
-        ON odds(schedule_id)
-        """
-    )
+            # -------------------------------------------------
+            # 경기
+            # -------------------------------------------------
 
-    _execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-        idx_odds_bookmaker
-        ON odds(bookmaker)
-        """
-    )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS matches (
 
-    _initialized = True
+                    schedule_id TEXT PRIMARY KEY,
+
+                    match_date TEXT,
+
+                    home_team TEXT,
+
+                    away_team TEXT,
+
+                    home_score INTEGER,
+
+                    away_score INTEGER,
+
+                    result TEXT,
+
+                    source TEXT DEFAULT 'scoreman',
+
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+            # -------------------------------------------------
+            # 배당
+            # -------------------------------------------------
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS odds (
+
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    schedule_id TEXT NOT NULL,
+
+                    bookmaker TEXT NOT NULL,
+
+                    company_id TEXT,
+
+                    home_odds REAL,
+
+                    draw_odds REAL,
+
+                    away_odds REAL,
+
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+                    UNIQUE (
+                        schedule_id,
+                        bookmaker
+                    )
+                )
+                """
+            )
+
+            # -------------------------------------------------
+            # 업체 인덱스
+            # -------------------------------------------------
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_odds_schedule
+                ON odds(schedule_id)
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_odds_bookmaker
+                ON odds(bookmaker)
+                """
+            )
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
 
     return True
-
-
-# =========================================================
-# DB 상태
-# =========================================================
-
-def get_database_status():
-
-    data = _execute(
-        """
-        SELECT
-            (SELECT COUNT(*) FROM matches),
-            (SELECT COUNT(*) FROM odds),
-            (SELECT COUNT(DISTINCT bookmaker) FROM odds)
-        """
-    )
-
-    rows = _result_rows(data)
-
-    if not rows:
-        return {
-            "matches": 0,
-            "odds": 0,
-            "bookmakers": 0
-        }
-
-    values = [
-        _value_from_cell(x)
-        for x in rows[0]
-    ]
-
-    while len(values) < 3:
-        values.append(0)
-
-    return {
-        "matches":
-            _safe_int(values[0]) or 0,
-
-        "odds":
-            _safe_int(values[1]) or 0,
-
-        "bookmakers":
-            _safe_int(values[2]) or 0
-    }
-
-
-# =========================================================
-# 경기 존재
-# =========================================================
-
-def match_exists(schedule_id):
-
-    schedule_id = _safe_int(
-        schedule_id
-    )
-
-    if schedule_id is None:
-        return False
-
-    data = _execute(
-        """
-        SELECT schedule_id
-        FROM matches
-        WHERE schedule_id = ?
-        LIMIT 1
-        """,
-        [schedule_id]
-    )
-
-    return bool(
-        _result_rows(data)
-    )
-
-
-# =========================================================
-# 경기 조회
-# =========================================================
-
-def get_match(schedule_id):
-
-    schedule_id = _safe_int(
-        schedule_id
-    )
-
-    if schedule_id is None:
-        return None
-
-    data = _execute(
-        """
-        SELECT
-            schedule_id,
-            match_date,
-            home_team,
-            away_team,
-            home_score,
-            away_score,
-            result,
-            source
-        FROM matches
-        WHERE schedule_id = ?
-        LIMIT 1
-        """,
-        [schedule_id]
-    )
-
-    rows = _result_rows(data)
-
-    if not rows:
-        return None
-
-    values = [
-        _value_from_cell(x)
-        for x in rows[0]
-    ]
-
-    while len(values) < 8:
-        values.append(None)
-
-    return {
-        "schedule_id":
-            _safe_int(values[0]),
-
-        "match_date":
-            values[1],
-
-        "home_team":
-            values[2],
-
-        "away_team":
-            values[3],
-
-        "home_score":
-            _safe_int(values[4]),
-
-        "away_score":
-            _safe_int(values[5]),
-
-        "result":
-            values[6],
-
-        "source":
-            values[7]
-    }
 
 
 # =========================================================
 # 경기 저장
 # =========================================================
 
-def save_match(
-    schedule_id,
-    match_date=None,
-    home_team=None,
-    away_team=None,
-    home_score=None,
-    away_score=None,
-    result=None,
-    source="scoreman"
-):
+def save_match(match):
 
-    schedule_id = _safe_int(
-        schedule_id
-    )
-
-    if schedule_id is None:
-        raise ValueError(
-            "schedule_id가 올바르지 않습니다."
-        )
-
-    _execute(
-        """
+    sql = """
         INSERT INTO matches (
+
             schedule_id,
             match_date,
             home_team,
@@ -597,206 +271,43 @@ def save_match(
             home_score,
             away_score,
             result,
-            source
+            source,
+            updated_at
+
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 
         ON CONFLICT(schedule_id)
         DO UPDATE SET
+
             match_date = excluded.match_date,
             home_team = excluded.home_team,
             away_team = excluded.away_team,
             home_score = excluded.home_score,
             away_score = excluded.away_score,
             result = excluded.result,
-            source = excluded.source
-        """,
-        [
-            schedule_id,
-            _safe_text(match_date),
-            _safe_text(home_team),
-            _safe_text(away_team),
-            _safe_int(home_score),
-            _safe_int(away_score),
-            _safe_text(result),
-            _safe_text(source)
-        ]
-    )
-
-    return True
-
-
-# =========================================================
-# 배당 저장
-#
-# 핵심:
-# CAST(? AS REAL)
-#
-# API에는 문자열로 전달하되
-# SQLite/Turso SQL 단계에서 REAL로 변환합니다.
-# =========================================================
-
-def save_odds(
-    schedule_id,
-    bookmaker,
-    home_odds,
-    draw_odds,
-    away_odds
-):
-
-    schedule_id = _safe_int(
-        schedule_id
-    )
-
-    bookmaker = _safe_text(
-        bookmaker
-    )
-
-    if schedule_id is None:
-        raise ValueError(
-            "schedule_id가 올바르지 않습니다."
-        )
-
-    if not bookmaker:
-        raise ValueError(
-            "bookmaker가 없습니다."
-        )
-
-    home_odds = _safe_odds(
-        home_odds
-    )
-
-    draw_odds = _safe_odds(
-        draw_odds
-    )
-
-    away_odds = _safe_odds(
-        away_odds
-    )
-
-    if (
-        home_odds is None
-        and draw_odds is None
-        and away_odds is None
-    ):
-        return False
+            source = excluded.source,
+            updated_at = CURRENT_TIMESTAMP
+    """
 
     _execute(
-        """
-        INSERT INTO odds (
-            schedule_id,
-            bookmaker,
-            home_odds,
-            draw_odds,
-            away_odds
+        sql,
+        (
+            str(match.get("schedule_id")),
+            match.get("match_date"),
+            match.get("home_team"),
+            match.get("away_team"),
+            match.get("home_score"),
+            match.get("away_score"),
+            match.get("result"),
+            match.get("source", "scoreman")
         )
-        VALUES (
-            ?,
-            ?,
-            CAST(? AS REAL),
-            CAST(? AS REAL),
-            CAST(? AS REAL)
-        )
-
-        ON CONFLICT(schedule_id, bookmaker)
-        DO UPDATE SET
-            home_odds = excluded.home_odds,
-            draw_odds = excluded.draw_odds,
-            away_odds = excluded.away_odds
-        """,
-        [
-            schedule_id,
-            bookmaker,
-
-            None
-            if home_odds is None
-            else format(home_odds, ".15g"),
-
-            None
-            if draw_odds is None
-            else format(draw_odds, ".15g"),
-
-            None
-            if away_odds is None
-            else format(away_odds, ".15g")
-        ]
     )
 
-    return True
-
 
 # =========================================================
-# 배당 일괄 저장
-# =========================================================
-
-def save_odds_bulk(
-    schedule_id,
-    odds_list
-):
-
-    if not odds_list:
-        return 0
-
-    saved = 0
-
-    for item in odds_list:
-
-        if not isinstance(item, dict):
-            continue
-
-        bookmaker = (
-            item.get("bookmaker")
-            or item.get("company")
-            or item.get("company_name")
-            or item.get("name")
-        )
-
-        home_odds = (
-            item.get("home_odds")
-            if "home_odds" in item
-            else item.get(
-                "final_home",
-                item.get("home")
-            )
-        )
-
-        draw_odds = (
-            item.get("draw_odds")
-            if "draw_odds" in item
-            else item.get(
-                "final_draw",
-                item.get("draw")
-            )
-        )
-
-        away_odds = (
-            item.get("away_odds")
-            if "away_odds" in item
-            else item.get(
-                "final_away",
-                item.get("away")
-            )
-        )
-
-        try:
-
-            if save_odds(
-                schedule_id,
-                bookmaker,
-                home_odds,
-                draw_odds,
-                away_odds
-            ):
-                saved += 1
-
-        except Exception:
-            continue
-
-    return saved
-
-
-# =========================================================
-# 경기 + 배당
+# 경기 + 배당 원자적 저장
 # =========================================================
 
 def save_match_with_odds(
@@ -804,33 +315,118 @@ def save_match_with_odds(
     odds_list
 ):
 
-    if not isinstance(match, dict):
-        raise ValueError(
-            "match 데이터가 올바르지 않습니다."
-        )
-
-    schedule_id = match.get(
-        "schedule_id"
-    )
-
     save_match(
-        schedule_id,
-        match.get("match_date"),
-        match.get("home_team"),
-        match.get("away_team"),
-        match.get("home_score"),
-        match.get("away_score"),
-        match.get("result"),
-        match.get(
-            "source",
-            "scoreman"
-        )
+        match
     )
 
-    return save_odds_bulk(
-        schedule_id,
-        odds_list
+    saved = 0
+
+    for odds in odds_list:
+
+        bookmaker = str(
+            odds.get(
+                "company_name",
+                ""
+            )
+        ).strip()
+
+        if not bookmaker:
+            continue
+
+        sql = """
+            INSERT INTO odds (
+
+                schedule_id,
+                bookmaker,
+                company_id,
+                home_odds,
+                draw_odds,
+                away_odds
+
+            )
+
+            VALUES (?, ?, ?, ?, ?, ?)
+
+            ON CONFLICT(
+                schedule_id,
+                bookmaker
+            )
+
+            DO UPDATE SET
+
+                company_id =
+                    excluded.company_id,
+
+                home_odds =
+                    excluded.home_odds,
+
+                draw_odds =
+                    excluded.draw_odds,
+
+                away_odds =
+                    excluded.away_odds
+        """
+
+        _execute(
+            sql,
+            (
+                str(
+                    match.get(
+                        "schedule_id"
+                    )
+                ),
+
+                bookmaker,
+
+                odds.get(
+                    "company_id",
+                    ""
+                ),
+
+                odds.get(
+                    "final_home"
+                ),
+
+                odds.get(
+                    "final_draw"
+                ),
+
+                odds.get(
+                    "final_away"
+                )
+            )
+        )
+
+        saved += 1
+
+    return saved
+
+
+# =========================================================
+# 경기 조회
+# =========================================================
+
+def get_match(
+    schedule_id
+):
+
+    rows = _execute(
+        """
+        SELECT *
+        FROM matches
+        WHERE schedule_id = ?
+        LIMIT 1
+        """,
+        (
+            str(schedule_id),
+        ),
+        fetch=True
     )
+
+    if rows:
+        return rows[0]
+
+    return None
 
 
 # =========================================================
@@ -839,116 +435,15 @@ def save_match_with_odds(
 
 def get_all_matches():
 
-    data = _execute(
+    return _execute(
         """
-        SELECT
-            schedule_id,
-            match_date,
-            home_team,
-            away_team,
-            home_score,
-            away_score,
-            result,
-            source
+        SELECT *
         FROM matches
-        ORDER BY schedule_id DESC
-        """
-    )
-
-    rows = _result_rows(data)
-
-    result = []
-
-    for row in rows:
-
-        values = [
-            _value_from_cell(x)
-            for x in row
-        ]
-
-        while len(values) < 8:
-            values.append(None)
-
-        result.append({
-            "schedule_id":
-                _safe_int(values[0]),
-
-            "match_date":
-                values[1],
-
-            "home_team":
-                values[2],
-
-            "away_team":
-                values[3],
-
-            "home_score":
-                _safe_int(values[4]),
-
-            "away_score":
-                _safe_int(values[5]),
-
-            "result":
-                values[6],
-
-            "source":
-                values[7]
-        })
-
-    return result
-
-
-# =========================================================
-# 전체 배당
-# =========================================================
-
-def get_all_odds():
-
-    data = _execute(
-        """
-        SELECT
-            schedule_id,
-            bookmaker,
-            home_odds,
-            draw_odds,
-            away_odds
-        FROM odds
-        ORDER BY schedule_id DESC, bookmaker
-        """
-    )
-
-    rows = _result_rows(data)
-
-    result = []
-
-    for row in rows:
-
-        values = [
-            _value_from_cell(x)
-            for x in row
-        ]
-
-        while len(values) < 5:
-            values.append(None)
-
-        result.append({
-            "schedule_id":
-                _safe_int(values[0]),
-
-            "bookmaker":
-                values[1],
-
-            "home_odds":
-                _safe_float(values[2]),
-
-            "draw_odds":
-                _safe_float(values[3]),
-
-            "away_odds":
-                _safe_float(values[4])
-        })
-
-    return result
+        ORDER BY
+            CAST(schedule_id AS INTEGER) DESC
+        """,
+        fetch=True
+    ) or []
 
 
 # =========================================================
@@ -957,16 +452,103 @@ def get_all_odds():
 
 def get_match_count():
 
-    data = _execute(
+    rows = _execute(
         """
-        SELECT COUNT(*)
+        SELECT COUNT(*) AS cnt
         FROM matches
-        """
+        """,
+        fetch=True
     )
 
-    return _safe_int(
-        _result_value(data)
-    ) or 0
+    return int(
+        rows[0]["cnt"]
+    ) if rows else 0
+
+
+# =========================================================
+# 전체 배당
+# =========================================================
+
+def get_all_odds():
+
+    return _execute(
+        """
+        SELECT
+
+            schedule_id,
+            bookmaker,
+            company_id,
+
+            home_odds,
+            draw_odds,
+            away_odds
+
+        FROM odds
+
+        ORDER BY
+            CAST(schedule_id AS INTEGER) DESC,
+            bookmaker
+        """,
+        fetch=True
+    ) or []
+
+
+# =========================================================
+# 특정 경기 배당
+# =========================================================
+
+def get_odds_by_match(
+    schedule_id
+):
+
+    return _execute(
+        """
+        SELECT
+
+            schedule_id,
+            bookmaker,
+            company_id,
+
+            home_odds,
+            draw_odds,
+            away_odds
+
+        FROM odds
+
+        WHERE schedule_id = ?
+
+        ORDER BY bookmaker
+        """,
+        (
+            str(schedule_id),
+        ),
+        fetch=True
+    ) or []
+
+
+# =========================================================
+# 특정 경기 배당 수
+# =========================================================
+
+def get_odds_count_by_match(
+    schedule_id
+):
+
+    rows = _execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM odds
+        WHERE schedule_id = ?
+        """,
+        (
+            str(schedule_id),
+        ),
+        fetch=True
+    )
+
+    return int(
+        rows[0]["cnt"]
+    ) if rows else 0
 
 
 # =========================================================
@@ -975,16 +557,17 @@ def get_match_count():
 
 def get_odds_count():
 
-    data = _execute(
+    rows = _execute(
         """
-        SELECT COUNT(*)
+        SELECT COUNT(*) AS cnt
         FROM odds
-        """
+        """,
+        fetch=True
     )
 
-    return _safe_int(
-        _result_value(data)
-    ) or 0
+    return int(
+        rows[0]["cnt"]
+    ) if rows else 0
 
 
 # =========================================================
@@ -993,207 +576,71 @@ def get_odds_count():
 
 def get_company_names():
 
-    data = _execute(
+    rows = _execute(
         """
         SELECT DISTINCT bookmaker
         FROM odds
         WHERE bookmaker IS NOT NULL
           AND bookmaker != ''
         ORDER BY bookmaker
-        """
-    )
+        """,
+        fetch=True
+    ) or []
 
-    rows = _result_rows(data)
-
-    result = []
-
-    for row in rows:
-
-        if not row:
-            continue
-
-        value = _value_from_cell(
-            row[0]
-        )
-
-        if value:
-            result.append(
-                str(value)
-            )
-
-    return result
+    return [
+        row["bookmaker"]
+        for row in rows
+    ]
 
 
 # =========================================================
-# 업체별 개수
+# 업체별 저장량
 # =========================================================
 
 def get_company_counts():
 
-    data = _execute(
+    rows = _execute(
         """
         SELECT
+
             bookmaker,
-            COUNT(*)
+            COUNT(*) AS cnt
+
         FROM odds
-        WHERE bookmaker IS NOT NULL
+
         GROUP BY bookmaker
-        ORDER BY COUNT(*) DESC
-        """
-    )
 
-    rows = _result_rows(data)
-
-    result = {}
-
-    for row in rows:
-
-        if len(row) < 2:
-            continue
-
-        bookmaker = _value_from_cell(
-            row[0]
-        )
-
-        count = _value_from_cell(
-            row[1]
-        )
-
-        if bookmaker:
-
-            try:
-                result[str(bookmaker)] = int(
-                    count
-                )
-
-            except Exception:
-                result[str(bookmaker)] = 0
-
-    return result
-
-
-# =========================================================
-# 동일 배당 검색
-# =========================================================
-
-def find_matches_by_odds(
-    bookmaker,
-    home_odds,
-    draw_odds,
-    away_odds
-):
-
-    bookmaker = _safe_text(
-        bookmaker
-    )
-
-    home_odds = _safe_odds(
-        home_odds
-    )
-
-    draw_odds = _safe_odds(
-        draw_odds
-    )
-
-    away_odds = _safe_odds(
-        away_odds
-    )
-
-    if not bookmaker:
-        return []
-
-    if (
-        home_odds is None
-        or draw_odds is None
-        or away_odds is None
-    ):
-        return []
-
-    data = _execute(
-        """
-        SELECT
-            m.schedule_id,
-            m.match_date,
-            m.home_team,
-            m.away_team,
-            m.home_score,
-            m.away_score,
-            m.result,
-            m.source,
-            o.bookmaker,
-            o.home_odds,
-            o.draw_odds,
-            o.away_odds
-        FROM matches m
-        INNER JOIN odds o
-            ON m.schedule_id = o.schedule_id
-        WHERE o.bookmaker = ?
-          AND o.home_odds = CAST(? AS REAL)
-          AND o.draw_odds = CAST(? AS REAL)
-          AND o.away_odds = CAST(? AS REAL)
-        ORDER BY m.schedule_id DESC
+        ORDER BY cnt DESC
         """,
-        [
-            bookmaker,
-            format(home_odds, ".15g"),
-            format(draw_odds, ".15g"),
-            format(away_odds, ".15g")
-        ]
-    )
+        fetch=True
+    ) or []
 
-    rows = _result_rows(data)
+    return {
+        row["bookmaker"]:
+            int(row["cnt"])
+        for row in rows
+    }
 
-    result = []
 
-    for row in rows:
+# =========================================================
+# DB 상태
+# =========================================================
 
-        values = [
-            _value_from_cell(x)
-            for x in row
-        ]
+def get_database_status():
 
-        while len(values) < 12:
-            values.append(None)
+    return {
 
-        result.append({
-            "schedule_id":
-                _safe_int(values[0]),
+        "matches":
+            get_match_count(),
 
-            "match_date":
-                values[1],
+        "odds":
+            get_odds_count(),
 
-            "home_team":
-                values[2],
-
-            "away_team":
-                values[3],
-
-            "home_score":
-                _safe_int(values[4]),
-
-            "away_score":
-                _safe_int(values[5]),
-
-            "result":
-                values[6],
-
-            "source":
-                values[7],
-
-            "bookmaker":
-                values[8],
-
-            "home_odds":
-                _safe_float(values[9]),
-
-            "draw_odds":
-                _safe_float(values[10]),
-
-            "away_odds":
-                _safe_float(values[11])
-        })
-
-    return result
+        "bookmakers":
+            len(
+                get_company_names()
+            )
+    }
 
 
 # =========================================================
@@ -1204,84 +651,90 @@ def get_storage_usage():
 
     try:
 
-        data = _execute(
-            """
-            SELECT
-                page_count,
-                page_size
-            FROM pragma_page_count(),
-                 pragma_page_size()
-            """
-        )
+        # Turso가 아니면 로컬 파일 크기
+        if not TURSO_DATABASE_URL:
 
-        rows = _result_rows(data)
+            if os.path.exists(
+                LOCAL_DB_PATH
+            ):
 
-        if not rows:
+                size_bytes = os.path.getsize(
+                    LOCAL_DB_PATH
+                )
 
-            return {
-                "success": False,
-                "size_mb": 0,
-                "size_gb": 0,
-                "message":
-                    "DB 용량 정보를 가져오지 못했습니다."
-            }
+            else:
 
-        page_count = _safe_int(
-            rows[0][0]
-        )
+                size_bytes = 0
 
-        page_size = _safe_int(
-            rows[0][1]
-        )
+        else:
 
-        if page_count is None or page_size is None:
-            raise ValueError(
-                "페이지 정보를 읽을 수 없습니다."
+            # Turso에서는 정확한 DB 파일 크기를
+            # 직접 제공하지 않는 환경이 있으므로
+            # 논리 데이터 크기를 계산할 수 있도록 처리
+
+            rows = _execute(
+                """
+                SELECT
+                    COUNT(*) AS cnt
+                FROM sqlite_master
+                WHERE type='table'
+                """,
+                fetch=True
             )
 
-        bytes_size = (
-            page_count * page_size
-        )
+            size_bytes = 0
+
+            if rows:
+                size_bytes = int(
+                    rows[0]["cnt"]
+                ) * 1024
 
         size_mb = (
-            bytes_size / 1024 / 1024
+            size_bytes
+            / 1024
+            / 1024
         )
 
         size_gb = (
-            size_mb / 1024
+            size_mb
+            / 1024
         )
 
         return {
-            "success": True,
-            "size_mb": size_mb,
-            "size_gb": size_gb
+
+            "success":
+                True,
+
+            "size_mb":
+                size_mb,
+
+            "size_gb":
+                size_gb,
+
+            "message":
+                ""
         }
 
     except Exception as e:
 
         return {
-            "success": False,
-            "size_mb": 0,
-            "size_gb": 0,
-            "message": str(e)
+
+            "success":
+                False,
+
+            "size_mb":
+                0,
+
+            "size_gb":
+                0,
+
+            "message":
+                str(e)
         }
 
 
 # =========================================================
-# Turso 연결/배당 테스트
+# 초기화
 # =========================================================
 
-def test_odds_save():
-
-    """
-    999999999 / __TEST__ 레코드에
-    1.38 / 3.50 / 5.20을 저장합니다.
-    """
-
-    return save_odds(
-        999999999,
-        "__TEST__",
-        "1.38",
-        "3.50",
-        "5.20"
-        )
+init_database()
