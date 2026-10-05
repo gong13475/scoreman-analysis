@@ -1,4 +1,2 @@
-streamlit>=1.40
-requests>=2.32
-pandas>=2.2
-libsql==0.1.11
+streamlit>=1.42,<2
+requests>=2.32,<3
