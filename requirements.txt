@@ -1,5 +1,5 @@
 streamlit
 requests
 pandas
-turso_serverless
+libsql-experimental
 streamlit-mic-recorder
