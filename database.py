@@ -1,89 +1,138 @@
-import sqlite3
-import os
+# ============================================================
+# database.py
+# 스코어맨 분석기
+# SQLite → Supabase 영구저장 버전
+#
+# 기존 scoreman_crawler.py / analysis.py 호환 목적
+# ============================================================
 
-
-DB_FILE = "historical_odds.db"
+import streamlit as st
+from supabase import create_client
 
 
 # =========================================================
-# 연결
+# Supabase 연결
 # =========================================================
 
+@st.cache_resource
 def get_connection():
 
-    conn = sqlite3.connect(
-        DB_FILE,
-        check_same_thread=False,
-        timeout=30
+    url = st.secrets.get("SUPABASE_URL", "")
+    key = st.secrets.get("SUPABASE_KEY", "")
+
+    if not url:
+        raise RuntimeError(
+            "SUPABASE_URL이 없습니다.\n"
+            "Streamlit Secrets에 SUPABASE_URL을 입력하세요."
+        )
+
+    if not key:
+        raise RuntimeError(
+            "SUPABASE_KEY가 없습니다.\n"
+            "Streamlit Secrets에 SUPABASE_KEY를 입력하세요."
+        )
+
+    return create_client(
+        url,
+        key
     )
-
-    conn.row_factory = sqlite3.Row
-
-    return conn
 
 
 # =========================================================
-# DB 초기화
+# DB 초기화 / 연결 확인
 # =========================================================
 
 def init_database():
 
-    conn = get_connection()
+    try:
 
-    cur = conn.cursor()
+        supabase = get_connection()
 
-    cur.execute("""
-        PRAGMA journal_mode=WAL
-    """)
+        supabase.table(
+            "matches"
+        ).select(
+            "schedule_id"
+        ).limit(
+            1
+        ).execute()
 
-    cur.execute("""
-        PRAGMA synchronous=NORMAL
-    """)
+        return True
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS matches (
-            schedule_id TEXT PRIMARY KEY,
-            match_date TEXT,
-            home_team TEXT,
-            away_team TEXT,
-            home_score INTEGER,
-            away_score INTEGER,
-            result TEXT,
-            source TEXT
+    except Exception as e:
+
+        print("Supabase 연결 오류:", e)
+
+        return False
+
+
+# =========================================================
+# DB 상태
+# =========================================================
+
+def get_database_status():
+
+    supabase = get_connection()
+
+    # 경기 수
+    match_result = (
+        supabase
+        .table("matches")
+        .select(
+            "schedule_id",
+            count="exact"
         )
-    """)
+        .execute()
+    )
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS odds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schedule_id TEXT NOT NULL,
-            company_id TEXT,
-            company_name TEXT NOT NULL,
-            final_home REAL,
-            final_draw REAL,
-            final_away REAL,
-            UNIQUE(schedule_id, company_name)
+    match_count = (
+        match_result.count
+        if match_result.count is not None
+        else 0
+    )
+
+    # 배당 수
+    odds_result = (
+        supabase
+        .table("odds")
+        .select(
+            "id",
+            count="exact"
         )
-    """)
+        .execute()
+    )
 
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_matches_date
-        ON matches(match_date)
-    """)
+    odds_count = (
+        odds_result.count
+        if odds_result.count is not None
+        else 0
+    )
 
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_odds_schedule
-        ON odds(schedule_id)
-    """)
+    # 업체 목록
+    bookmaker_result = (
+        supabase
+        .table("odds")
+        .select("bookmaker")
+        .execute()
+    )
 
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_odds_company
-        ON odds(company_name)
-    """)
+    companies = set()
 
-    conn.commit()
+    for row in bookmaker_result.data or []:
 
-    conn.close()
+        name = row.get("bookmaker")
+
+        if name:
+            companies.add(
+                str(name)
+            )
+
+    return {
+        "matches": int(match_count),
+        "odds": int(odds_count),
+        "bookmakers": len(companies),
+        "db_exists": True,
+        "db_file": "Supabase PostgreSQL"
+    }
 
 
 # =========================================================
@@ -101,52 +150,34 @@ def save_match(
     source="Scoreman"
 ):
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    try:
+    data = {
+        "schedule_id": str(schedule_id),
+        "match_date": match_date,
+        "home_team": home_team,
+        "away_team": away_team,
+        "home_score": home_score,
+        "away_score": away_score,
+        "result": result,
+        "source": source
+    }
 
-        conn.execute("""
-            INSERT INTO matches (
-                schedule_id,
-                match_date,
-                home_team,
-                away_team,
-                home_score,
-                away_score,
-                result,
-                source
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-
-            ON CONFLICT(schedule_id)
-            DO UPDATE SET
-                match_date=excluded.match_date,
-                home_team=excluded.home_team,
-                away_team=excluded.away_team,
-                home_score=excluded.home_score,
-                away_score=excluded.away_score,
-                result=excluded.result,
-                source=excluded.source
-        """, (
-            str(schedule_id),
-            match_date,
-            home_team,
-            away_team,
-            home_score,
-            away_score,
-            result,
-            source
-        ))
-
-        conn.commit()
-
-    finally:
-
-        conn.close()
+    return (
+        supabase
+        .table("matches")
+        .upsert(
+            data,
+            on_conflict="schedule_id"
+        )
+        .execute()
+    )
 
 
 # =========================================================
 # 단일 배당 저장
+#
+# 기존 함수명 유지
 # =========================================================
 
 def save_odds(
@@ -158,51 +189,50 @@ def save_odds(
     final_away
 ):
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    try:
+    data = {
+        "schedule_id": str(schedule_id),
+        "bookmaker": str(
+            company_name or ""
+        ),
+        "home_odds": (
+            float(final_home)
+            if final_home is not None
+            else None
+        ),
+        "draw_odds": (
+            float(final_draw)
+            if final_draw is not None
+            else None
+        ),
+        "away_odds": (
+            float(final_away)
+            if final_away is not None
+            else None
+        ),
+        "odds_type": "final"
+    }
 
-        conn.execute("""
-            INSERT INTO odds (
-                schedule_id,
-                company_id,
-                company_name,
-                final_home,
-                final_draw,
-                final_away
+    return (
+        supabase
+        .table("odds")
+        .upsert(
+            data,
+            on_conflict=(
+                "schedule_id,"
+                "bookmaker,"
+                "odds_type"
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-
-            ON CONFLICT(
-                schedule_id,
-                company_name
-            )
-
-            DO UPDATE SET
-                company_id=excluded.company_id,
-                final_home=excluded.final_home,
-                final_draw=excluded.final_draw,
-                final_away=excluded.final_away
-        """, (
-            str(schedule_id),
-            str(company_id or ""),
-            str(company_name),
-            final_home,
-            final_draw,
-            final_away
-        ))
-
-        conn.commit()
-
-    finally:
-
-        conn.close()
+        )
+        .execute()
+    )
 
 
 # =========================================================
 # 경기 + 배당 일괄 저장
 #
-# 속도 개선 핵심
+# 스코어맨 크롤러 핵심 저장 함수
 # =========================================================
 
 def save_match_with_odds(
@@ -210,143 +240,149 @@ def save_match_with_odds(
     odds_list
 ):
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    try:
+    schedule_id = str(
+        match["schedule_id"]
+    )
 
-        cur = conn.cursor()
+    # -----------------------------------------------------
+    # 경기 저장
+    # -----------------------------------------------------
 
-        # -----------------------------------------------
-        # 경기
-        # -----------------------------------------------
+    match_data = {
+        "schedule_id": schedule_id,
+        "match_date": match.get(
+            "match_date",
+            ""
+        ),
+        "home_team": match.get(
+            "home_team",
+            ""
+        ),
+        "away_team": match.get(
+            "away_team",
+            ""
+        ),
+        "home_score": match.get(
+            "home_score"
+        ),
+        "away_score": match.get(
+            "away_score"
+        ),
+        "result": match.get(
+            "result",
+            ""
+        ),
+        "source": "Scoreman"
+    }
 
-        cur.execute("""
-            INSERT INTO matches (
-                schedule_id,
-                match_date,
-                home_team,
-                away_team,
-                home_score,
-                away_score,
-                result,
-                source
+    (
+        supabase
+        .table("matches")
+        .upsert(
+            match_data,
+            on_conflict="schedule_id"
+        )
+        .execute()
+    )
+
+    # -----------------------------------------------------
+    # 배당 저장
+    # -----------------------------------------------------
+
+    rows = []
+
+    for odds in odds_list:
+
+        company_name = str(
+            odds.get(
+                "company_name",
+                ""
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            or ""
+        )
 
-            ON CONFLICT(schedule_id)
-            DO UPDATE SET
-                match_date=excluded.match_date,
-                home_team=excluded.home_team,
-                away_team=excluded.away_team,
-                home_score=excluded.home_score,
-                away_score=excluded.away_score,
-                result=excluded.result,
-                source=excluded.source
-        """, (
-            str(match["schedule_id"]),
-            match.get("match_date", ""),
-            match.get("home_team", ""),
-            match.get("away_team", ""),
-            match.get("home_score"),
-            match.get("away_score"),
-            match.get("result", ""),
-            "Scoreman"
-        ))
+        if not company_name:
+            continue
 
+        rows.append({
 
-        # -----------------------------------------------
-        # 배당 전체
-        # -----------------------------------------------
+            "schedule_id":
+                schedule_id,
 
-        rows = []
+            "bookmaker":
+                company_name,
 
-        for odds in odds_list:
-
-            rows.append((
-                str(match["schedule_id"]),
-                str(
-                    odds.get(
-                        "company_id",
-                        ""
-                    )
-                    or ""
+            "home_odds":
+                odds.get(
+                    "final_home"
                 ),
-                str(
-                    odds.get(
-                        "company_name",
-                        ""
-                    )
+
+            "draw_odds":
+                odds.get(
+                    "final_draw"
                 ),
-                odds.get("final_home"),
-                odds.get("final_draw"),
-                odds.get("final_away")
-            ))
 
+            "away_odds":
+                odds.get(
+                    "final_away"
+                ),
 
-        if rows:
+            "odds_type":
+                "final"
+        })
 
-            cur.executemany("""
-                INSERT INTO odds (
-                    schedule_id,
-                    company_id,
-                    company_name,
-                    final_home,
-                    final_draw,
-                    final_away
+    # -----------------------------------------------------
+    # 배당 일괄 저장
+    # -----------------------------------------------------
+
+    if rows:
+
+        (
+            supabase
+            .table("odds")
+            .upsert(
+                rows,
+                on_conflict=(
+                    "schedule_id,"
+                    "bookmaker,"
+                    "odds_type"
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+            )
+            .execute()
+        )
 
-                ON CONFLICT(
-                    schedule_id,
-                    company_name
-                )
-
-                DO UPDATE SET
-                    company_id=excluded.company_id,
-                    final_home=excluded.final_home,
-                    final_draw=excluded.final_draw,
-                    final_away=excluded.final_away
-            """, rows)
-
-
-        # -----------------------------------------------
-        # 한 번만 commit
-        # -----------------------------------------------
-
-        conn.commit()
-
-        return len(rows)
-
-    except Exception:
-
-        conn.rollback()
-
-        raise
-
-    finally:
-
-        conn.close()
+    return len(rows)
 
 
 # =========================================================
 # 경기 조회
 # =========================================================
 
-def get_match(schedule_id):
+def get_match(
+    schedule_id
+):
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    row = conn.execute("""
-        SELECT *
-        FROM matches
-        WHERE schedule_id=?
-    """, (
-        str(schedule_id),
-    )).fetchone()
+    result = (
+        supabase
+        .table("matches")
+        .select("*")
+        .eq(
+            "schedule_id",
+            str(schedule_id)
+        )
+        .limit(1)
+        .execute()
+    )
 
-    conn.close()
+    if result.data:
 
-    return row
+        return result.data[0]
+
+    return None
 
 
 # =========================================================
@@ -355,17 +391,20 @@ def get_match(schedule_id):
 
 def get_all_matches():
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    rows = conn.execute("""
-        SELECT *
-        FROM matches
-        ORDER BY match_date DESC, schedule_id DESC
-    """).fetchall()
+    result = (
+        supabase
+        .table("matches")
+        .select("*")
+        .order(
+            "match_date",
+            desc=True
+        )
+        .execute()
+    )
 
-    conn.close()
-
-    return rows
+    return result.data or []
 
 
 # =========================================================
@@ -374,17 +413,20 @@ def get_all_matches():
 
 def get_all_odds():
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    rows = conn.execute("""
-        SELECT *
-        FROM odds
-        ORDER BY schedule_id DESC, company_name
-    """).fetchall()
+    result = (
+        supabase
+        .table("odds")
+        .select("*")
+        .order(
+            "schedule_id",
+            desc=True
+        )
+        .execute()
+    )
 
-    conn.close()
-
-    return rows
+    return result.data or []
 
 
 # =========================================================
@@ -395,20 +437,27 @@ def get_match_final_odds(
     schedule_id
 ):
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    rows = conn.execute("""
-        SELECT *
-        FROM odds
-        WHERE schedule_id=?
-        ORDER BY company_name
-    """, (
-        str(schedule_id),
-    )).fetchall()
+    result = (
+        supabase
+        .table("odds")
+        .select("*")
+        .eq(
+            "schedule_id",
+            str(schedule_id)
+        )
+        .eq(
+            "odds_type",
+            "final"
+        )
+        .order(
+            "bookmaker"
+        )
+        .execute()
+    )
 
-    conn.close()
-
-    return rows
+    return result.data or []
 
 
 # =========================================================
@@ -417,15 +466,21 @@ def get_match_final_odds(
 
 def get_match_count():
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    value = conn.execute(
-        "SELECT COUNT(*) FROM matches"
-    ).fetchone()[0]
+    result = (
+        supabase
+        .table("matches")
+        .select(
+            "schedule_id",
+            count="exact"
+        )
+        .execute()
+    )
 
-    conn.close()
-
-    return int(value)
+    return int(
+        result.count or 0
+    )
 
 
 # =========================================================
@@ -434,39 +489,55 @@ def get_match_count():
 
 def get_odds_count():
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    value = conn.execute(
-        "SELECT COUNT(*) FROM odds"
-    ).fetchone()[0]
+    result = (
+        supabase
+        .table("odds")
+        .select(
+            "id",
+            count="exact"
+        )
+        .execute()
+    )
 
-    conn.close()
-
-    return int(value)
+    return int(
+        result.count or 0
+    )
 
 
 # =========================================================
 # 업체 목록
+#
+# 기존 company_name 함수 유지
 # =========================================================
 
 def get_company_names():
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    rows = conn.execute("""
-        SELECT DISTINCT company_name
-        FROM odds
-        WHERE company_name IS NOT NULL
-        AND TRIM(company_name) != ''
-        ORDER BY company_name
-    """).fetchall()
+    result = (
+        supabase
+        .table("odds")
+        .select("bookmaker")
+        .execute()
+    )
 
-    conn.close()
+    names = set()
 
-    return [
-        row[0]
-        for row in rows
-    ]
+    for row in result.data or []:
+
+        name = row.get(
+            "bookmaker"
+        )
+
+        if name:
+
+            names.add(
+                str(name)
+            )
+
+    return sorted(names)
 
 
 # =========================================================
@@ -475,28 +546,45 @@ def get_company_names():
 
 def get_company_counts():
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    rows = conn.execute("""
-        SELECT
-            company_name,
-            COUNT(*) AS count
-        FROM odds
-        GROUP BY company_name
-        ORDER BY count DESC
-    """).fetchall()
+    result = (
+        supabase
+        .table("odds")
+        .select("bookmaker")
+        .execute()
+    )
 
-    conn.close()
+    counts = {}
 
-    return {
-        row["company_name"]:
-            int(row["count"])
-        for row in rows
-    }
+    for row in result.data or []:
+
+        name = row.get(
+            "bookmaker"
+        )
+
+        if not name:
+            continue
+
+        name = str(name)
+
+        counts[name] = (
+            counts.get(name, 0) + 1
+        )
+
+    return dict(
+        sorted(
+            counts.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+    )
 
 
 # =========================================================
 # 동일 배당 검색
+#
+# 여러 업체가 같은 배당을 가진 경기 검색
 # =========================================================
 
 def search_multiple_final_odds(
@@ -507,45 +595,101 @@ def search_multiple_final_odds(
 
         return []
 
-
-    conn = get_connection()
-
-    cur = conn.cursor()
+    supabase = get_connection()
 
     schedule_ids = None
 
+    tolerance = 0.00001
 
-    for company_name, odds in company_odds.items():
+    # -----------------------------------------------------
+    # 업체별 검색
+    # -----------------------------------------------------
 
-        cur.execute("""
-            SELECT DISTINCT schedule_id
-            FROM odds
-            WHERE company_name = ?
+    for company_name, odds in (
+        company_odds.items()
+    ):
 
-              AND ABS(
-                  final_home - ?
-              ) < 0.00001
+        home = float(
+            odds["home"]
+        )
 
-              AND ABS(
-                  final_draw - ?
-              ) < 0.00001
+        draw = float(
+            odds["draw"]
+        )
 
-              AND ABS(
-                  final_away - ?
-              ) < 0.00001
-        """, (
-            company_name,
-            float(odds["home"]),
-            float(odds["draw"]),
-            float(odds["away"])
-        ))
+        away = float(
+            odds["away"]
+        )
 
+        home_min = (
+            home - tolerance
+        )
+
+        home_max = (
+            home + tolerance
+        )
+
+        draw_min = (
+            draw - tolerance
+        )
+
+        draw_max = (
+            draw + tolerance
+        )
+
+        away_min = (
+            away - tolerance
+        )
+
+        away_max = (
+            away + tolerance
+        )
+
+        result = (
+            supabase
+            .table("odds")
+            .select("schedule_id")
+            .eq(
+                "bookmaker",
+                company_name
+            )
+            .gte(
+                "home_odds",
+                home_min
+            )
+            .lte(
+                "home_odds",
+                home_max
+            )
+            .gte(
+                "draw_odds",
+                draw_min
+            )
+            .lte(
+                "draw_odds",
+                draw_max
+            )
+            .gte(
+                "away_odds",
+                away_min
+            )
+            .lte(
+                "away_odds",
+                away_max
+            )
+            .eq(
+                "odds_type",
+                "final"
+            )
+            .execute()
+        )
 
         ids = {
-            row["schedule_id"]
-            for row in cur.fetchall()
+            str(row["schedule_id"])
+            for row in (
+                result.data or []
+            )
         }
-
 
         if schedule_ids is None:
 
@@ -555,74 +699,210 @@ def search_multiple_final_odds(
 
             schedule_ids &= ids
 
-
         if not schedule_ids:
 
-            break
+            return []
 
+    # -----------------------------------------------------
+    # 경기 정보 가져오기
+    # -----------------------------------------------------
 
     if not schedule_ids:
 
-        conn.close()
-
         return []
 
-
-    placeholders = ",".join(
-        "?"
-        for _ in schedule_ids
+    result = (
+        supabase
+        .table("matches")
+        .select("*")
+        .in_(
+            "schedule_id",
+            list(schedule_ids)
+        )
+        .order(
+            "match_date",
+            desc=True
+        )
+        .execute()
     )
 
-
-    rows = cur.execute(
-        f"""
-        SELECT *
-        FROM matches
-        WHERE schedule_id IN (
-            {placeholders}
-        )
-        ORDER BY match_date DESC
-        """,
-        tuple(schedule_ids)
-    ).fetchall()
-
-
-    conn.close()
-
-    return rows
+    return result.data or []
 
 
 # =========================================================
 # DB 초기화
+#
+# 기존 clear_database 함수 유지
 # =========================================================
 
 def clear_database():
 
-    conn = get_connection()
+    supabase = get_connection()
 
-    conn.execute(
-        "DELETE FROM odds"
+    # 배당 먼저 삭제
+    (
+        supabase
+        .table("odds")
+        .delete()
+        .neq(
+            "id",
+            0
+        )
+        .execute()
     )
 
-    conn.execute(
-        "DELETE FROM matches"
+    # 경기 삭제
+    (
+        supabase
+        .table("matches")
+        .delete()
+        .neq(
+            "id",
+            0
+        )
+        .execute()
     )
-
-    conn.commit()
-
-    conn.close()
 
 
 # =========================================================
-# 실행
+# 경기 존재 확인
+# =========================================================
+
+def match_exists(
+    schedule_id
+):
+
+    return (
+        get_match(schedule_id)
+        is not None
+    )
+
+
+# =========================================================
+# 배당 존재 확인
+# =========================================================
+
+def odds_exists(
+    schedule_id,
+    company_name
+):
+
+    supabase = get_connection()
+
+    result = (
+        supabase
+        .table("odds")
+        .select("id")
+        .eq(
+            "schedule_id",
+            str(schedule_id)
+        )
+        .eq(
+            "bookmaker",
+            str(company_name)
+        )
+        .eq(
+            "odds_type",
+            "final"
+        )
+        .limit(1)
+        .execute()
+    )
+
+    return bool(
+        result.data
+    )
+
+
+# =========================================================
+# 결과별 경기 조회
+# =========================================================
+
+def get_matches_by_result(
+    result_value
+):
+
+    supabase = get_connection()
+
+    result = (
+        supabase
+        .table("matches")
+        .select("*")
+        .eq(
+            "result",
+            result_value
+        )
+        .order(
+            "match_date",
+            desc=True
+        )
+        .execute()
+    )
+
+    return result.data or []
+
+
+# =========================================================
+# 특정 업체 배당
+# =========================================================
+
+def get_odds_by_company(
+    company_name
+):
+
+    supabase = get_connection()
+
+    result = (
+        supabase
+        .table("odds")
+        .select("*")
+        .eq(
+            "bookmaker",
+            company_name
+        )
+        .eq(
+            "odds_type",
+            "final"
+        )
+        .order(
+            "schedule_id",
+            desc=True
+        )
+        .execute()
+    )
+
+    return result.data or []
+
+
+# =========================================================
+# 테스트
 # =========================================================
 
 if __name__ == "__main__":
 
-    init_database()
+    try:
 
-    print(
-        os.path.abspath(
-            DB_FILE
-        )
-                    )
+        ok = init_database()
+
+        if ok:
+
+            print(
+                "Supabase 연결 성공"
+            )
+
+            print(
+                get_database_status()
+            )
+
+        else:
+
+            print(
+                "Supabase 연결 실패"
+            )
+
+    except Exception as e:
+
+        print(
+            "오류:",
+            e
+            )
