@@ -1195,7 +1195,7 @@ if analysis_companies:
 
 
 # =========================================================
-# 음성 안내
+# 음성 배당 입력 / 결과 듣기
 # =========================================================
 
 st.divider()
@@ -1205,74 +1205,128 @@ st.subheader(
 )
 
 st.caption(
-    "브라우저의 음성 입력 기능을 사용하려면 "
-    "아래 버튼을 누른 뒤 배당을 말할 수 있습니다."
+    "마이크 버튼을 누르고 "
+    "예: 승 1.80 무 3.40 패 4.20 "
+    "이라고 말하세요."
 )
 
-st.markdown(
-    """
-    <button
-        onclick="
-        const text =
-        prompt(
-            '배당을 입력하세요. 예: 승 1.80 무 3.40 패 4.20'
-        );
+try:
+    from streamlit_mic_recorder import mic_recorder
 
-        if (text) {
-            alert('입력된 음성/텍스트: ' + text);
-        }
-        "
-        style="
-            width:100%;
-            padding:14px;
-            border:0;
-            border-radius:10px;
-            background:#111827;
-            color:white;
-            font-size:18px;
-            font-weight:700;
-            cursor:pointer;
-        "
-    >
-        🎤 말하기
-    </button>
-    """,
-    unsafe_allow_html=True
-)
+    audio = mic_recorder(
+        start_prompt="🎤 말하기",
+        stop_prompt="⏹️ 듣기 중지",
+        just_once=True,
+        use_container_width=True,
+        key="odds_voice"
+    )
+
+    if audio:
+        st.success(
+            "🎤 음성이 녹음되었습니다."
+        )
+
+        st.audio(
+            audio["bytes"],
+            format="audio/wav"
+        )
+
+except ImportError:
+
+    st.error(
+        "음성 기능을 사용하려면 "
+        "`streamlit-mic-recorder`를 설치하세요."
+    )
+
+    st.code(
+        "pip install streamlit-mic-recorder",
+        language="bash"
+    )
+
+
+# =========================================================
+# 결과 듣기
+# =========================================================
 
 if st.button(
     "🔊 현재 분석 결과 듣기",
-    use_container_width=True
+    use_container_width=True,
+    key="speak_result"
 ):
 
-    if analysis_companies:
+    stats = None
+
+    saved_result = st.session_state.get(
+        "analysis_result"
+    )
+
+    if saved_result:
+        stats = saved_result.get(
+            "statistics"
+        )
+
+    if stats:
+
+        actual = stats.get(
+            "actual",
+            {}
+        )
+
+        probability = stats.get(
+            "probability",
+            {}
+        )
+
+        shortage = stats.get(
+            "shortage",
+            {}
+        )
+
+        highest = analysis.get_highest_shortage(
+            stats
+        )
 
         speech_text = (
-            "배당 분석 결과입니다. "
-            "화면의 분석 결과를 확인하세요."
+            f"검색 결과입니다. "
+            f"실제 승률은 {actual.get('home', 0):.1f} 퍼센트, "
+            f"무승률은 {actual.get('draw', 0):.1f} 퍼센트, "
+            f"패율은 {actual.get('away', 0):.1f} 퍼센트입니다. "
+            f"배당 기반 승 확률은 "
+            f"{probability.get('home', 0):.1f} 퍼센트, "
+            f"무 확률은 "
+            f"{probability.get('draw', 0):.1f} 퍼센트, "
+            f"패 확률은 "
+            f"{probability.get('away', 0):.1f} 퍼센트입니다. "
+            f"가장 차이가 큰 결과는 "
+            f"{highest}입니다."
         )
+
+        import base64
+
+        encoded = base64.b64encode(
+            speech_text.encode("utf-8")
+        ).decode("utf-8")
 
         st.markdown(
             f"""
             <script>
-            const text =
-                {speech_text!r};
+            const text = decodeURIComponent(
+                escape(
+                    atob("{encoded}")
+                )
+            );
 
-            if (
-                'speechSynthesis'
-                in window
-            ) {{
-                speechSynthesis.cancel();
+            if ("speechSynthesis" in window) {{
+                window.speechSynthesis.cancel();
 
                 const msg =
-                    new SpeechSynthesisUtterance(
-                        text
-                    );
+                    new SpeechSynthesisUtterance(text);
 
                 msg.lang = "ko-KR";
                 msg.rate = 1.0;
+                msg.pitch = 1.0;
 
-                speechSynthesis.speak(msg);
+                window.speechSynthesis.speak(msg);
             }}
             </script>
             """,
@@ -1282,7 +1336,7 @@ if st.button(
     else:
 
         st.warning(
-            "먼저 분석 업체를 선택하세요."
+            "먼저 배당 검색을 실행하세요."
         )
 
 
