@@ -1,5 +1,10 @@
 import re
+import sqlite3
+import shutil
 import streamlit as st
+
+from pathlib import Path
+from datetime import datetime
 
 import database
 import scoreman_crawler
@@ -20,6 +25,13 @@ database.init_database()
 
 
 # =========================================================
+# DB 경로
+# =========================================================
+
+DB_PATH = Path(__file__).resolve().parent / "scoreman.db"
+
+
+# =========================================================
 # 세션 상태
 # =========================================================
 
@@ -28,6 +40,106 @@ if "search_result" not in st.session_state:
 
 if "show_collection_log" not in st.session_state:
     st.session_state.show_collection_log = False
+
+
+# =========================================================
+# DB 상태 함수
+# =========================================================
+
+def get_local_db_status():
+
+    result = {
+        "exists": False,
+        "size": 0,
+        "matches": 0,
+        "odds": 0,
+        "companies": 0,
+        "error": ""
+    }
+
+    if not DB_PATH.exists():
+        return result
+
+    result["exists"] = True
+
+    try:
+        result["size"] = DB_PATH.stat().st_size
+
+        conn = sqlite3.connect(DB_PATH)
+
+        # 경기 수
+        try:
+            result["matches"] = conn.execute(
+                "SELECT COUNT(*) FROM matches"
+            ).fetchone()[0]
+        except Exception:
+            result["matches"] = 0
+
+        # 배당 수
+        try:
+            result["odds"] = conn.execute(
+                "SELECT COUNT(*) FROM odds"
+            ).fetchone()[0]
+        except Exception:
+            result["odds"] = 0
+
+        # 업체 수
+        try:
+            result["companies"] = conn.execute(
+                """
+                SELECT COUNT(DISTINCT company_name)
+                FROM odds
+                WHERE company_name IS NOT NULL
+                AND TRIM(company_name) != ''
+                """
+            ).fetchone()[0]
+        except Exception:
+
+            try:
+                result["companies"] = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT bookmaker)
+                    FROM odds
+                    WHERE bookmaker IS NOT NULL
+                    AND TRIM(bookmaker) != ''
+                    """
+                ).fetchone()[0]
+            except Exception:
+                result["companies"] = 0
+
+        conn.close()
+
+    except Exception as e:
+
+        result["error"] = str(e)
+
+    return result
+
+
+# =========================================================
+# DB 백업 데이터 생성
+# =========================================================
+
+def create_db_backup():
+
+    if not DB_PATH.exists():
+        return None
+
+    try:
+
+        backup_path = Path(
+            "/tmp/scoreman_backup.db"
+        )
+
+        shutil.copy2(
+            DB_PATH,
+            backup_path
+        )
+
+        return backup_path
+
+    except Exception:
+        return None
 
 
 # =========================================================
@@ -43,28 +155,209 @@ st.caption(
 
 
 # =========================================================
+# DB 상태
+# =========================================================
+
+db_status = get_local_db_status()
+
+
+# =========================================================
+# DB 상태 표시
+# =========================================================
+
+if not db_status["exists"]:
+
+    st.error(
+        "🔴 scoreman.db 파일이 없습니다."
+    )
+
+elif db_status["matches"] == 0:
+
+    st.warning(
+        "⚠️ scoreman.db는 존재하지만 "
+        "현재 저장된 경기가 0개입니다."
+    )
+
+else:
+
+    st.success(
+        f"🟢 현재 scoreman.db에 "
+        f"**{db_status['matches']:,}개 경기**가 있습니다."
+    )
+
+
+# =========================================================
 # DB 현황
 # =========================================================
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 
 with c1:
+
     st.metric(
         "저장 경기",
         f"{database.get_match_count():,}"
     )
 
 with c2:
+
     st.metric(
         "저장 최종배당",
         f"{database.get_odds_count():,}"
     )
 
 with c3:
+
     st.metric(
         "실제 저장 업체",
         f"{len(database.get_company_names()):,}"
     )
+
+with c4:
+
+    if db_status["exists"]:
+
+        size_mb = (
+            db_status["size"]
+            / 1024
+            / 1024
+        )
+
+        st.metric(
+            "DB 파일 크기",
+            f"{size_mb:.2f} MB"
+        )
+
+    else:
+
+        st.metric(
+            "DB 파일",
+            "없음"
+        )
+
+
+# =========================================================
+# DB 백업 / 확인
+# =========================================================
+
+with st.expander(
+    "💾 DB 확인 및 백업",
+    expanded=False
+):
+
+    st.write(
+        "현재 Streamlit 실행환경에 존재하는 "
+        "`scoreman.db` 상태입니다."
+    )
+
+    if db_status["exists"]:
+
+        st.write(
+            f"📁 DB 경로: `{DB_PATH}`"
+        )
+
+        st.write(
+            f"📊 경기: **{db_status['matches']:,}개**"
+        )
+
+        st.write(
+            f"💰 배당: **{db_status['odds']:,}개**"
+        )
+
+        st.write(
+            f"🏢 업체: **{db_status['companies']:,}개**"
+        )
+
+        st.write(
+            f"💾 파일 크기: "
+            f"**{db_status['size'] / 1024 / 1024:.2f} MB**"
+        )
+
+        if db_status["error"]:
+
+            st.warning(
+                "DB 확인 중 오류: "
+                + db_status["error"]
+            )
+
+        st.markdown("---")
+
+        if st.button(
+            "🔎 DB 상태 다시 확인",
+            use_container_width=True,
+            key="check_db"
+        ):
+
+            st.rerun()
+
+        backup_path = None
+
+        if st.button(
+            "📥 현재 DB 백업 준비",
+            use_container_width=True,
+            key="prepare_db_backup"
+        ):
+
+            backup_path = create_db_backup()
+
+            if backup_path:
+
+                st.success(
+                    "✅ 현재 DB 백업 파일을 만들었습니다."
+                )
+
+                st.session_state[
+                    "backup_ready"
+                ] = True
+
+            else:
+
+                st.error(
+                    "❌ DB 백업에 실패했습니다."
+                )
+
+
+        if st.session_state.get(
+            "backup_ready",
+            False
+        ):
+
+            backup_path = Path(
+                "/tmp/scoreman_backup.db"
+            )
+
+            if backup_path.exists():
+
+                with open(
+                    backup_path,
+                    "rb"
+                ) as f:
+
+                    st.download_button(
+                        "⬇️ scoreman.db 저장하기",
+                        data=f.read(),
+                        file_name=(
+                            "scoreman_backup_"
+                            + datetime.now().strftime(
+                                "%Y%m%d_%H%M%S"
+                            )
+                            + ".db"
+                        ),
+                        mime="application/octet-stream",
+                        use_container_width=True,
+                        key="download_db_backup"
+                    )
+
+                st.info(
+                    "⚠️ 이 파일은 반드시 휴대폰/PC에 "
+                    "따로 보관하세요."
+                )
+
+    else:
+
+        st.error(
+            "❌ scoreman.db가 없습니다."
+        )
 
 
 st.divider()
@@ -217,7 +510,7 @@ if status["running"]:
     st.error("🔴 현재 수집중입니다.")
 
     # -----------------------------------------------------
-    # 수집 중지 버튼
+    # 수집 중지
     # -----------------------------------------------------
 
     if st.button(
@@ -278,7 +571,7 @@ if status["running"]:
 else:
 
     # -----------------------------------------------------
-    # 수집 시작 버튼
+    # 수집 시작
     # -----------------------------------------------------
 
     if st.button(
@@ -315,7 +608,6 @@ else:
                     selected_crawl_companies
                 )
 
-
             try:
 
                 started = (
@@ -327,7 +619,6 @@ else:
                         float(delay)
                     )
                 )
-
 
                 if started:
 
@@ -372,7 +663,6 @@ if (
         "📡 수집 진행상황"
     )
 
-
     total = int(
         status.get(
             "total",
@@ -380,14 +670,12 @@ if (
         )
     )
 
-
     current = int(
         status.get(
             "current",
             0
         )
     )
-
 
     if total > 0:
 
@@ -399,7 +687,6 @@ if (
 
         progress = 0
 
-
     st.progress(
         min(
             max(
@@ -410,9 +697,8 @@ if (
         )
     )
 
-
     # =====================================================
-    # 상태 표시
+    # 상태
     # =====================================================
 
     if status["running"]:
@@ -443,14 +729,12 @@ if (
 
     c1, c2, c3, c4, c5 = st.columns(5)
 
-
     with c1:
 
         st.metric(
             "진행",
             f"{current:,}/{total:,}"
         )
-
 
     with c2:
 
@@ -459,7 +743,6 @@ if (
             f"{status.get('success', 0):,}"
         )
 
-
     with c3:
 
         st.metric(
@@ -467,14 +750,12 @@ if (
             f"{status.get('exists', 0):,}"
         )
 
-
     with c4:
 
         st.metric(
             "실패",
             f"{status.get('failed', 0):,}"
         )
-
 
     with c5:
 
@@ -491,7 +772,6 @@ if (
     last_id = status.get(
         "last_completed_id"
     )
-
 
     if last_id:
 
@@ -510,7 +790,6 @@ if (
         []
     )
 
-
     if status_companies:
 
         st.write(
@@ -522,13 +801,12 @@ if (
 
 
     # =====================================================
-    # 로그 버튼
+    # 로그
     # =====================================================
 
     st.subheader(
         "📜 수집 로그"
     )
-
 
     show_log = st.checkbox(
         "📜 수집 로그 보기",
@@ -536,14 +814,12 @@ if (
         key="show_collection_log"
     )
 
-
     if show_log:
 
         log_text = status.get(
             "log",
             ""
         )
-
 
         if log_text:
 
@@ -622,7 +898,6 @@ else:
 
     table = []
 
-
     for row in matches:
 
         table.append({
@@ -693,7 +968,6 @@ if selected_companies:
         "💰 동일 배당 기준 입력"
     )
 
-
     st.info(
         "입력한 승/무/패 배당과 동일한 "
         "DB의 전체 경기를 검색합니다."
@@ -706,16 +980,13 @@ if selected_companies:
             f"### 🏢 {company}"
         )
 
-
         c1, c2, c3 = st.columns(3)
-
 
         safe = re.sub(
             r"[^a-zA-Z0-9가-힣_]",
             "_",
             company
         )
-
 
         with c1:
 
@@ -728,7 +999,6 @@ if selected_companies:
                 key=f"analysis_home_{safe}"
             )
 
-
         with c2:
 
             draw = st.number_input(
@@ -739,7 +1009,6 @@ if selected_companies:
                 format="%.2f",
                 key=f"analysis_draw_{safe}"
             )
-
 
         with c3:
 
@@ -777,22 +1046,33 @@ if selected_companies:
         key="search_odds"
     ):
 
-        result = analysis.run_search(
-            selected_companies,
-            input_odds
-        )
+        try:
 
-
-        if result["success"]:
-
-            st.session_state.search_result = (
-                result
+            result = analysis.run_search(
+                selected_companies,
+                input_odds
             )
 
-        else:
+            if result["success"]:
+
+                st.session_state.search_result = (
+                    result
+                )
+
+            else:
+
+                st.error(
+                    result["message"]
+                )
+
+        except Exception as e:
 
             st.error(
-                result["message"]
+                "분석 실행 오류"
+            )
+
+            st.code(
+                str(e)
             )
 
 
@@ -810,15 +1090,12 @@ if (
 
     results = search["results"]
 
-
     statistics = search.get(
         "statistics",
         {}
     )
 
-
     st.divider()
-
 
     st.header(
         "📊 동일 배당 기준 전체 경기 분석"
@@ -834,24 +1111,20 @@ if (
         {}
     )
 
-
     total = counts.get(
         "total",
         len(results)
     )
-
 
     wins = counts.get(
         "home",
         0
     )
 
-
     draws = counts.get(
         "draw",
         0
     )
-
 
     losses = counts.get(
         "away",
@@ -861,14 +1134,12 @@ if (
 
     c1, c2, c3, c4 = st.columns(4)
 
-
     with c1:
 
         st.metric(
             "전체 경기",
             f"{total:,}"
         )
-
 
     with c2:
 
@@ -882,7 +1153,6 @@ if (
             )
         )
 
-
     with c3:
 
         st.metric(
@@ -894,7 +1164,6 @@ if (
                 else "0%"
             )
         )
-
 
     with c4:
 
@@ -916,7 +1185,6 @@ if (
     st.subheader(
         "🎯 업체별 확률 / 실제결과 / 부족확률"
     )
-
 
     st.caption(
         "부족확률 = 실제결과율 - 기대값확률"
@@ -976,13 +1244,11 @@ if (
                 ][key]
             )
 
-
             actual = (
                 company_stats[
                     "actual"
                 ][key]
             )
-
 
             difference = (
                 actual
@@ -1184,11 +1450,19 @@ if st.checkbox(
         })
 
 
-    st.dataframe(
-        table,
-        use_container_width=True,
-        hide_index=True
-    )
+    if table:
+
+        st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    else:
+
+        st.info(
+            "저장된 최종배당 데이터가 없습니다."
+        )
 
 
 # =========================================================
@@ -1255,4 +1529,4 @@ if status["running"]:
         </script>
         """,
         unsafe_allow_html=True
-                )
+                 )
