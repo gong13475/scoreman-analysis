@@ -1,10 +1,5 @@
 import re
-import sqlite3
-import shutil
 import streamlit as st
-
-from pathlib import Path
-from datetime import datetime
 
 import database
 import scoreman_crawler
@@ -21,14 +16,21 @@ st.set_page_config(
     layout="wide"
 )
 
-database.init_database()
-
 
 # =========================================================
-# DB 경로
+# Supabase 초기화
 # =========================================================
 
-DB_PATH = Path(__file__).resolve().parent / "scoreman.db"
+try:
+
+    db_ok = database.init_database()
+
+except Exception as e:
+
+    db_ok = False
+
+    st.error("❌ Supabase 연결 오류")
+    st.code(str(e))
 
 
 # =========================================================
@@ -43,106 +45,6 @@ if "show_collection_log" not in st.session_state:
 
 
 # =========================================================
-# DB 상태 함수
-# =========================================================
-
-def get_local_db_status():
-
-    result = {
-        "exists": False,
-        "size": 0,
-        "matches": 0,
-        "odds": 0,
-        "companies": 0,
-        "error": ""
-    }
-
-    if not DB_PATH.exists():
-        return result
-
-    result["exists"] = True
-
-    try:
-        result["size"] = DB_PATH.stat().st_size
-
-        conn = sqlite3.connect(DB_PATH)
-
-        # 경기 수
-        try:
-            result["matches"] = conn.execute(
-                "SELECT COUNT(*) FROM matches"
-            ).fetchone()[0]
-        except Exception:
-            result["matches"] = 0
-
-        # 배당 수
-        try:
-            result["odds"] = conn.execute(
-                "SELECT COUNT(*) FROM odds"
-            ).fetchone()[0]
-        except Exception:
-            result["odds"] = 0
-
-        # 업체 수
-        try:
-            result["companies"] = conn.execute(
-                """
-                SELECT COUNT(DISTINCT company_name)
-                FROM odds
-                WHERE company_name IS NOT NULL
-                AND TRIM(company_name) != ''
-                """
-            ).fetchone()[0]
-        except Exception:
-
-            try:
-                result["companies"] = conn.execute(
-                    """
-                    SELECT COUNT(DISTINCT bookmaker)
-                    FROM odds
-                    WHERE bookmaker IS NOT NULL
-                    AND TRIM(bookmaker) != ''
-                    """
-                ).fetchone()[0]
-            except Exception:
-                result["companies"] = 0
-
-        conn.close()
-
-    except Exception as e:
-
-        result["error"] = str(e)
-
-    return result
-
-
-# =========================================================
-# DB 백업 데이터 생성
-# =========================================================
-
-def create_db_backup():
-
-    if not DB_PATH.exists():
-        return None
-
-    try:
-
-        backup_path = Path(
-            "/tmp/scoreman_backup.db"
-        )
-
-        shutil.copy2(
-            DB_PATH,
-            backup_path
-        )
-
-        return backup_path
-
-    except Exception:
-        return None
-
-
-# =========================================================
 # 제목
 # =========================================================
 
@@ -150,40 +52,45 @@ st.title("⚽ 전종목 해외배당 분석")
 
 st.caption(
     "스코어맨 자동수집 · 해외업체 최종배당 · "
-    "실제결과 · 확률분석"
+    "실제결과 · 확률분석 · Supabase 영구저장"
 )
 
 
 # =========================================================
-# DB 상태
+# Supabase 상태
 # =========================================================
 
-db_status = get_local_db_status()
+if db_ok:
 
+    try:
 
-# =========================================================
-# DB 상태 표시
-# =========================================================
+        db_status = database.get_database_status()
 
-if not db_status["exists"]:
+        st.success(
+            "🟢 Supabase 영구 DB 연결됨"
+        )
 
-    st.error(
-        "🔴 scoreman.db 파일이 없습니다."
-    )
+    except Exception as e:
 
-elif db_status["matches"] == 0:
+        db_status = {
+            "matches": 0,
+            "odds": 0,
+            "bookmakers": 0
+        }
 
-    st.warning(
-        "⚠️ scoreman.db는 존재하지만 "
-        "현재 저장된 경기가 0개입니다."
-    )
+        st.error(
+            "❌ Supabase DB 조회 오류"
+        )
+
+        st.code(str(e))
 
 else:
 
-    st.success(
-        f"🟢 현재 scoreman.db에 "
-        f"**{db_status['matches']:,}개 경기**가 있습니다."
-    )
+    db_status = {
+        "matches": 0,
+        "odds": 0,
+        "bookmakers": 0
+    }
 
 
 # =========================================================
@@ -192,172 +99,105 @@ else:
 
 c1, c2, c3, c4 = st.columns(4)
 
+
 with c1:
+
+    try:
+
+        match_count = database.get_match_count()
+
+    except Exception:
+
+        match_count = 0
 
     st.metric(
         "저장 경기",
-        f"{database.get_match_count():,}"
+        f"{match_count:,}"
     )
+
 
 with c2:
 
+    try:
+
+        odds_count = database.get_odds_count()
+
+    except Exception:
+
+        odds_count = 0
+
     st.metric(
         "저장 최종배당",
-        f"{database.get_odds_count():,}"
+        f"{odds_count:,}"
     )
+
 
 with c3:
 
+    try:
+
+        company_count = len(
+            database.get_company_names()
+        )
+
+    except Exception:
+
+        company_count = 0
+
     st.metric(
         "실제 저장 업체",
-        f"{len(database.get_company_names()):,}"
+        f"{company_count:,}"
     )
+
 
 with c4:
 
-    if db_status["exists"]:
-
-        size_mb = (
-            db_status["size"]
-            / 1024
-            / 1024
-        )
-
-        st.metric(
-            "DB 파일 크기",
-            f"{size_mb:.2f} MB"
-        )
-
-    else:
-
-        st.metric(
-            "DB 파일",
-            "없음"
-        )
+    st.metric(
+        "DB",
+        "Supabase"
+    )
 
 
 # =========================================================
-# DB 백업 / 확인
+# DB 상세
 # =========================================================
 
 with st.expander(
-    "💾 DB 확인 및 백업",
+    "🗄️ Supabase DB 상태",
     expanded=False
 ):
 
     st.write(
-        "현재 Streamlit 실행환경에 존재하는 "
-        "`scoreman.db` 상태입니다."
+        "현재 스코어맨 데이터는 "
+        "**Supabase PostgreSQL**에 저장됩니다."
     )
 
-    if db_status["exists"]:
+    st.write(
+        f"📊 저장 경기: "
+        f"**{match_count:,}개**"
+    )
 
-        st.write(
-            f"📁 DB 경로: `{DB_PATH}`"
-        )
+    st.write(
+        f"💰 저장 최종배당: "
+        f"**{odds_count:,}개**"
+    )
 
-        st.write(
-            f"📊 경기: **{db_status['matches']:,}개**"
-        )
+    st.write(
+        f"🏢 실제 저장 업체: "
+        f"**{company_count:,}개**"
+    )
 
-        st.write(
-            f"💰 배당: **{db_status['odds']:,}개**"
-        )
+    st.write(
+        "💾 저장 방식: **영구 저장**"
+    )
 
-        st.write(
-            f"🏢 업체: **{db_status['companies']:,}개**"
-        )
+    if st.button(
+        "🔄 DB 상태 새로고침",
+        use_container_width=True,
+        key="refresh_database"
+    ):
 
-        st.write(
-            f"💾 파일 크기: "
-            f"**{db_status['size'] / 1024 / 1024:.2f} MB**"
-        )
-
-        if db_status["error"]:
-
-            st.warning(
-                "DB 확인 중 오류: "
-                + db_status["error"]
-            )
-
-        st.markdown("---")
-
-        if st.button(
-            "🔎 DB 상태 다시 확인",
-            use_container_width=True,
-            key="check_db"
-        ):
-
-            st.rerun()
-
-        backup_path = None
-
-        if st.button(
-            "📥 현재 DB 백업 준비",
-            use_container_width=True,
-            key="prepare_db_backup"
-        ):
-
-            backup_path = create_db_backup()
-
-            if backup_path:
-
-                st.success(
-                    "✅ 현재 DB 백업 파일을 만들었습니다."
-                )
-
-                st.session_state[
-                    "backup_ready"
-                ] = True
-
-            else:
-
-                st.error(
-                    "❌ DB 백업에 실패했습니다."
-                )
-
-
-        if st.session_state.get(
-            "backup_ready",
-            False
-        ):
-
-            backup_path = Path(
-                "/tmp/scoreman_backup.db"
-            )
-
-            if backup_path.exists():
-
-                with open(
-                    backup_path,
-                    "rb"
-                ) as f:
-
-                    st.download_button(
-                        "⬇️ scoreman.db 저장하기",
-                        data=f.read(),
-                        file_name=(
-                            "scoreman_backup_"
-                            + datetime.now().strftime(
-                                "%Y%m%d_%H%M%S"
-                            )
-                            + ".db"
-                        ),
-                        mime="application/octet-stream",
-                        use_container_width=True,
-                        key="download_db_backup"
-                    )
-
-                st.info(
-                    "⚠️ 이 파일은 반드시 휴대폰/PC에 "
-                    "따로 보관하세요."
-                )
-
-    else:
-
-        st.error(
-            "❌ scoreman.db가 없습니다."
-        )
+        st.rerun()
 
 
 st.divider()
@@ -367,7 +207,9 @@ st.divider()
 # 자동수집
 # =========================================================
 
-st.header("📥 스코어맨 경기 자동수집")
+st.header(
+    "📥 스코어맨 경기 자동수집"
+)
 
 st.info(
     "시작 ID와 마지막 ID를 입력한 뒤 "
@@ -380,6 +222,7 @@ st.info(
 # =========================================================
 
 c1, c2 = st.columns(2)
+
 
 with c1:
 
@@ -427,7 +270,9 @@ st.write(
 # 수집 업체
 # =========================================================
 
-st.subheader("🏢 수집할 해외업체 선택")
+st.subheader(
+    "🏢 수집할 해외업체 선택"
+)
 
 
 crawl_mode = st.radio(
@@ -453,7 +298,13 @@ if crawl_mode == "전체 업체 자동수집":
 
 else:
 
-    companies = analysis.get_company_list()
+    try:
+
+        companies = analysis.get_company_list()
+
+    except Exception:
+
+        companies = []
 
     selected_crawl_companies = st.multiselect(
         "수집 업체",
@@ -498,20 +349,39 @@ delay = st.number_input(
 # 현재 작업 상태
 # =========================================================
 
-status = scoreman_crawler.get_job_status()
+try:
+
+    status = (
+        scoreman_crawler
+        .get_job_status()
+    )
+
+except Exception as e:
+
+    status = {
+        "running": False,
+        "finished": False,
+        "error": str(e),
+        "current": 0,
+        "total": 0,
+        "success": 0,
+        "exists": 0,
+        "failed": 0,
+        "odds": 0,
+        "log": ""
+    }
 
 
 # =========================================================
 # 수집 버튼
 # =========================================================
 
-if status["running"]:
+if status.get("running"):
 
-    st.error("🔴 현재 수집중입니다.")
+    st.error(
+        "🔴 현재 수집중입니다."
+    )
 
-    # -----------------------------------------------------
-    # 수집 중지
-    # -----------------------------------------------------
 
     if st.button(
         "🛑 수집 중지",
@@ -560,19 +430,11 @@ if status["running"]:
 
             st.error(
                 "scoreman_crawler.py에 "
-                "stop_background_collection() 함수가 없습니다."
-            )
-
-            st.info(
-                "scoreman_crawler.py 최종본으로 교체하세요."
+                "수집 중지 함수가 없습니다."
             )
 
 
 else:
-
-    # -----------------------------------------------------
-    # 수집 시작
-    # -----------------------------------------------------
 
     if st.button(
         "🚀 백그라운드 수집 시작",
@@ -581,7 +443,13 @@ else:
         key="start_collection"
     ):
 
-        if end_id < start_id:
+        if not db_ok:
+
+            st.error(
+                "❌ Supabase 연결이 되어 있지 않습니다."
+            )
+
+        elif end_id < start_id:
 
             st.error(
                 "마지막 ID가 시작 ID보다 작습니다."
@@ -598,7 +466,10 @@ else:
 
         else:
 
-            if crawl_mode == "전체 업체 자동수집":
+            if (
+                crawl_mode ==
+                "전체 업체 자동수집"
+            ):
 
                 companies_for_crawler = None
 
@@ -649,12 +520,24 @@ else:
 # 수집 상태
 # =========================================================
 
-status = scoreman_crawler.get_job_status()
+try:
+
+    status = (
+        scoreman_crawler
+        .get_job_status()
+    )
+
+except Exception:
+
+    status = {
+        "running": False,
+        "finished": False
+    }
 
 
 if (
-    status["running"]
-    or status["finished"]
+    status.get("running")
+    or status.get("finished")
 ):
 
     st.divider()
@@ -662,6 +545,7 @@ if (
     st.subheader(
         "📡 수집 진행상황"
     )
+
 
     total = int(
         status.get(
@@ -677,6 +561,7 @@ if (
         )
     )
 
+
     if total > 0:
 
         progress = (
@@ -686,6 +571,7 @@ if (
     else:
 
         progress = 0
+
 
     st.progress(
         min(
@@ -697,26 +583,20 @@ if (
         )
     )
 
-    # =====================================================
-    # 상태
-    # =====================================================
 
-    if status["running"]:
+    if status.get("running"):
 
         st.error(
             "🔴 수집중"
         )
 
-    elif status.get(
-        "stopped",
-        False
-    ):
+    elif status.get("stopped"):
 
         st.warning(
             "🛑 수집 중지됨"
         )
 
-    elif status["finished"]:
+    elif status.get("finished"):
 
         st.success(
             "🟢 수집 완료"
@@ -729,12 +609,14 @@ if (
 
     c1, c2, c3, c4, c5 = st.columns(5)
 
+
     with c1:
 
         st.metric(
             "진행",
             f"{current:,}/{total:,}"
         )
+
 
     with c2:
 
@@ -743,6 +625,7 @@ if (
             f"{status.get('success', 0):,}"
         )
 
+
     with c3:
 
         st.metric(
@@ -750,12 +633,14 @@ if (
             f"{status.get('exists', 0):,}"
         )
 
+
     with c4:
 
         st.metric(
             "실패",
             f"{status.get('failed', 0):,}"
         )
+
 
     with c5:
 
@@ -782,7 +667,7 @@ if (
 
 
     # =====================================================
-    # 수집 업체
+    # 업체
     # =====================================================
 
     status_companies = status.get(
@@ -808,11 +693,13 @@ if (
         "📜 수집 로그"
     )
 
+
     show_log = st.checkbox(
         "📜 수집 로그 보기",
         value=st.session_state.show_collection_log,
         key="show_collection_log"
     )
+
 
     if show_log:
 
@@ -849,24 +736,15 @@ if (
         )
 
 
-    # =====================================================
-    # 완료 / 중지
-    # =====================================================
+    if status.get("finished"):
 
-    if status["finished"]:
-
-        if status.get(
-            "stopped",
-            False
-        ):
+        if status.get("stopped"):
 
             st.warning(
                 "🛑 사용자가 수집을 중지했습니다."
             )
 
-        elif not status.get(
-            "error"
-        ):
+        elif not status.get("error"):
 
             st.success(
                 "✅ 수집 작업이 완료되었습니다."
@@ -885,7 +763,21 @@ st.header(
 )
 
 
-matches = database.get_all_matches()
+try:
+
+    matches = (
+        database.get_all_matches()
+    )
+
+except Exception as e:
+
+    matches = []
+
+    st.error(
+        "경기 데이터 조회 오류"
+    )
+
+    st.code(str(e))
 
 
 if not matches:
@@ -903,28 +795,44 @@ else:
         table.append({
 
             "경기 ID":
-                row["schedule_id"],
+                row.get(
+                    "schedule_id"
+                ),
 
             "경기일":
-                row["match_date"],
+                row.get(
+                    "match_date"
+                ),
 
             "홈팀":
-                row["home_team"],
+                row.get(
+                    "home_team"
+                ),
 
             "원정팀":
-                row["away_team"],
+                row.get(
+                    "away_team"
+                ),
 
             "홈 점수":
-                row["home_score"],
+                row.get(
+                    "home_score"
+                ),
 
             "원정 점수":
-                row["away_score"],
+                row.get(
+                    "away_score"
+                ),
 
             "실제 결과":
-                row["result"],
+                row.get(
+                    "result"
+                ),
 
             "출처":
-                row["source"]
+                row.get(
+                    "source"
+                )
         })
 
 
@@ -946,9 +854,40 @@ st.header(
 )
 
 
+try:
+
+    analysis_companies = (
+        analysis.get_company_list()
+    )
+
+except Exception:
+
+    analysis_companies = []
+
+
+# 실제 DB 업체도 추가
+try:
+
+    db_companies = (
+        database.get_company_names()
+    )
+
+except Exception:
+
+    db_companies = []
+
+
+all_companies = sorted(
+    set(
+        analysis_companies
+        + db_companies
+    )
+)
+
+
 selected_companies = st.multiselect(
     "분석할 업체",
-    options=analysis.get_company_list(),
+    options=all_companies,
     default=[],
     placeholder="여러 업체 선택 가능",
     key="analysis_companies"
@@ -970,7 +909,7 @@ if selected_companies:
 
     st.info(
         "입력한 승/무/패 배당과 동일한 "
-        "DB의 전체 경기를 검색합니다."
+        "DB의 과거 경기를 검색합니다."
     )
 
 
@@ -980,13 +919,16 @@ if selected_companies:
             f"### 🏢 {company}"
         )
 
+
         c1, c2, c3 = st.columns(3)
+
 
         safe = re.sub(
             r"[^a-zA-Z0-9가-힣_]",
             "_",
             company
         )
+
 
         with c1:
 
@@ -996,8 +938,12 @@ if selected_companies:
                 value=1.50,
                 step=0.01,
                 format="%.2f",
-                key=f"analysis_home_{safe}"
+                key=(
+                    f"analysis_home_"
+                    f"{safe}"
+                )
             )
+
 
         with c2:
 
@@ -1007,8 +953,12 @@ if selected_companies:
                 value=3.50,
                 step=0.01,
                 format="%.2f",
-                key=f"analysis_draw_{safe}"
+                key=(
+                    f"analysis_draw_"
+                    f"{safe}"
+                )
             )
+
 
         with c3:
 
@@ -1018,7 +968,10 @@ if selected_companies:
                 value=5.00,
                 step=0.01,
                 format="%.2f",
-                key=f"analysis_away_{safe}"
+                key=(
+                    f"analysis_away_"
+                    f"{safe}"
+                )
             )
 
 
@@ -1053,7 +1006,7 @@ if selected_companies:
                 input_odds
             )
 
-            if result["success"]:
+            if result.get("success"):
 
                 st.session_state.search_result = (
                     result
@@ -1062,7 +1015,10 @@ if selected_companies:
             else:
 
                 st.error(
-                    result["message"]
+                    result.get(
+                        "message",
+                        "검색 결과가 없습니다."
+                    )
                 )
 
         except Exception as e:
@@ -1080,7 +1036,9 @@ if selected_companies:
 # 검색 결과
 # =========================================================
 
-search = st.session_state.search_result
+search = (
+    st.session_state.search_result
+)
 
 
 if (
@@ -1088,12 +1046,16 @@ if (
     and search.get("success")
 ):
 
-    results = search["results"]
+    results = search.get(
+        "results",
+        []
+    )
 
     statistics = search.get(
         "statistics",
         {}
     )
+
 
     st.divider()
 
@@ -1102,29 +1064,29 @@ if (
     )
 
 
-    # =====================================================
-    # 전체 경기 요약
-    # =====================================================
-
     counts = statistics.get(
         "counts",
         {}
     )
+
 
     total = counts.get(
         "total",
         len(results)
     )
 
+
     wins = counts.get(
         "home",
         0
     )
 
+
     draws = counts.get(
         "draw",
         0
     )
+
 
     losses = counts.get(
         "away",
@@ -1134,12 +1096,14 @@ if (
 
     c1, c2, c3, c4 = st.columns(4)
 
+
     with c1:
 
         st.metric(
             "전체 경기",
             f"{total:,}"
         )
+
 
     with c2:
 
@@ -1153,6 +1117,7 @@ if (
             )
         )
 
+
     with c3:
 
         st.metric(
@@ -1164,6 +1129,7 @@ if (
                 else "0%"
             )
         )
+
 
     with c4:
 
@@ -1186,6 +1152,7 @@ if (
         "🎯 업체별 확률 / 실제결과 / 부족확률"
     )
 
+
     st.caption(
         "부족확률 = 실제결과율 - 기대값확률"
     )
@@ -1193,12 +1160,27 @@ if (
 
     for company in selected_companies:
 
-        company_stats = (
-            analysis.calculate_company_analysis(
-                results,
-                company
+        try:
+
+            company_stats = (
+                analysis
+                .calculate_company_analysis(
+                    results,
+                    company
+                )
             )
-        )
+
+        except Exception as e:
+
+            st.error(
+                f"{company} 분석 오류"
+            )
+
+            st.code(
+                str(e)
+            )
+
+            continue
 
 
         if not company_stats:
@@ -1244,11 +1226,13 @@ if (
                 ][key]
             )
 
+
             actual = (
                 company_stats[
                     "actual"
                 ][key]
             )
+
 
             difference = (
                 actual
@@ -1322,7 +1306,7 @@ if (
 
 
     # =====================================================
-    # 검색된 경기
+    # 검색 경기
     # =====================================================
 
     st.subheader(
@@ -1408,7 +1392,7 @@ if (
 
 
 # =========================================================
-# DB 최종배당
+# 저장된 최종배당
 # =========================================================
 
 st.header(
@@ -1421,9 +1405,23 @@ if st.checkbox(
     key="show_db_odds"
 ):
 
-    odds_rows = (
-        database.get_all_odds()
-    )
+    try:
+
+        odds_rows = (
+            database.get_all_odds()
+        )
+
+    except Exception as e:
+
+        odds_rows = []
+
+        st.error(
+            "최종배당 조회 오류"
+        )
+
+        st.code(
+            str(e)
+        )
 
 
     table = []
@@ -1434,19 +1432,29 @@ if st.checkbox(
         table.append({
 
             "경기 ID":
-                row["schedule_id"],
+                row.get(
+                    "schedule_id"
+                ),
 
             "업체":
-                row["company_name"],
+                row.get(
+                    "bookmaker"
+                ),
 
             "최종 승":
-                row["final_home"],
+                row.get(
+                    "home_odds"
+                ),
 
             "최종 무":
-                row["final_draw"],
+                row.get(
+                    "draw_odds"
+                ),
 
             "최종 패":
-                row["final_away"]
+                row.get(
+                    "away_odds"
+                )
         })
 
 
@@ -1476,9 +1484,21 @@ st.header(
 )
 
 
-company_counts = (
-    database.get_company_counts()
-)
+try:
+
+    company_counts = (
+        database.get_company_counts()
+    )
+
+except Exception as e:
+
+    company_counts = {}
+
+    st.error(
+        "업체별 데이터 조회 오류"
+    )
+
+    st.code(str(e))
 
 
 if company_counts:
@@ -1487,13 +1507,8 @@ if company_counts:
         [
 
             {
-
-                "업체":
-                    company,
-
-                "저장 배당 수":
-                    count
-
+                "업체": company,
+                "저장 배당 수": count
             }
 
             for company, count
@@ -1515,10 +1530,21 @@ else:
 # 자동 새로고침
 # =========================================================
 
-status = scoreman_crawler.get_job_status()
+try:
+
+    current_status = (
+        scoreman_crawler
+        .get_job_status()
+    )
+
+except Exception:
+
+    current_status = {
+        "running": False
+    }
 
 
-if status["running"]:
+if current_status.get("running"):
 
     st.markdown(
         """
@@ -1529,4 +1555,4 @@ if status["running"]:
         </script>
         """,
         unsafe_allow_html=True
-                 )
+        )
