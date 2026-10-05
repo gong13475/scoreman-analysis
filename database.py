@@ -36,7 +36,6 @@ def _get_http_url():
     url = TURSO_DATABASE_URL.strip()
 
     if not url:
-
         raise RuntimeError(
             "TURSO_DATABASE_URL 환경변수가 없습니다."
         )
@@ -65,7 +64,6 @@ def _get_http_url():
 def _headers():
 
     if not TURSO_AUTH_TOKEN:
-
         raise RuntimeError(
             "TURSO_AUTH_TOKEN 환경변수가 없습니다."
         )
@@ -85,14 +83,18 @@ def _headers():
 
 def _turso_param(value):
     """
-    Turso Pipeline API에서 사용하는 명시적 타입 변환.
+    Turso HTTP Pipeline의 args 형식으로 변환합니다.
 
-    중요:
-        Python float
-        ↓
-        Turso f64
+    핵심:
+        "1.38"
+            ↓
+        _safe_odds()
+            ↓
+        1.38 (Python float)
+            ↓
+        JSON number
 
-    문자열 "1.38"을 그대로 보내지 않습니다.
+    문자열 "1.38"을 REAL 컬럼에 text로 보내지 않습니다.
     """
 
     if value is None:
@@ -106,8 +108,7 @@ def _turso_param(value):
 
         return {
             "type": "integer",
-            "value":
-                "1" if value else "0"
+            "value": 1 if value else 0
         }
 
 
@@ -115,7 +116,7 @@ def _turso_param(value):
 
         return {
             "type": "integer",
-            "value": str(value)
+            "value": value
         }
 
 
@@ -128,11 +129,12 @@ def _turso_param(value):
             }
 
         return {
-            "type": "f64",
+            "type": "float",
             "value": value
         }
 
 
+    # 나머지는 문자열
     return {
         "type": "text",
         "value": str(value)
@@ -140,40 +142,38 @@ def _turso_param(value):
 
 
 # =========================================================
-# Turso 결과값 변환
+# Turso cell 값 추출
 # =========================================================
 
 def _value_from_cell(cell):
 
     if cell is None:
-
         return None
 
 
     if isinstance(cell, dict):
 
         if "value" in cell:
-
             return cell["value"]
 
         if "text" in cell:
-
             return cell["text"]
 
         if "integer" in cell:
-
             return cell["integer"]
 
         if "real" in cell:
-
             return cell["real"]
+
+        if "float" in cell:
+            return cell["float"]
 
 
     return cell
 
 
 # =========================================================
-# 공통 HTTP 실행
+# Turso HTTP 실행
 # =========================================================
 
 def _execute(
@@ -185,25 +185,19 @@ def _execute(
 
 
     params = [
-
         _turso_param(value)
-
         for value in (args or [])
-
     ]
 
 
     payload = {
-
         "requests": [
 
             {
                 "type": "execute",
 
                 "stmt": {
-
                     "sql": sql,
-
                     "args": params
                 }
             },
@@ -251,9 +245,9 @@ def _execute(
         )
 
 
-    # -----------------------------------------------------
-    # Turso pipeline 오류 확인
-    # -----------------------------------------------------
+    # =====================================================
+    # Pipeline 내부 오류 확인
+    # =====================================================
 
     if isinstance(data, dict):
 
@@ -262,19 +256,23 @@ def _execute(
             []
         )
 
-        if results:
 
-            first = results[0]
+        for item in results:
 
-            if isinstance(first, dict):
+            if not isinstance(
+                item,
+                dict
+            ):
+                continue
 
-                if first.get("type") == "error":
 
-                    raise RuntimeError(
+            if item.get("type") == "error":
 
-                        "Turso SQL 오류: "
-                        + str(first)
-                    )
+                raise RuntimeError(
+
+                    "Turso SQL 오류: "
+                    + str(item)
+                )
 
 
     return data
@@ -287,7 +285,6 @@ def _execute(
 def _result_rows(data):
 
     if not data:
-
         return []
 
 
@@ -299,23 +296,16 @@ def _result_rows(data):
         )
 
 
-        if not results:
-
-            return []
-
-
         for item in results:
 
             if not isinstance(
                 item,
                 dict
             ):
-
                 continue
 
 
             if item.get("type") != "ok":
-
                 continue
 
 
@@ -338,7 +328,6 @@ def _result_rows(data):
 
 
             if rows:
-
                 return rows
 
 
@@ -351,13 +340,12 @@ def _result_rows(data):
 
 
 # =========================================================
-# 값 정규화
+# 문자열
 # =========================================================
 
 def _safe_text(value):
 
     if value is None:
-
         return None
 
 
@@ -366,7 +354,6 @@ def _safe_text(value):
         value = value.strip()
 
         if not value:
-
             return None
 
         return value
@@ -385,26 +372,20 @@ def _safe_int(value):
 
 
     if value is None:
-
         return None
 
 
     if isinstance(value, bool):
-
         return int(value)
 
 
     try:
 
-        if isinstance(
-            value,
-            str
-        ):
+        if isinstance(value, str):
 
             value = value.strip()
 
             if not value:
-
                 return None
 
 
@@ -428,26 +409,20 @@ def _safe_float(value):
 
 
     if value is None:
-
         return None
 
 
     if isinstance(value, bool):
-
         return None
 
 
     try:
 
-        if isinstance(
-            value,
-            str
-        ):
+        if isinstance(value, str):
 
             value = value.strip()
 
             if not value:
-
                 return None
 
             value = value.replace(
@@ -460,7 +435,6 @@ def _safe_float(value):
 
 
         if not math.isfinite(number):
-
             return None
 
 
@@ -482,12 +456,10 @@ def _safe_odds(value):
 
 
     if number is None:
-
         return None
 
 
     if number <= 0:
-
         return None
 
 
@@ -495,33 +467,29 @@ def _safe_odds(value):
 
 
 # =========================================================
-# 결과 변환
+# 첫 번째 결과값
 # =========================================================
 
 def _result_value(data):
 
     rows = _result_rows(data)
 
-    if not rows:
 
+    if not rows:
         return None
 
 
-    row = rows[0]
-
-
-    if not row:
-
+    if not rows[0]:
         return None
 
 
     return _value_from_cell(
-        row[0]
+        rows[0][0]
     )
 
 
 # =========================================================
-# 초기화
+# DB 초기화
 # =========================================================
 
 def init_database():
@@ -530,7 +498,6 @@ def init_database():
 
 
     if _initialized:
-
         return True
 
 
@@ -549,7 +516,7 @@ def init_database():
 
 
     # =====================================================
-    # 경기 테이블
+    # 경기
     # =====================================================
 
     _execute(
@@ -569,7 +536,7 @@ def init_database():
 
 
     # =====================================================
-    # 배당 테이블
+    # 배당
     # =====================================================
 
     _execute(
@@ -644,16 +611,12 @@ def get_database_status():
 
 
     values = [
-
         _value_from_cell(x)
-
         for x in rows[0]
-
     ]
 
 
     while len(values) < 3:
-
         values.append(0)
 
 
@@ -682,7 +645,6 @@ def match_exists(schedule_id):
 
 
     if schedule_id is None:
-
         return False
 
 
@@ -699,14 +661,13 @@ def match_exists(schedule_id):
     )
 
 
-    rows = _result_rows(data)
-
-
-    return len(rows) > 0
+    return len(
+        _result_rows(data)
+    ) > 0
 
 
 # =========================================================
-# 특정 경기 조회
+# 경기 조회
 # =========================================================
 
 def get_match(schedule_id):
@@ -717,7 +678,6 @@ def get_match(schedule_id):
 
 
     if schedule_id is None:
-
         return None
 
 
@@ -746,21 +706,16 @@ def get_match(schedule_id):
 
 
     if not rows:
-
         return None
 
 
     values = [
-
         _value_from_cell(x)
-
         for x in rows[0]
-
     ]
 
 
     while len(values) < 8:
-
         values.append(None)
 
 
@@ -913,7 +868,7 @@ def save_odds(
 
 
     # =====================================================
-    # 반드시 Python float로 변환
+    # ★ 여기서 반드시 숫자로 변환
     # =====================================================
 
     home_odds = _safe_odds(
@@ -929,8 +884,6 @@ def save_odds(
     )
 
 
-    # 세 값 모두 없으면 저장하지 않음
-
     if (
 
         home_odds is None
@@ -945,7 +898,30 @@ def save_odds(
 
 
     # =====================================================
-    # Turso에는 f64로 전송됨
+    # 디버깅용 타입 검증
+    # =====================================================
+
+    for value in (
+        home_odds,
+        draw_odds,
+        away_odds
+    ):
+
+        if value is not None:
+
+            if not isinstance(
+                value,
+                float
+            ):
+
+                raise TypeError(
+                    "배당값이 Python float가 아닙니다: "
+                    + repr(value)
+                )
+
+
+    # =====================================================
+    # Turso 저장
     # =====================================================
 
     _execute(
@@ -984,7 +960,7 @@ def save_odds(
 
 
 # =========================================================
-# 경기 + 배당 한번에 저장
+# 경기 + 배당 저장
 # =========================================================
 
 def save_match_with_odds(
@@ -1002,11 +978,19 @@ def save_match_with_odds(
         )
 
 
-    schedule_id = match.get(
-        "schedule_id"
+    schedule_id = _safe_int(
+        match.get("schedule_id")
     )
 
 
+    if schedule_id is None:
+
+        raise ValueError(
+            "match.schedule_id가 없습니다."
+        )
+
+
+    # 경기 저장
     save_match(
 
         schedule_id,
@@ -1031,6 +1015,7 @@ def save_match_with_odds(
     )
 
 
+    # 배당 저장
     return save_odds_bulk(
         schedule_id,
         odds_list
@@ -1038,7 +1023,7 @@ def save_match_with_odds(
 
 
 # =========================================================
-# 여러 배당 저장
+# 여러 업체 배당 저장
 # =========================================================
 
 def save_odds_bulk(
@@ -1047,20 +1032,32 @@ def save_odds_bulk(
 ):
 
     if not odds_list:
-
         return 0
+
+
+    schedule_id = _safe_int(
+        schedule_id
+    )
+
+
+    if schedule_id is None:
+        raise ValueError(
+            "schedule_id가 올바르지 않습니다."
+        )
 
 
     saved = 0
 
 
-    for item in odds_list:
+    for index, item in enumerate(
+        odds_list,
+        start=1
+    ):
 
         if not isinstance(
             item,
             dict
         ):
-
             continue
 
 
@@ -1136,7 +1133,7 @@ def save_odds_bulk(
 
         try:
 
-            ok = save_odds(
+            if save_odds(
 
                 schedule_id,
 
@@ -1148,20 +1145,29 @@ def save_odds_bulk(
 
                 away_odds
 
-            )
-
-
-            if ok:
+            ):
 
                 saved += 1
 
 
-        except Exception:
+        except Exception as e:
 
-            # 업체 하나 실패해도
-            # 전체 수집을 중단하지 않음
+            # =================================================
+            # 중요:
+            # 여기서 조용히 삼키지 않고 상세 오류를 유지합니다.
+            # =================================================
 
-            continue
+            raise RuntimeError(
+
+                f"배당 저장 실패 "
+                f"(업체={bookmaker}, "
+                f"index={index}, "
+                f"home={home_odds!r}, "
+                f"draw={draw_odds!r}, "
+                f"away={away_odds!r}): "
+                f"{e}"
+
+            ) from e
 
 
     return saved
@@ -1192,23 +1198,18 @@ def get_all_matches():
 
     rows = _result_rows(data)
 
-
     result = []
 
 
     for row in rows:
 
         values = [
-
             _value_from_cell(x)
-
             for x in row
-
         ]
 
 
         while len(values) < 8:
-
             values.append(None)
 
 
@@ -1265,23 +1266,18 @@ def get_all_odds():
 
     rows = _result_rows(data)
 
-
     result = []
 
 
     for row in rows:
 
         values = [
-
             _value_from_cell(x)
-
             for x in row
-
         ]
 
 
         while len(values) < 5:
-
             values.append(None)
 
 
@@ -1321,12 +1317,12 @@ def get_match_count():
     )
 
 
-    value = _result_value(
-        data
+    return (
+        _safe_int(
+            _result_value(data)
+        )
+        or 0
     )
-
-
-    return _safe_int(value) or 0
 
 
 # =========================================================
@@ -1343,12 +1339,12 @@ def get_odds_count():
     )
 
 
-    value = _result_value(
-        data
+    return (
+        _safe_int(
+            _result_value(data)
+        )
+        or 0
     )
-
-
-    return _safe_int(value) or 0
 
 
 # =========================================================
@@ -1370,14 +1366,12 @@ def get_company_names():
 
     rows = _result_rows(data)
 
-
     result = []
 
 
     for row in rows:
 
         if not row:
-
             continue
 
 
@@ -1417,21 +1411,18 @@ def get_company_counts():
 
     rows = _result_rows(data)
 
-
     result = {}
 
 
     for row in rows:
 
         if len(row) < 2:
-
             continue
 
 
         bookmaker = _value_from_cell(
             row[0]
         )
-
 
         count = _value_from_cell(
             row[1]
@@ -1486,7 +1477,6 @@ def find_matches_by_odds(
 
 
     if not bookmaker:
-
         return []
 
 
@@ -1541,10 +1531,7 @@ def find_matches_by_odds(
     )
 
 
-    rows = _result_rows(
-        data
-    )
-
+    rows = _result_rows(data)
 
     result = []
 
@@ -1552,16 +1539,12 @@ def find_matches_by_odds(
     for row in rows:
 
         values = [
-
             _value_from_cell(x)
-
             for x in row
-
         ]
 
 
         while len(values) < 12:
-
             values.append(None)
 
 
@@ -1627,9 +1610,7 @@ def get_storage_usage():
         )
 
 
-        rows = _result_rows(
-            data
-        )
+        rows = _result_rows(data)
 
 
         if not rows:
@@ -1661,28 +1642,21 @@ def get_storage_usage():
 
 
         bytes_size = (
-
             int(page_count)
-
             * int(page_size)
-
         )
 
 
         size_mb = (
-
             bytes_size
             / 1024
             / 1024
-
         )
 
 
         size_gb = (
-
             size_mb
             / 1024
-
         )
 
 
@@ -1718,14 +1692,20 @@ def get_storage_usage():
 
 
 # =========================================================
-# Turso REAL 테스트
+# 배당 저장 테스트
 # =========================================================
 
 def test_odds_save():
 
     """
-    문자열 배당을 넣어도
-    Turso에는 f64로 전송되는지 테스트합니다.
+    실제 문자열 배당을 입력해도
+    _safe_odds()에서 Python float로 변환되는지 테스트합니다.
+
+    테스트 업체:
+        __TEST__
+
+    테스트 경기:
+        999999999
     """
 
     return save_odds(
@@ -1740,4 +1720,54 @@ def test_odds_save():
 
         "5.20"
 
-        )
+    )
+
+
+# =========================================================
+# 로컬 타입 테스트
+# =========================================================
+
+def test_odds_conversion():
+
+    """
+    네트워크를 사용하지 않고 배당 변환만 테스트합니다.
+    """
+
+    values = {
+
+        "home":
+            _safe_odds("1.38"),
+
+        "draw":
+            _safe_odds("3.50"),
+
+        "away":
+            _safe_odds("5.20")
+
+    }
+
+
+    assert isinstance(
+        values["home"],
+        float
+    )
+
+    assert isinstance(
+        values["draw"],
+        float
+    )
+
+    assert isinstance(
+        values["away"],
+        float
+    )
+
+
+    assert values["home"] == 1.38
+
+    assert values["draw"] == 3.50
+
+    assert values["away"] == 5.20
+
+
+    return values
