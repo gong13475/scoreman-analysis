@@ -18,6 +18,107 @@ st.set_page_config(
 
 
 # =========================================================
+# 모바일 CSS
+# =========================================================
+
+st.markdown(
+    """
+    <style>
+
+    .main .block-container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+        max-width: 1400px;
+    }
+
+    @media (max-width: 768px) {
+
+        .main .block-container {
+            padding-left: 0.7rem;
+            padding-right: 0.7rem;
+        }
+
+        h1 {
+            font-size: 1.65rem !important;
+        }
+
+        h2 {
+            font-size: 1.35rem !important;
+        }
+
+        h3 {
+            font-size: 1.15rem !important;
+        }
+
+        .stButton button {
+            min-height: 48px;
+            font-size: 16px;
+        }
+
+        .stNumberInput input {
+            font-size: 16px;
+        }
+
+    }
+
+    .odds-card {
+        border: 1px solid #dddddd;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 10px;
+        background: #ffffff;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+
+    .odds-company {
+        font-size: 18px;
+        font-weight: 700;
+        margin-bottom: 12px;
+    }
+
+    .odds-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        text-align: center;
+    }
+
+    .odds-item {
+        flex: 1;
+        border-radius: 10px;
+        padding: 10px 4px;
+        background: #f5f6f8;
+    }
+
+    .odds-label {
+        display: block;
+        font-size: 13px;
+        color: #666666;
+        margin-bottom: 4px;
+    }
+
+    .odds-value {
+        display: block;
+        font-size: 20px;
+        font-weight: 700;
+        color: #111111;
+    }
+
+    .match-card {
+        border: 1px solid #dddddd;
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 14px;
+        background: #ffffff;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
 # Turso 초기화
 # =========================================================
 
@@ -123,6 +224,7 @@ c1, c2, c3, c4 = st.columns(4)
 
 
 with c1:
+
     st.metric(
         "저장 경기",
         f"{match_count:,}"
@@ -130,6 +232,7 @@ with c1:
 
 
 with c2:
+
     st.metric(
         "저장 최종배당",
         f"{odds_count:,}"
@@ -137,6 +240,7 @@ with c2:
 
 
 with c3:
+
     st.metric(
         "실제 저장 업체",
         f"{company_count:,}"
@@ -144,6 +248,7 @@ with c3:
 
 
 with c4:
+
     st.metric(
         "DB",
         "Turso"
@@ -167,18 +272,21 @@ with st.expander(
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         st.metric(
             "저장 경기",
             f"{match_count:,}개"
         )
 
     with c2:
+
         st.metric(
             "저장 최종배당",
             f"{odds_count:,}개"
         )
 
     with c3:
+
         st.metric(
             "실제 저장 업체",
             f"{company_count:,}개"
@@ -821,6 +929,272 @@ else:
 
 
 # =========================================================
+# 모바일용 경기별 최종배당 확인
+# =========================================================
+
+st.divider()
+
+st.header(
+    "📱 경기별 최종배당 확인"
+)
+
+st.caption(
+    "휴대폰에서 경기 ID를 입력하면 "
+    "해당 경기의 저장된 해외업체 최종배당을 "
+    "바로 확인할 수 있습니다."
+)
+
+
+odds_match_id = st.number_input(
+    "경기 ID",
+    min_value=1,
+    value=3001118,
+    step=1,
+    format="%d",
+    key="odds_match_id"
+)
+
+
+if st.button(
+    "🔎 이 경기 배당 확인",
+    type="primary",
+    use_container_width=True,
+    key="check_match_odds"
+):
+
+    try:
+
+        target_id = int(
+            odds_match_id
+        )
+
+        # -------------------------------------------------
+        # 경기 조회
+        # -------------------------------------------------
+
+        match = database.get_match(
+            target_id
+        )
+
+        if match:
+
+            st.success(
+                "⚽ 경기 정보를 찾았습니다."
+            )
+
+            home_team = (
+                match.get("home_team")
+                or "-"
+            )
+
+            away_team = (
+                match.get("away_team")
+                or "-"
+            )
+
+            match_date = (
+                match.get("match_date")
+                or "-"
+            )
+
+            result = (
+                match.get("result")
+                or "-"
+            )
+
+            st.markdown(
+                f"""
+                <div class="match-card">
+
+                <div style="
+                    text-align:center;
+                    font-size:22px;
+                    font-weight:700;
+                    margin-bottom:12px;
+                ">
+                    {home_team}
+                    <br>
+                    <span style="
+                        font-size:15px;
+                        color:#777;
+                    ">
+                        VS
+                    </span>
+                    <br>
+                    {away_team}
+                </div>
+
+                <div style="
+                    text-align:center;
+                    color:#555;
+                ">
+                    경기 ID: <b>{target_id:,}</b>
+                    <br>
+                    경기일: <b>{match_date}</b>
+                    <br>
+                    실제 결과: <b>{result}</b>
+                </div>
+
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        else:
+
+            st.warning(
+                f"경기 ID {target_id:,}의 "
+                "경기 정보가 없습니다."
+            )
+
+
+        # -------------------------------------------------
+        # 해당 경기 배당만 DB에서 조회
+        # -------------------------------------------------
+
+        all_odds = database.get_all_odds()
+
+        match_odds = []
+
+        for row in all_odds:
+
+            try:
+
+                row_id = int(
+                    row.get(
+                        "schedule_id",
+                        0
+                    )
+                )
+
+            except Exception:
+
+                continue
+
+            if row_id == target_id:
+
+                match_odds.append(row)
+
+
+        st.markdown("---")
+
+        if match_odds:
+
+            st.success(
+                f"💰 저장된 최종배당 "
+                f"**{len(match_odds)}개 업체**"
+            )
+
+            # -------------------------------------------------
+            # 업체별 모바일 카드
+            # -------------------------------------------------
+
+            for row in match_odds:
+
+                bookmaker = (
+                    row.get("bookmaker")
+                    or "-"
+                )
+
+                home = row.get(
+                    "home_odds"
+                )
+
+                draw = row.get(
+                    "draw_odds"
+                )
+
+                away = row.get(
+                    "away_odds"
+                )
+
+                home_text = (
+                    f"{float(home):.2f}"
+                    if home is not None
+                    else "-"
+                )
+
+                draw_text = (
+                    f"{float(draw):.2f}"
+                    if draw is not None
+                    else "-"
+                )
+
+                away_text = (
+                    f"{float(away):.2f}"
+                    if away is not None
+                    else "-"
+                )
+
+                st.markdown(
+                    f"""
+                    <div class="odds-card">
+
+                        <div class="odds-company">
+                            🏢 {bookmaker}
+                        </div>
+
+                        <div class="odds-row">
+
+                            <div class="odds-item">
+                                <span class="odds-label">
+                                    승
+                                </span>
+                                <span class="odds-value">
+                                    {home_text}
+                                </span>
+                            </div>
+
+                            <div class="odds-item">
+                                <span class="odds-label">
+                                    무
+                                </span>
+                                <span class="odds-value">
+                                    {draw_text}
+                                </span>
+                            </div>
+
+                            <div class="odds-item">
+                                <span class="odds-label">
+                                    패
+                                </span>
+                                <span class="odds-value">
+                                    {away_text}
+                                </span>
+                            </div>
+
+                        </div>
+
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+        else:
+
+            st.error(
+                "❌ 이 경기에는 저장된 "
+                "최종배당이 없습니다."
+            )
+
+            st.info(
+                "수집 로그에 "
+                "`최종배당 0개`라고 표시됐다면 "
+                "현재 DB에도 배당이 저장되지 않은 상태입니다."
+            )
+
+    except Exception as e:
+
+        st.error(
+            "최종배당 조회 오류"
+        )
+
+        st.code(
+            str(e)
+        )
+
+
+# =========================================================
 # 분석 업체
 # =========================================================
 
@@ -1266,7 +1640,7 @@ if (
 
 
 # =========================================================
-# 저장된 최종배당
+# 전체 저장 최종배당
 # =========================================================
 
 st.header(
@@ -1275,7 +1649,7 @@ st.header(
 
 
 if st.checkbox(
-    "DB 최종배당 데이터 보기",
+    "DB 전체 최종배당 데이터 보기",
     key="show_db_odds"
 ):
 
@@ -1408,4 +1782,4 @@ if current_status.get("running"):
         </script>
         """,
         unsafe_allow_html=True
-)
+    )
