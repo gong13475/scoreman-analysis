@@ -7,7 +7,7 @@ import analysis
 
 
 # =========================================================
-# 페이지 설정
+# 페이지
 # =========================================================
 
 st.set_page_config(
@@ -63,7 +63,9 @@ st.markdown(
 # =========================================================
 
 st.markdown(
-    '<div class="main-title">⚽ 전종목 해외배당 분석</div>',
+    '<div class="main-title">'
+    '⚽ 전종목 해외배당 분석'
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -81,14 +83,23 @@ st.markdown(
 # =========================================================
 
 try:
-    status = database.get_database_status()
+
+    status = (
+        database.get_database_status()
+    )
+
 except Exception as e:
-    st.error(f"DB 상태 오류: {e}")
+
+    st.error(
+        f"DB 상태 오류: {e}"
+    )
+
     status = {
         "matches": 0,
         "odds": 0,
         "bookmakers": 0
     }
+
 
 c1, c2, c3, c4 = st.columns(4)
 
@@ -111,11 +122,14 @@ if (
     database.TURSO_DATABASE_URL
     and database.TURSO_AUTH_TOKEN
 ):
+
     c4.metric(
         "DB",
         "Turso"
     )
+
 else:
+
     c4.metric(
         "DB",
         "SQLite"
@@ -123,17 +137,17 @@ else:
 
 
 # =========================================================
-# Turso / DB 상태
+# DB 상태
 # =========================================================
 
-st.subheader("🗄️ 데이터베이스 상태")
-
-using_turso = bool(
-    database.TURSO_DATABASE_URL
-    and database.TURSO_AUTH_TOKEN
+st.subheader(
+    "🗄️ 데이터베이스 상태"
 )
 
-if using_turso:
+if (
+    database.TURSO_DATABASE_URL
+    and database.TURSO_AUTH_TOKEN
+):
 
     st.success(
         "🟢 Turso DB 연결 정상"
@@ -156,82 +170,74 @@ else:
 # DB 저장 용량
 # =========================================================
 
-st.subheader("💾 DB 저장 용량")
+st.subheader(
+    "💾 DB 저장 용량"
+)
 
 try:
 
-    storage = (
+    usage = (
         database.get_storage_usage()
-        or {}
     )
+
+    if usage.get("success"):
+
+        size_mb = float(
+            usage.get(
+                "size_mb",
+                0
+            )
+        )
+
+        size_gb = float(
+            usage.get(
+                "size_gb",
+                0
+            )
+        )
+
+        storage_type = usage.get(
+            "storage",
+            "Unknown"
+        )
+
+        st.metric(
+            "현재 DB 저장 크기",
+            f"{size_mb:.2f} MB"
+        )
+
+        st.caption(
+            f"저장 방식: {storage_type}"
+        )
+
+        if storage_type == "Turso":
+
+            st.info(
+                "ℹ️ 위 크기는 현재 DB에서 "
+                "확인 가능한 저장 데이터 크기입니다. "
+                "Turso 무료 플랜의 실제 사용량 및 "
+                "남은 한도는 Turso 콘솔에서 "
+                "확인하는 것이 정확합니다."
+            )
+
+        else:
+
+            st.caption(
+                f"현재 SQLite DB 저장 크기: "
+                f"{size_gb:.4f} GB"
+            )
+
+    else:
+
+        st.warning(
+            "DB 저장 용량을 확인할 수 없습니다."
+        )
 
 except Exception as e:
 
-    storage = {
-        "success": False,
-        "error": str(e)
-    }
-
-
-if storage.get("success"):
-
-    size_mb = float(
-        storage.get(
-            "size_mb",
-            0
-        )
-        or 0
-    )
-
-    size_gb = float(
-        storage.get(
-            "size_gb",
-            0
-        )
-        or 0
-    )
-
-    storage_mode = storage.get(
-        "mode",
-        "SQLite"
-    )
-
-    s1, s2 = st.columns(2)
-
-    s1.metric(
-        "현재 DB 저장 크기",
-        f"{size_mb:.2f} MB"
-    )
-
-    s2.metric(
-        "저장 방식",
-        storage_mode
-    )
-
-    st.caption(
-        f"현재 {storage_mode} DB 저장 크기: "
-        f"{size_gb:.4f} GB"
-    )
-
-    if storage_mode == "Turso":
-
-        st.info(
-            "ℹ️ 이 값은 현재 DB 자체의 저장 크기입니다. "
-            "Turso 무료 플랜의 전체 사용량 및 남은 무료 한도와는 다릅니다. "
-            "무료 플랜 전체 사용량은 Turso 콘솔에서 확인하세요."
-        )
-
-else:
-
     st.warning(
-        "DB 저장 용량을 확인하지 못했습니다."
+        f"DB 저장 용량 확인 오류: {e}"
     )
-
-    if storage.get("error"):
-
-        st.caption(
-            str(storage["error"])
-        )
 
 
 # =========================================================
@@ -260,7 +266,9 @@ if company_counts:
         [
             {
                 "업체": company,
-                "저장 경기 수": int(count)
+                "저장 경기 수": int(
+                    count
+                )
             }
             for company, count
             in company_counts.items()
@@ -280,7 +288,9 @@ else:
 # 현재 저장 상태
 # =========================================================
 
-state = database.get_collection_state()
+state = (
+    database.get_collection_state()
+)
 
 last_id = state.get(
     "last_completed_id"
@@ -306,6 +316,7 @@ saved_start = state.get(
 saved_end = state.get(
     "end_id"
 )
+
 
 try:
 
@@ -334,7 +345,7 @@ except Exception:
 
 
 # =========================================================
-# Scoreman 자동수집
+# 수집
 # =========================================================
 
 st.subheader(
@@ -342,6 +353,7 @@ st.subheader(
 )
 
 col1, col2 = st.columns(2)
+
 
 with col1:
 
@@ -392,7 +404,7 @@ else:
 
 
 # =========================================================
-# 마지막 성공 지점
+# 마지막 성공
 # =========================================================
 
 if last_id > 0:
@@ -415,7 +427,7 @@ else:
 
 
 # =========================================================
-# 업체 선택
+# 업체
 # =========================================================
 
 st.subheader(
@@ -495,12 +507,14 @@ if last_id > 0:
 
         else:
 
-            ok = collector.start_background_collection(
-                last_id + 1,
-                end_id,
-                selected,
-                float(delay),
-                resume=False
+            ok = (
+                collector.start_background_collection(
+                    last_id + 1,
+                    end_id,
+                    selected,
+                    float(delay),
+                    resume=False
+                )
             )
 
             if ok:
@@ -549,12 +563,14 @@ with b1:
 
         else:
 
-            ok = collector.start_background_collection(
-                int(start_id),
-                int(end_id),
-                selected,
-                float(delay),
-                resume=True
+            ok = (
+                collector.start_background_collection(
+                    int(start_id),
+                    int(end_id),
+                    selected,
+                    float(delay),
+                    resume=True
+                )
             )
 
             if ok:
@@ -578,7 +594,9 @@ with b2:
         use_container_width=True
     ):
 
-        if collector.stop_background_collection():
+        if (
+            collector.stop_background_collection()
+        ):
 
             st.warning(
                 "수집 중지 요청을 보냈습니다."
@@ -597,7 +615,9 @@ with b2:
 
 try:
 
-    job = collector.get_job_status()
+    job = (
+        collector.get_job_status()
+    )
 
 except Exception:
 
@@ -614,12 +634,18 @@ if job.get("running"):
     )
 
     total = int(
-        job.get("total", 0)
+        job.get(
+            "total",
+            0
+        )
         or 0
     )
 
     current = int(
-        job.get("current", 0)
+        job.get(
+            "current",
+            0
+        )
         or 0
     )
 
@@ -631,7 +657,10 @@ if job.get("running"):
 
     st.progress(
         min(
-            max(progress, 0),
+            max(
+                progress,
+                0
+            ),
             1
         )
     )
@@ -640,7 +669,9 @@ if job.get("running"):
         f"{progress * 100:.1f}%"
     )
 
-    a, b, c, d, e = st.columns(5)
+    a, b, c, d, e = (
+        st.columns(5)
+    )
 
     a.metric(
         "현재",
@@ -678,7 +709,6 @@ if job.get("running"):
             f"{int(current_last):,}"
         )
 
-
     if (
         "show_collection_log"
         not in st.session_state
@@ -714,10 +744,12 @@ if job.get("running"):
 
         st.text_area(
             "수집 로그",
-            job.get("log", ""),
+            job.get(
+                "log",
+                ""
+            ),
             height=300
         )
-
 
     time.sleep(1)
 
@@ -746,7 +778,9 @@ elif job.get("finished"):
 
     if result:
 
-        a, b, c, d, e = st.columns(5)
+        a, b, c, d, e = (
+            st.columns(5)
+        )
 
         a.metric(
             "전체",
@@ -778,7 +812,6 @@ elif job.get("finished"):
             f"{int(result.get('odds', 0)):,}"
         )
 
-
     finished_last = job.get(
         "last_completed_id"
     )
@@ -790,13 +823,11 @@ elif job.get("finished"):
             f"{int(finished_last):,}"
         )
 
-
     if job.get("error"):
 
         st.error(
             job.get("error")
         )
-
 
     if (
         "show_finished_log"
@@ -833,13 +864,16 @@ elif job.get("finished"):
 
         st.text_area(
             "수집 로그",
-            job.get("log", ""),
+            job.get(
+                "log",
+                ""
+            ),
             height=300
         )
 
 
 # =========================================================
-# 저장된 경기 전체 조회
+# 저장된 경기
 # =========================================================
 
 st.divider()
@@ -880,7 +914,7 @@ else:
 
 
 # =========================================================
-# 경기별 최종배당 조회
+# 경기별 최종배당
 # =========================================================
 
 st.subheader(
@@ -979,14 +1013,12 @@ if st.button(
             unsafe_allow_html=True
         )
 
-
         odds = (
             database.get_odds_by_match(
                 lookup_id
             )
             or []
         )
-
 
         if not odds:
 
@@ -1098,7 +1130,8 @@ if analysis_companies:
 
     if st.button(
         "🔎 검색",
-        use_container_width=True
+        use_container_width=True,
+        key="odds_search"
     ):
 
         try:
@@ -1108,11 +1141,6 @@ if analysis_companies:
                 odds_input
             )
 
-            # 음성 결과 듣기용으로 저장
-            st.session_state[
-                "analysis_result"
-            ] = result
-
         except Exception as e:
 
             result = {
@@ -1121,6 +1149,11 @@ if analysis_companies:
                 "results": [],
                 "statistics": None
             }
+
+
+        st.session_state[
+            "analysis_result"
+        ] = result
 
 
         if not result.get(
@@ -1174,7 +1207,9 @@ if analysis_companies:
                     "### 실제 결과 확률"
                 )
 
-                a, b, c = st.columns(3)
+                a, b, c = (
+                    st.columns(3)
+                )
 
                 a.metric(
                     "실제 승률",
@@ -1196,7 +1231,9 @@ if analysis_companies:
                     "### 배당 기반 확률"
                 )
 
-                a, b, c = st.columns(3)
+                a, b, c = (
+                    st.columns(3)
+                )
 
                 a.metric(
                     "승",
@@ -1218,7 +1255,9 @@ if analysis_companies:
                     "### 실제 결과 - 배당 확률"
                 )
 
-                a, b, c = st.columns(3)
+                a, b, c = (
+                    st.columns(3)
+                )
 
                 a.metric(
                     "승",
@@ -1318,7 +1357,7 @@ if analysis_companies:
 
 
 # =========================================================
-# 음성 배당 입력 / 결과 듣기
+# 음성 입력
 # =========================================================
 
 st.divider()
@@ -1328,13 +1367,16 @@ st.subheader(
 )
 
 st.caption(
-    "폰에서 🎤 말하기 버튼을 누르면 "
-    "마이크 권한을 요청합니다."
+    "📱 휴대폰에서는 🎤 말하기 버튼을 누르고 "
+    "마이크 권한을 허용하세요."
 )
+
 
 try:
 
-    from streamlit_mic_recorder import mic_recorder
+    from streamlit_mic_recorder import (
+        mic_recorder
+    )
 
     audio = mic_recorder(
         start_prompt="🎤 말하기",
@@ -1347,7 +1389,7 @@ try:
     if audio:
 
         st.success(
-            "🎤 음성이 녹음되었습니다."
+            "🎤 음성 녹음 완료"
         )
 
         st.audio(
@@ -1355,16 +1397,16 @@ try:
             format="audio/wav"
         )
 
-        st.caption(
-            "※ 이 버튼은 현재 음성을 녹음하는 기능입니다. "
-            "자동으로 배당 숫자를 문자로 변환하려면 "
-            "별도의 음성인식(STT)이 필요합니다."
+        st.info(
+            "음성이 녹음되었습니다. "
+            "아래 배당 입력값을 확인하고 "
+            "분석 버튼을 누르세요."
         )
 
 except ImportError:
 
     st.error(
-        "음성 기능을 사용하려면 "
+        "마이크 기능을 사용하려면 "
         "streamlit-mic-recorder를 설치하세요."
     )
 
@@ -1375,8 +1417,247 @@ except ImportError:
 
 
 # =========================================================
+# 음성 배당값
+# =========================================================
+
+st.markdown(
+    "### 🎤 배당 입력"
+)
+
+voice_col1, voice_col2, voice_col3 = (
+    st.columns(3)
+)
+
+
+with voice_col1:
+
+    voice_home = st.number_input(
+        "승 배당",
+        min_value=0.01,
+        value=1.80,
+        step=0.01,
+        key="voice_home_odds"
+    )
+
+
+with voice_col2:
+
+    voice_draw = st.number_input(
+        "무 배당",
+        min_value=0.01,
+        value=3.40,
+        step=0.01,
+        key="voice_draw_odds"
+    )
+
+
+with voice_col3:
+
+    voice_away = st.number_input(
+        "패 배당",
+        min_value=0.01,
+        value=4.20,
+        step=0.01,
+        key="voice_away_odds"
+    )
+
+
+# =========================================================
+# 음성 입력값 분석
+# =========================================================
+
+if st.button(
+    "📊 입력한 배당 분석",
+    use_container_width=True,
+    key="voice_analyze"
+):
+
+    selected_voice_companies = (
+        analysis_companies
+        if analysis_companies
+        else companies[:1]
+    )
+
+    if not selected_voice_companies:
+
+        st.warning(
+            "분석할 업체가 없습니다."
+        )
+
+    else:
+
+        voice_odds = {}
+
+        for company in (
+            selected_voice_companies
+        ):
+
+            voice_odds[company] = {
+                "home": float(
+                    voice_home
+                ),
+                "draw": float(
+                    voice_draw
+                ),
+                "away": float(
+                    voice_away
+                )
+            }
+
+        try:
+
+            voice_result = (
+                analysis.run_search(
+                    selected_voice_companies,
+                    voice_odds
+                )
+            )
+
+            st.session_state[
+                "analysis_result"
+            ] = voice_result
+
+
+            if voice_result.get(
+                "success",
+                False
+            ):
+
+                st.success(
+                    f"검색 경기: "
+                    f"{len(voice_result.get('results', [])):,}개"
+                )
+
+                voice_stats = (
+                    voice_result.get(
+                        "statistics"
+                    )
+                )
+
+                if voice_stats:
+
+                    actual = (
+                        voice_stats.get(
+                            "actual",
+                            {}
+                        )
+                    )
+
+                    probability = (
+                        voice_stats.get(
+                            "probability",
+                            {}
+                        )
+                    )
+
+                    shortage = (
+                        voice_stats.get(
+                            "shortage",
+                            {}
+                        )
+                    )
+
+
+                    st.markdown(
+                        "### 📈 분석 결과"
+                    )
+
+                    a, b, c = (
+                        st.columns(3)
+                    )
+
+                    a.metric(
+                        "실제 승률",
+                        f"{actual.get('home', 0):.2f}%"
+                    )
+
+                    b.metric(
+                        "실제 무승률",
+                        f"{actual.get('draw', 0):.2f}%"
+                    )
+
+                    c.metric(
+                        "실제 패율",
+                        f"{actual.get('away', 0):.2f}%"
+                    )
+
+
+                    a, b, c = (
+                        st.columns(3)
+                    )
+
+                    a.metric(
+                        "배당 승 확률",
+                        f"{probability.get('home', 0):.2f}%"
+                    )
+
+                    b.metric(
+                        "배당 무 확률",
+                        f"{probability.get('draw', 0):.2f}%"
+                    )
+
+                    c.metric(
+                        "배당 패 확률",
+                        f"{probability.get('away', 0):.2f}%"
+                    )
+
+
+                    a, b, c = (
+                        st.columns(3)
+                    )
+
+                    a.metric(
+                        "승 차이",
+                        f"{shortage.get('home', 0):+.2f}%"
+                    )
+
+                    b.metric(
+                        "무 차이",
+                        f"{shortage.get('draw', 0):+.2f}%"
+                    )
+
+                    c.metric(
+                        "패 차이",
+                        f"{shortage.get('away', 0):+.2f}%"
+                    )
+
+
+                    highest = (
+                        analysis.get_highest_shortage(
+                            voice_stats
+                        )
+                    )
+
+                    if highest:
+
+                        st.success(
+                            "🏆 가장 차이가 큰 결과: "
+                            + highest
+                        )
+
+            else:
+
+                st.error(
+                    voice_result.get(
+                        "message",
+                        "분석 결과가 없습니다."
+                    )
+                )
+
+        except Exception as e:
+
+            st.error(
+                f"배당 분석 오류: {e}"
+            )
+
+
+# =========================================================
 # 결과 듣기
 # =========================================================
+
+st.markdown(
+    "### 🔊 결과 듣기"
+)
 
 if st.button(
     "🔊 현재 분석 결과 듣기",
@@ -1390,107 +1671,112 @@ if st.button(
         )
     )
 
-    stats = None
+    if not saved_result:
 
-    if saved_result:
-
-        stats = saved_result.get(
-            "statistics"
-        )
-
-
-    if stats:
-
-        actual = stats.get(
-            "actual",
-            {}
-        )
-
-        probability = stats.get(
-            "probability",
-            {}
-        )
-
-        shortage = stats.get(
-            "shortage",
-            {}
-        )
-
-        highest = (
-            analysis.get_highest_shortage(
-                stats
-            )
-        )
-
-
-        speech_text = (
-            f"검색 결과입니다. "
-            f"실제 승률은 "
-            f"{actual.get('home', 0):.1f} 퍼센트, "
-            f"무승률은 "
-            f"{actual.get('draw', 0):.1f} 퍼센트, "
-            f"패율은 "
-            f"{actual.get('away', 0):.1f} 퍼센트입니다. "
-            f"배당 기반 승 확률은 "
-            f"{probability.get('home', 0):.1f} 퍼센트, "
-            f"무 확률은 "
-            f"{probability.get('draw', 0):.1f} 퍼센트, "
-            f"패 확률은 "
-            f"{probability.get('away', 0):.1f} 퍼센트입니다. "
-            f"실제 결과와 배당 확률 차이는 "
-            f"승 {shortage.get('home', 0):+.1f} 퍼센트, "
-            f"무 {shortage.get('draw', 0):+.1f} 퍼센트, "
-            f"패 {shortage.get('away', 0):+.1f} 퍼센트입니다. "
-            f"가장 차이가 큰 결과는 "
-            f"{highest}입니다."
-        )
-
-
-        import base64
-
-        encoded = base64.b64encode(
-            speech_text.encode("utf-8")
-        ).decode("utf-8")
-
-
-        st.markdown(
-            f"""
-            <script>
-
-            const text = decodeURIComponent(
-                escape(
-                    atob("{encoded}")
-                )
-            );
-
-            if ("speechSynthesis" in window) {{
-
-                window.speechSynthesis.cancel();
-
-                const msg =
-                    new SpeechSynthesisUtterance(text);
-
-                msg.lang = "ko-KR";
-                msg.rate = 1.0;
-                msg.pitch = 1.0;
-
-                window.speechSynthesis.speak(msg);
-            }}
-
-            </script>
-            """,
-            unsafe_allow_html=True
-        )
-
-        st.success(
-            "🔊 분석 결과를 읽었습니다."
+        st.warning(
+            "먼저 배당 검색 또는 "
+            "음성 배당 분석을 실행하세요."
         )
 
     else:
 
-        st.warning(
-            "먼저 배당 검색을 실행하세요."
+        stats = (
+            saved_result.get(
+                "statistics"
+            )
         )
+
+        if not stats:
+
+            st.warning(
+                "읽어줄 분석 결과가 없습니다."
+            )
+
+        else:
+
+            actual = stats.get(
+                "actual",
+                {}
+            )
+
+            probability = stats.get(
+                "probability",
+                {}
+            )
+
+            shortage = stats.get(
+                "shortage",
+                {}
+            )
+
+            highest = (
+                analysis.get_highest_shortage(
+                    stats
+                )
+            )
+
+            speech_text = (
+                "배당 분석 결과입니다. "
+                f"실제 승률은 "
+                f"{actual.get('home', 0):.1f} 퍼센트입니다. "
+                f"실제 무승률은 "
+                f"{actual.get('draw', 0):.1f} 퍼센트입니다. "
+                f"실제 패율은 "
+                f"{actual.get('away', 0):.1f} 퍼센트입니다. "
+                f"배당 기반 승 확률은 "
+                f"{probability.get('home', 0):.1f} 퍼센트입니다. "
+                f"배당 기반 무 확률은 "
+                f"{probability.get('draw', 0):.1f} 퍼센트입니다. "
+                f"배당 기반 패 확률은 "
+                f"{probability.get('away', 0):.1f} 퍼센트입니다. "
+                f"승 차이는 "
+                f"{shortage.get('home', 0):+.1f} 퍼센트입니다. "
+                f"무 차이는 "
+                f"{shortage.get('draw', 0):+.1f} 퍼센트입니다. "
+                f"패 차이는 "
+                f"{shortage.get('away', 0):+.1f} 퍼센트입니다. "
+                f"가장 차이가 큰 결과는 "
+                f"{highest}입니다."
+            )
+
+            st.markdown(
+                f"""
+                <script>
+                (() => {{
+
+                    const text =
+                        {speech_text!r};
+
+                    if (
+                        "speechSynthesis"
+                        in window
+                    ) {{
+
+                        window.speechSynthesis.cancel();
+
+                        const msg =
+                            new SpeechSynthesisUtterance(
+                                text
+                            );
+
+                        msg.lang = "ko-KR";
+                        msg.rate = 1.0;
+                        msg.pitch = 1.0;
+
+                        window.speechSynthesis.speak(
+                            msg
+                        );
+                    }}
+
+                }})();
+                </script>
+                """,
+                unsafe_allow_html=True
+            )
+
+            st.success(
+                "🔊 분석 결과를 읽었습니다."
+            )
 
 
 # =========================================================
