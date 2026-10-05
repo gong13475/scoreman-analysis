@@ -6,42 +6,60 @@ import database
 # =========================================================
 
 def get_company_list():
-    return database.get_company_names() or []
+    return database.get_company_names()
 
 
 # =========================================================
-# 배당 → 정규화 확률
+# 배당 → 확률
 # =========================================================
 
-def odds_to_probability(home, draw, away):
+def odds_to_probability(
+    home,
+    draw,
+    away
+):
+
     try:
         home = float(home)
         draw = float(draw)
         away = float(away)
     except Exception:
         return {
-            "home": 0.0,
-            "draw": 0.0,
-            "away": 0.0
+            "home": 0,
+            "draw": 0,
+            "away": 0
         }
 
-    if home <= 0 or draw <= 0 or away <= 0:
+    if (
+        home <= 0
+        or draw <= 0
+        or away <= 0
+    ):
         return {
-            "home": 0.0,
-            "draw": 0.0,
-            "away": 0.0
+            "home": 0,
+            "draw": 0,
+            "away": 0
         }
 
-    raw_home = 1.0 / home
-    raw_draw = 1.0 / draw
-    raw_away = 1.0 / away
+    raw_h = 1 / home
+    raw_d = 1 / draw
+    raw_a = 1 / away
 
-    total = raw_home + raw_draw + raw_away
+    total = (
+        raw_h
+        + raw_d
+        + raw_a
+    )
 
     return {
-        "home": raw_home / total * 100,
-        "draw": raw_draw / total * 100,
-        "away": raw_away / total * 100
+        "home":
+            raw_h / total * 100,
+
+        "draw":
+            raw_d / total * 100,
+
+        "away":
+            raw_a / total * 100
     }
 
 
@@ -54,7 +72,9 @@ def run_search(
     odds_input,
     tolerance=0.001
 ):
+
     if not companies:
+
         return {
             "success": False,
             "message": "업체를 선택하세요.",
@@ -63,6 +83,7 @@ def run_search(
         }
 
     if not odds_input:
+
         return {
             "success": False,
             "message": "배당을 입력하세요.",
@@ -74,54 +95,45 @@ def run_search(
 
     for company in companies:
 
-        value = odds_input.get(company)
+        value = odds_input.get(
+            company
+        )
 
         if not value:
             continue
 
-        try:
-            rows = database.search_odds(
-                value["home"],
-                value["draw"],
-                value["away"],
-                companies=[company],
-                tolerance=tolerance
-            ) or []
-
-        except Exception:
-            rows = []
+        rows = database.search_odds(
+            value["home"],
+            value["draw"],
+            value["away"],
+            companies=[company],
+            tolerance=tolerance
+        )
 
         for row in rows:
 
-            item = dict(row)
+            row["검색업체"] = company
 
-            item["검색업체"] = company
+            all_results.append(row)
 
-            all_results.append(item)
-
-    # 경기 + 업체 중복 제거
     unique = {}
 
     for row in all_results:
 
         key = (
-            str(row.get("schedule_id", "")),
-            str(row.get("bookmaker", ""))
+            str(row["schedule_id"]),
+            str(row["bookmaker"])
         )
 
         unique[key] = row
 
-    results = list(unique.values())
-
-    # 날짜순
-    results.sort(
-        key=lambda x: str(
-            x.get("match_date", "")
-        ),
-        reverse=True
+    results = list(
+        unique.values()
     )
 
-    statistics = calculate_statistics(results)
+    statistics = calculate_statistics(
+        results
+    )
 
     return {
         "success": True,
@@ -142,24 +154,23 @@ def calculate_statistics(results):
 
     total = len(results)
 
-    home_count = 0
-    draw_count = 0
-    away_count = 0
+    home_count = sum(
+        1
+        for x in results
+        if x.get("result") == "승"
+    )
 
-    for row in results:
+    draw_count = sum(
+        1
+        for x in results
+        if x.get("result") == "무"
+    )
 
-        result = str(
-            row.get("result", "")
-        ).strip()
-
-        if result == "승":
-            home_count += 1
-
-        elif result == "무":
-            draw_count += 1
-
-        elif result == "패":
-            away_count += 1
+    away_count = sum(
+        1
+        for x in results
+        if x.get("result") == "패"
+    )
 
     actual = {
         "home":
@@ -172,10 +183,6 @@ def calculate_statistics(results):
             away_count / total * 100
     }
 
-    # -----------------------------------------------------
-    # 검색된 실제 배당의 평균 확률
-    # -----------------------------------------------------
-
     p_home = []
     p_draw = []
     p_away = []
@@ -185,37 +192,48 @@ def calculate_statistics(results):
         try:
 
             p = odds_to_probability(
-                row.get("home_odds"),
-                row.get("draw_odds"),
-                row.get("away_odds")
+                row["home_odds"],
+                row["draw_odds"],
+                row["away_odds"]
             )
 
-            p_home.append(p["home"])
-            p_draw.append(p["draw"])
-            p_away.append(p["away"])
+            p_home.append(
+                p["home"]
+            )
+
+            p_draw.append(
+                p["draw"]
+            )
+
+            p_away.append(
+                p["away"]
+            )
 
         except Exception:
-            continue
+            pass
 
     if p_home:
 
         probability = {
             "home":
-                sum(p_home) / len(p_home),
+                sum(p_home)
+                / len(p_home),
 
             "draw":
-                sum(p_draw) / len(p_draw),
+                sum(p_draw)
+                / len(p_draw),
 
             "away":
-                sum(p_away) / len(p_away)
+                sum(p_away)
+                / len(p_away)
         }
 
     else:
 
         probability = {
-            "home": 0.0,
-            "draw": 0.0,
-            "away": 0.0
+            "home": 0,
+            "draw": 0,
+            "away": 0
         }
 
     shortage = {
@@ -249,17 +267,17 @@ def get_highest_shortage(stats):
     if not stats:
         return ""
 
-    shortage = stats.get(
+    values = stats.get(
         "shortage",
         {}
     )
 
-    if not shortage:
+    if not values:
         return ""
 
     key = max(
-        shortage,
-        key=shortage.get
+        values,
+        key=lambda x: values[x]
     )
 
     names = {
@@ -271,4 +289,4 @@ def get_highest_shortage(stats):
     return names.get(
         key,
         ""
-    )
+        )
