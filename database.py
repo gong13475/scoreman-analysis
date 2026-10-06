@@ -19,26 +19,19 @@ import streamlit as st
 # =========================================================
 
 BASE_DIR = Path(__file__).resolve().parent
-
 SQLITE_PATH = BASE_DIR / "scoreman.db"
 
 _DB_LOCK = threading.RLock()
 
 
 # =========================================================
-# 설정값 읽기
-# 환경변수 우선
-# 없으면 Streamlit Secrets 확인
+# 설정값
 # =========================================================
 
 def _get_secret(name):
 
     try:
-
-        value = st.secrets.get(
-            name,
-            ""
-        )
+        value = st.secrets.get(name, "")
 
         if value is None:
             return ""
@@ -46,28 +39,17 @@ def _get_secret(name):
         return str(value).strip()
 
     except Exception:
-
         return ""
 
 
 TURSO_DATABASE_URL = (
-    os.getenv(
-        "TURSO_DATABASE_URL",
-        ""
-    ).strip()
-    or _get_secret(
-        "TURSO_DATABASE_URL"
-    )
+    os.getenv("TURSO_DATABASE_URL", "").strip()
+    or _get_secret("TURSO_DATABASE_URL")
 )
 
 TURSO_AUTH_TOKEN = (
-    os.getenv(
-        "TURSO_AUTH_TOKEN",
-        ""
-    ).strip()
-    or _get_secret(
-        "TURSO_AUTH_TOKEN"
-    )
+    os.getenv("TURSO_AUTH_TOKEN", "").strip()
+    or _get_secret("TURSO_AUTH_TOKEN")
 )
 
 
@@ -99,12 +81,13 @@ def get_connection():
 
     return sqlite3.connect(
         SQLITE_PATH,
-        check_same_thread=False
+        check_same_thread=False,
+        timeout=30
     )
 
 
 # =========================================================
-# 실제 Turso 연결 테스트
+# Turso 연결 테스트
 # =========================================================
 
 def test_turso_connection():
@@ -114,8 +97,7 @@ def test_turso_connection():
         return {
             "success": False,
             "connected": False,
-            "message":
-                "TURSO_DATABASE_URL이 설정되지 않았습니다."
+            "message": "TURSO_DATABASE_URL이 설정되지 않았습니다."
         }
 
     if not TURSO_AUTH_TOKEN:
@@ -123,8 +105,7 @@ def test_turso_connection():
         return {
             "success": False,
             "connected": False,
-            "message":
-                "TURSO_AUTH_TOKEN이 설정되지 않았습니다."
+            "message": "TURSO_AUTH_TOKEN이 설정되지 않았습니다."
         }
 
     if libsql is None:
@@ -132,10 +113,8 @@ def test_turso_connection():
         return {
             "success": False,
             "connected": False,
-            "message":
-                "libsql_experimental 모듈을 사용할 수 없습니다.",
-            "error":
-                LIBSQL_IMPORT_ERROR
+            "message": "libsql_experimental 모듈을 사용할 수 없습니다.",
+            "error": LIBSQL_IMPORT_ERROR
         }
 
     conn = None
@@ -149,9 +128,7 @@ def test_turso_connection():
 
         cur = conn.cursor()
 
-        cur.execute(
-            "SELECT 1"
-        )
+        cur.execute("SELECT 1")
 
         row = cur.fetchone()
 
@@ -160,15 +137,13 @@ def test_turso_connection():
             return {
                 "success": True,
                 "connected": True,
-                "message":
-                    "Turso 연결 성공"
+                "message": "Turso 연결 성공"
             }
 
         return {
             "success": False,
             "connected": False,
-            "message":
-                "Turso 연결은 되었지만 테스트 쿼리 결과가 올바르지 않습니다."
+            "message": "Turso 테스트 결과가 올바르지 않습니다."
         }
 
     except Exception as e:
@@ -176,8 +151,7 @@ def test_turso_connection():
         return {
             "success": False,
             "connected": False,
-            "message":
-                "Turso 연결 실패",
+            "message": "Turso 연결 실패",
             "error": str(e)
         }
 
@@ -292,10 +266,76 @@ def _execute_dict(
 
 
 # =========================================================
-# 초기화
+# 테이블 컬럼 확인
+# =========================================================
+
+def _get_table_columns(table_name):
+
+    try:
+
+        rows = _execute(
+            f"PRAGMA table_info({table_name})",
+            fetch=True
+        )
+
+        return {
+            str(row[1])
+            for row in rows
+        }
+
+    except Exception:
+
+        return set()
+
+
+# =========================================================
+# 컬럼 자동 추가
+# =========================================================
+
+def _add_column_if_missing(
+    table_name,
+    column_name,
+    column_definition
+):
+
+    columns = _get_table_columns(
+        table_name
+    )
+
+    if column_name in columns:
+        return
+
+    try:
+
+        _execute(
+            f"""
+            ALTER TABLE {table_name}
+            ADD COLUMN {column_name}
+            {column_definition}
+            """
+        )
+
+    except Exception as e:
+
+        # 동시에 여러 Streamlit 세션이 실행되는 경우
+        # 이미 다른 세션에서 추가했을 수 있음
+        columns_after = _get_table_columns(
+            table_name
+        )
+
+        if column_name not in columns_after:
+            raise e
+
+
+# =========================================================
+# DB 초기화 + 기존 DB 자동 보정
 # =========================================================
 
 def init_database():
+
+    # =====================================================
+    # matches
+    # =====================================================
 
     _execute(
         """
@@ -312,6 +352,11 @@ def init_database():
         """
     )
 
+
+    # =====================================================
+    # odds
+    # =====================================================
+
     _execute(
         """
         CREATE TABLE IF NOT EXISTS odds (
@@ -326,6 +371,11 @@ def init_database():
         )
         """
     )
+
+
+    # =====================================================
+    # collection_state
+    # =====================================================
 
     _execute(
         """
@@ -343,11 +393,76 @@ def init_database():
         """
     )
 
+
+    # =====================================================
+    # 기존 collection_state 자동 마이그레이션
+    # =====================================================
+
+    _add_column_if_missing(
+        "collection_state",
+        "start_id",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        "collection_state",
+        "end_id",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        "collection_state",
+        "last_completed_id",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        "collection_state",
+        "current",
+        "INTEGER DEFAULT 0"
+    )
+
+    _add_column_if_missing(
+        "collection_state",
+        "total",
+        "INTEGER DEFAULT 0"
+    )
+
+    _add_column_if_missing(
+        "collection_state",
+        "running",
+        "INTEGER DEFAULT 0"
+    )
+
+    _add_column_if_missing(
+        "collection_state",
+        "stopped",
+        "INTEGER DEFAULT 0"
+    )
+
+    _add_column_if_missing(
+        "collection_state",
+        "selected_companies",
+        "TEXT DEFAULT '[]'"
+    )
+
+
+    # =====================================================
+    # 기본 수집 상태
+    # =====================================================
+
     _execute(
         """
         INSERT OR IGNORE INTO collection_state
-        (id, selected_companies)
-        VALUES (1, '[]')
+        (
+            id,
+            selected_companies
+        )
+        VALUES
+        (
+            1,
+            '[]'
+        )
         """
     )
 
@@ -401,15 +516,8 @@ def _format_size(size_bytes):
 
     return {
         "size_bytes": size_bytes,
-        "size_mb":
-            size_bytes
-            / 1024
-            / 1024,
-        "size_gb":
-            size_bytes
-            / 1024
-            / 1024
-            / 1024
+        "size_mb": size_bytes / 1024 / 1024,
+        "size_gb": size_bytes / 1024 / 1024 / 1024
     }
 
 
@@ -419,11 +527,9 @@ def _get_sqlite_file_size():
         return 0
 
     try:
-
         return SQLITE_PATH.stat().st_size
 
     except Exception:
-
         return 0
 
 
@@ -447,13 +553,13 @@ def _get_turso_logical_size():
             row = cur.fetchone()
 
             if row:
-
                 page_count = int(
                     row[0] or 0
                 )
 
         except Exception:
             pass
+
 
         try:
 
@@ -464,7 +570,6 @@ def _get_turso_logical_size():
             row = cur.fetchone()
 
             if row:
-
                 page_size = int(
                     row[0] or 0
                 )
@@ -472,15 +577,14 @@ def _get_turso_logical_size():
         except Exception:
             pass
 
-        if (
-            page_count > 0
-            and page_size > 0
-        ):
+
+        if page_count > 0 and page_size > 0:
 
             return (
                 page_count
                 * page_size
             )
+
 
         total = 0
 
@@ -494,9 +598,9 @@ def _get_turso_logical_size():
             )
 
             matches_count = int(
-                cur.fetchone()[0]
-                or 0
+                cur.fetchone()[0] or 0
             )
+
 
             cur.execute(
                 """
@@ -506,9 +610,9 @@ def _get_turso_logical_size():
             )
 
             odds_count = int(
-                cur.fetchone()[0]
-                or 0
+                cur.fetchone()[0] or 0
             )
+
 
             cur.execute(
                 """
@@ -518,9 +622,9 @@ def _get_turso_logical_size():
             )
 
             state_count = int(
-                cur.fetchone()[0]
-                or 0
+                cur.fetchone()[0] or 0
             )
+
 
             total = (
                 matches_count * 512
@@ -557,10 +661,10 @@ def get_storage_usage():
                 "success": True,
                 **size,
                 "storage_type": "Turso",
-                "measurement":
-                    "Turso DB 논리적 저장 크기",
+                "measurement": "Turso DB 논리적 저장 크기",
                 "quota_available": False
             }
+
 
         size_bytes = (
             _get_sqlite_file_size()
@@ -574,8 +678,7 @@ def get_storage_usage():
             "success": True,
             **size,
             "storage_type": "SQLite",
-            "measurement":
-                "현재 실행 환경의 SQLite 파일 크기",
+            "measurement": "현재 실행 환경의 SQLite 파일 크기",
             "quota_available": False
         }
 
@@ -587,11 +690,8 @@ def get_storage_usage():
             "size_mb": 0,
             "size_gb": 0,
             "storage_type":
-                (
-                    "Turso"
-                    if _use_turso()
-                    else "SQLite"
-                ),
+                "Turso" if _use_turso()
+                else "SQLite",
             "measurement": "",
             "quota_available": False,
             "error": str(e)
@@ -619,6 +719,7 @@ def get_database_info():
         )
 
     return {
+
         "using_turso":
             _use_turso(),
 
@@ -839,22 +940,21 @@ def save_match_with_odds(
                 )
             )
 
+
             saved = 0
+
 
             for row in odds_list:
 
                 company_name = (
-                    row.get(
-                        "company_name"
-                    )
-                    or row.get(
-                        "bookmaker"
-                    )
+                    row.get("company_name")
+                    or row.get("bookmaker")
                     or ""
                 )
 
                 if not company_name:
                     continue
+
 
                 cur.execute(
                     """
@@ -906,6 +1006,7 @@ def save_match_with_odds(
                 )
 
                 saved += 1
+
 
             conn.commit()
 
@@ -1005,6 +1106,7 @@ def search_odds(
         tolerance
     ]
 
+
     if companies:
 
         placeholders = ",".join(
@@ -1021,17 +1123,20 @@ def search_odds(
             companies
         )
 
+
     sql += """
         ORDER BY CAST(
             o.schedule_id AS INTEGER
         )
     """
 
+
     rows = _execute(
         sql,
         params,
         fetch=True
     )
+
 
     columns = [
         "schedule_id",
@@ -1046,6 +1151,7 @@ def search_odds(
         "away_score",
         "result"
     ]
+
 
     return [
         dict(
@@ -1072,6 +1178,11 @@ def save_collection_state(
     stopped,
     selected_companies=None
 ):
+
+    # 혹시 init_database가 먼저 실행되지 않은 경우에도
+    # 안전하게 테이블을 보장
+    init_database()
+
 
     _execute(
         """
@@ -1119,6 +1230,10 @@ def save_collection_state(
     )
 
 
+# =========================================================
+# 수집 상태 조회
+# =========================================================
+
 def get_collection_state():
 
     row = _execute_dict(
@@ -1129,20 +1244,28 @@ def get_collection_state():
         """
     )
 
+
     if not row:
         return {}
 
+
     try:
 
+        value = row.get(
+            "selected_companies",
+            "[]"
+        )
+
+        if value is None:
+            value = "[]"
+
         row["selected_companies"] = json.loads(
-            row.get(
-                "selected_companies",
-                "[]"
-            )
+            value
         )
 
     except Exception:
 
         row["selected_companies"] = []
+
 
     return row
