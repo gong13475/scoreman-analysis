@@ -317,7 +317,6 @@ def _add_column_if_missing(
 
         return
 
-
     try:
 
         _execute(
@@ -330,7 +329,6 @@ def _add_column_if_missing(
 
     except Exception as e:
 
-        # 다른 Streamlit 세션에서 먼저 추가했을 수 있음
         columns_after = _get_table_columns(
             table_name
         )
@@ -341,7 +339,7 @@ def _add_column_if_missing(
 
 
 # =========================================================
-# DB 초기화 / 기존 DB 자동 마이그레이션
+# DB 초기화 / 기존 DB 자동 보정
 # =========================================================
 
 def init_database():
@@ -375,7 +373,8 @@ def init_database():
     )
 
 
-    # 기존 matches 자동 보정
+    # 기존 matches 보정
+
     _add_column_if_missing(
         "matches",
         "match_date",
@@ -435,23 +434,19 @@ def init_database():
 
             bookmaker_id TEXT,
 
-            home_odds REAL NOT NULL,
+            home_odds REAL,
 
-            draw_odds REAL NOT NULL,
+            draw_odds REAL,
 
-            away_odds REAL NOT NULL,
-
-            UNIQUE(
-                schedule_id,
-                bookmaker
-            )
+            away_odds REAL
 
         )
         """
     )
 
 
-    # 기존 odds 자동 보정
+    # 기존 odds 보정
+
     _add_column_if_missing(
         "odds",
         "schedule_id",
@@ -520,7 +515,8 @@ def init_database():
     )
 
 
-    # 기존 collection_state 자동 보정
+    # 기존 collection_state 보정
+
     _add_column_if_missing(
         "collection_state",
         "start_id",
@@ -571,7 +567,7 @@ def init_database():
 
 
     # =====================================================
-    # 기본 상태
+    # 기본 수집 상태
     # =====================================================
 
     _execute(
@@ -638,26 +634,7 @@ def get_database_status():
 
 
 # =========================================================
-# SQLite 파일 크기
-# =========================================================
-
-def _get_sqlite_file_size():
-
-    if not SQLITE_PATH.exists():
-
-        return 0
-
-    try:
-
-        return SQLITE_PATH.stat().st_size
-
-    except Exception:
-
-        return 0
-
-
-# =========================================================
-# 크기 포맷
+# 크기 변환
 # =========================================================
 
 def _format_size(
@@ -688,7 +665,26 @@ def _format_size(
 
 
 # =========================================================
-# Turso 논리적 크기
+# SQLite 파일 크기
+# =========================================================
+
+def _get_sqlite_file_size():
+
+    if not SQLITE_PATH.exists():
+
+        return 0
+
+    try:
+
+        return SQLITE_PATH.stat().st_size
+
+    except Exception:
+
+        return 0
+
+
+# =========================================================
+# Turso 논리적 저장 크기
 # =========================================================
 
 def _get_turso_logical_size():
@@ -752,7 +748,6 @@ def _get_turso_logical_size():
             )
 
 
-        # fallback
         total = 0
 
 
@@ -979,6 +974,7 @@ def get_match(
     return _execute_dict(
         """
         SELECT
+
             schedule_id,
             match_date,
             home_team,
@@ -987,8 +983,11 @@ def get_match(
             away_score,
             result,
             source
+
         FROM matches
+
         WHERE schedule_id = ?
+
         """,
         (
             str(schedule_id),
@@ -996,11 +995,16 @@ def get_match(
     )
 
 
+# =========================================================
+# 전체 경기
+# =========================================================
+
 def get_all_matches():
 
     rows = _execute(
         """
         SELECT
+
             schedule_id,
             match_date,
             home_team,
@@ -1009,10 +1013,13 @@ def get_all_matches():
             away_score,
             result,
             source
+
         FROM matches
+
         ORDER BY CAST(
             schedule_id AS INTEGER
         )
+
         """,
         fetch=True
     )
@@ -1055,8 +1062,11 @@ def get_company_names():
     rows = _execute(
         """
         SELECT DISTINCT bookmaker
+
         FROM odds
+
         ORDER BY bookmaker
+
         """,
         fetch=True
     )
@@ -1082,11 +1092,19 @@ def get_company_counts():
     rows = _execute(
         """
         SELECT
+
             bookmaker,
-            COUNT(DISTINCT schedule_id)
+
+            COUNT(
+                DISTINCT schedule_id
+            )
+
         FROM odds
+
         GROUP BY bookmaker
+
         ORDER BY bookmaker
+
         """,
         fetch=True
     )
@@ -1103,7 +1121,11 @@ def get_company_counts():
 
 
 # =========================================================
-# 경기 + 배당 저장
+# 경기 + 최종배당 저장
+#
+# 중요:
+# ON CONFLICT(schedule_id, bookmaker) 사용 안 함
+# 기존 DB에 UNIQUE 제약조건이 없어도 정상 작동
 # =========================================================
 
 def save_match_with_odds(
@@ -1120,98 +1142,189 @@ def save_match_with_odds(
             cur = conn.cursor()
 
 
-            # 경기 저장
+            schedule_id = str(
+                match["schedule_id"]
+            )
+
+
+            # =================================================
+            # 경기 존재 확인
+            # =================================================
+
             cur.execute(
                 """
-                INSERT INTO matches (
+                SELECT schedule_id
 
-                    schedule_id,
-                    match_date,
-                    home_team,
-                    away_team,
-                    home_score,
-                    away_score,
-                    result,
-                    source
+                FROM matches
 
-                )
+                WHERE schedule_id = ?
 
-                VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?
-                )
-
-                ON CONFLICT(schedule_id)
-
-                DO UPDATE SET
-
-                    match_date =
-                        excluded.match_date,
-
-                    home_team =
-                        excluded.home_team,
-
-                    away_team =
-                        excluded.away_team,
-
-                    home_score =
-                        excluded.home_score,
-
-                    away_score =
-                        excluded.away_score,
-
-                    result =
-                        excluded.result,
-
-                    source =
-                        excluded.source
+                LIMIT 1
 
                 """,
-
                 (
-                    str(
-                        match["schedule_id"]
-                    ),
-
-                    match.get(
-                        "match_date",
-                        ""
-                    ),
-
-                    match.get(
-                        "home_team",
-                        ""
-                    ),
-
-                    match.get(
-                        "away_team",
-                        ""
-                    ),
-
-                    match.get(
-                        "home_score"
-                    ),
-
-                    match.get(
-                        "away_score"
-                    ),
-
-                    match.get(
-                        "result",
-                        ""
-                    ),
-
-                    match.get(
-                        "source",
-                        "scoreman"
-                    )
+                    schedule_id,
                 )
             )
 
 
+            match_exists = (
+                cur.fetchone()
+            )
+
+
+            # =================================================
+            # 경기 UPDATE
+            # =================================================
+
+            if match_exists:
+
+                cur.execute(
+                    """
+                    UPDATE matches
+
+                    SET
+
+                        match_date = ?,
+
+                        home_team = ?,
+
+                        away_team = ?,
+
+                        home_score = ?,
+
+                        away_score = ?,
+
+                        result = ?,
+
+                        source = ?
+
+                    WHERE schedule_id = ?
+
+                    """,
+                    (
+
+                        match.get(
+                            "match_date",
+                            ""
+                        ),
+
+                        match.get(
+                            "home_team",
+                            ""
+                        ),
+
+                        match.get(
+                            "away_team",
+                            ""
+                        ),
+
+                        match.get(
+                            "home_score"
+                        ),
+
+                        match.get(
+                            "away_score"
+                        ),
+
+                        match.get(
+                            "result",
+                            ""
+                        ),
+
+                        match.get(
+                            "source",
+                            "scoreman"
+                        ),
+
+                        schedule_id
+
+                    )
+                )
+
+
+            # =================================================
+            # 경기 INSERT
+            # =================================================
+
+            else:
+
+                cur.execute(
+                    """
+                    INSERT INTO matches (
+
+                        schedule_id,
+
+                        match_date,
+
+                        home_team,
+
+                        away_team,
+
+                        home_score,
+
+                        away_score,
+
+                        result,
+
+                        source
+
+                    )
+
+                    VALUES (
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?
+                    )
+
+                    """,
+                    (
+
+                        schedule_id,
+
+                        match.get(
+                            "match_date",
+                            ""
+                        ),
+
+                        match.get(
+                            "home_team",
+                            ""
+                        ),
+
+                        match.get(
+                            "away_team",
+                            ""
+                        ),
+
+                        match.get(
+                            "home_score"
+                        ),
+
+                        match.get(
+                            "away_score"
+                        ),
+
+                        match.get(
+                            "result",
+                            ""
+                        ),
+
+                        match.get(
+                            "source",
+                            "scoreman"
+                        )
+
+                    )
+                )
+
+
+            # =================================================
+            # 배당 저장
+            # =================================================
+
             saved = 0
 
 
-            # 배당 저장
             for row in odds_list:
 
                 company_name = (
@@ -1236,77 +1349,164 @@ def save_match_with_odds(
                     continue
 
 
+                bookmaker_id = row.get(
+                    "company_id",
+                    ""
+                )
+
+
+                home_odds = float(
+                    row["final_home"]
+                )
+
+                draw_odds = float(
+                    row["final_draw"]
+                )
+
+                away_odds = float(
+                    row["final_away"]
+                )
+
+
+                # =================================================
+                # 같은 경기 + 같은 업체 존재 여부
+                # =================================================
+
                 cur.execute(
                     """
-                    INSERT INTO odds (
+                    SELECT id
 
-                        schedule_id,
-                        bookmaker,
-                        bookmaker_id,
-                        home_odds,
-                        draw_odds,
-                        away_odds
+                    FROM odds
 
-                    )
+                    WHERE
 
-                    VALUES (
-                        ?, ?, ?, ?, ?, ?
-                    )
+                        schedule_id = ?
 
-                    ON CONFLICT(
-                        schedule_id,
-                        bookmaker
-                    )
+                        AND bookmaker = ?
 
-                    DO UPDATE SET
+                    ORDER BY id
 
-                        bookmaker_id =
-                            excluded.bookmaker_id,
-
-                        home_odds =
-                            excluded.home_odds,
-
-                        draw_odds =
-                            excluded.draw_odds,
-
-                        away_odds =
-                            excluded.away_odds
+                    LIMIT 1
 
                     """,
-
                     (
-                        str(
-                            match["schedule_id"]
-                        ),
-
-                        company_name,
-
-                        row.get(
-                            "company_id",
-                            ""
-                        ),
-
-                        float(
-                            row["final_home"]
-                        ),
-
-                        float(
-                            row["final_draw"]
-                        ),
-
-                        float(
-                            row["final_away"]
-                        )
+                        schedule_id,
+                        company_name
                     )
                 )
+
+
+                existing = (
+                    cur.fetchone()
+                )
+
+
+                # =================================================
+                # 기존 배당 UPDATE
+                # =================================================
+
+                if existing:
+
+                    cur.execute(
+                        """
+                        UPDATE odds
+
+                        SET
+
+                            bookmaker_id = ?,
+
+                            home_odds = ?,
+
+                            draw_odds = ?,
+
+                            away_odds = ?
+
+                        WHERE id = ?
+
+                        """,
+                        (
+
+                            bookmaker_id,
+
+                            home_odds,
+
+                            draw_odds,
+
+                            away_odds,
+
+                            existing[0]
+
+                        )
+                    )
+
+
+                # =================================================
+                # 신규 배당 INSERT
+                # =================================================
+
+                else:
+
+                    cur.execute(
+                        """
+                        INSERT INTO odds (
+
+                            schedule_id,
+
+                            bookmaker,
+
+                            bookmaker_id,
+
+                            home_odds,
+
+                            draw_odds,
+
+                            away_odds
+
+                        )
+
+                        VALUES (
+                            ?, ?, ?, ?, ?, ?
+                        )
+
+                        """,
+                        (
+
+                            schedule_id,
+
+                            company_name,
+
+                            bookmaker_id,
+
+                            home_odds,
+
+                            draw_odds,
+
+                            away_odds
+
+                        )
+                    )
 
 
                 saved += 1
 
 
+            # =================================================
+            # 커밋
+            # =================================================
+
             conn.commit()
 
             return saved
+
+
+        except Exception:
+
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+            raise
 
 
         finally:
@@ -1327,9 +1527,13 @@ def get_odds_by_match(
         SELECT
 
             bookmaker,
+
             bookmaker_id,
+
             home_odds,
+
             draw_odds,
+
             away_odds
 
         FROM odds
@@ -1339,22 +1543,23 @@ def get_odds_by_match(
         ORDER BY bookmaker
 
         """,
-
         (
             str(schedule_id),
         ),
-
         fetch=True
-
     )
 
 
     columns = [
 
         "bookmaker",
+
         "bookmaker_id",
+
         "home_odds",
+
         "draw_odds",
+
         "away_odds"
 
     ]
@@ -1387,20 +1592,27 @@ def search_odds(
 ):
 
     sql = """
+
         SELECT
 
             o.schedule_id,
+
             m.match_date,
+
             m.home_team,
+
             m.away_team,
 
             o.bookmaker,
 
             o.home_odds,
+
             o.draw_odds,
+
             o.away_odds,
 
             m.home_score,
+
             m.away_score,
 
             m.result
@@ -1408,6 +1620,7 @@ def search_odds(
         FROM odds o
 
         JOIN matches m
+
           ON m.schedule_id =
              o.schedule_id
 
@@ -1424,6 +1637,7 @@ def search_odds(
             AND ABS(
                 o.away_odds - ?
             ) <= ?
+
     """
 
 
@@ -1479,17 +1693,23 @@ def search_odds(
     columns = [
 
         "schedule_id",
+
         "match_date",
+
         "home_team",
+
         "away_team",
 
         "bookmaker",
 
         "home_odds",
+
         "draw_odds",
+
         "away_odds",
 
         "home_score",
+
         "away_score",
 
         "result"
@@ -1518,17 +1738,24 @@ def search_odds(
 def save_collection_state(
 
     start_id,
+
     end_id,
+
     last_completed_id,
+
     current,
+
     total,
+
     running,
+
     stopped,
+
     selected_companies=None
 
 ):
 
-    # 테이블 및 컬럼 보장
+    # 혹시 컬럼이 아직 없으면 자동 보정
     init_database()
 
 
@@ -1539,14 +1766,17 @@ def save_collection_state(
             id,
 
             start_id,
+
             end_id,
 
             last_completed_id,
 
             current,
+
             total,
 
             running,
+
             stopped,
 
             selected_companies
@@ -1554,11 +1784,19 @@ def save_collection_state(
         )
 
         VALUES (
+
             1,
-            ?, ?, ?,
+
             ?, ?,
+
+            ?,
+
             ?, ?,
+
+            ?, ?,
+
             ?
+
         )
 
         ON CONFLICT(id)
@@ -1590,15 +1828,16 @@ def save_collection_state(
                 excluded.selected_companies
 
         """,
-
         (
 
             start_id,
+
             end_id,
 
             last_completed_id,
 
             current,
+
             total,
 
             1 if running else 0,
@@ -1611,7 +1850,6 @@ def save_collection_state(
             )
 
         )
-
     )
 
 
