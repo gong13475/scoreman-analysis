@@ -1,6 +1,5 @@
 import time
 import base64
-
 import streamlit as st
 
 import database
@@ -9,13 +8,14 @@ import analysis
 
 
 # =========================================================
-# 페이지
+# 페이지 설정
 # =========================================================
 
 st.set_page_config(
     page_title="Scoreman 해외배당 분석",
     page_icon="⚽",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 
@@ -23,7 +23,10 @@ st.set_page_config(
 # DB 초기화
 # =========================================================
 
-database.init_database()
+try:
+    database.init_database()
+except Exception as e:
+    st.error(f"DB 초기화 오류: {e}")
 
 
 # =========================================================
@@ -59,6 +62,13 @@ st.markdown(
         font-weight: 700;
     }
 
+    .status-box {
+        padding: 15px;
+        border-radius: 12px;
+        background: #f5f7fa;
+        margin: 10px 0;
+    }
+
     </style>
     """,
     unsafe_allow_html=True
@@ -70,9 +80,7 @@ st.markdown(
 # =========================================================
 
 st.markdown(
-    '<div class="main-title">'
-    '⚽ 전종목 해외배당 분석'
-    '</div>',
+    '<div class="main-title">⚽ 전종목 해외배당 분석</div>',
     unsafe_allow_html=True
 )
 
@@ -90,15 +98,9 @@ st.markdown(
 # =========================================================
 
 try:
-
     status = database.get_database_status()
-
 except Exception as e:
-
-    st.error(
-        f"DB 상태 오류: {e}"
-    )
-
+    st.error(f"DB 상태 오류: {e}")
     status = {
         "matches": 0,
         "odds": 0,
@@ -108,141 +110,124 @@ except Exception as e:
 
 c1, c2, c3, c4 = st.columns(4)
 
-
 c1.metric(
     "저장 경기",
-    f"{status.get('matches', 0):,}"
+    f"{int(status.get('matches', 0)): ,}".replace(" ", "")
 )
 
 c2.metric(
     "저장 최종배당",
-    f"{status.get('odds', 0):,}"
+    f"{int(status.get('odds', 0)): ,}".replace(" ", "")
 )
 
 c3.metric(
     "실제 저장 업체",
-    f"{status.get('bookmakers', 0):,}"
+    f"{int(status.get('bookmakers', 0)): ,}".replace(" ", "")
 )
 
+try:
+    using_turso = database._use_turso()
+except Exception:
+    using_turso = False
 
-if database._use_turso():
-
-    c4.metric(
-        "DB",
-        "Turso"
-    )
-
-else:
-
-    c4.metric(
-        "DB",
-        "SQLite"
-    )
+c4.metric(
+    "DB",
+    "Turso" if using_turso else "SQLite"
+)
 
 
 # =========================================================
 # DB 상태
 # =========================================================
 
-st.subheader(
-    "🗄️ 데이터베이스 상태"
-)
+st.subheader("🗄️ 데이터베이스 상태")
 
+if using_turso:
 
-if database._use_turso():
-
-    st.success(
-        "🟢 Turso DB 연결 정상"
-    )
+    st.success("🟢 Turso DB 연결 정상")
 
     st.caption(
         "현재 앱은 Turso DB에 연결되어 "
-        "데이터를 저장하고 있습니다."
+        "데이터를 영구 저장합니다."
     )
 
 else:
 
-    st.warning(
-        "🟡 로컬 SQLite fallback 모드"
-    )
+    st.warning("🟡 로컬 SQLite fallback 모드")
 
     st.caption(
-        "TURSO_DATABASE_URL / "
-        "TURSO_AUTH_TOKEN이 없거나 "
-        "libsql 연결 모듈을 사용할 수 없어 "
+        "TURSO_DATABASE_URL / TURSO_AUTH_TOKEN이 "
+        "없거나 libSQL 모듈을 사용할 수 없어 "
         "SQLite로 동작하고 있습니다."
     )
 
 
 # =========================================================
-# DB 상세 정보
+# DB 상세정보
 # =========================================================
 
 try:
-
     db_info = database.get_database_info()
-
 except Exception:
-
     db_info = {}
 
 
-with st.expander(
-    "🔧 DB 연결 상세정보"
-):
+with st.expander("🔧 DB 연결 상세정보"):
 
     st.write(
         "Turso URL 설정:",
-        "✅"
-        if db_info.get(
-            "database_url_configured"
-        )
-        else "❌"
+        "✅" if db_info.get("database_url_configured") else "❌"
     )
 
     st.write(
         "Turso Token 설정:",
-        "✅"
-        if db_info.get(
-            "auth_token_configured"
-        )
-        else "❌"
+        "✅" if db_info.get("auth_token_configured") else "❌"
     )
 
     st.write(
         "libSQL 모듈:",
-        "✅"
-        if db_info.get(
-            "libsql_available"
-        )
-        else "❌"
+        "✅" if db_info.get("libsql_available") else "❌"
     )
 
     st.write(
         "현재 사용 DB:",
-        "Turso"
-        if db_info.get(
-            "using_turso"
-        )
-        else "SQLite"
+        "Turso" if db_info.get("using_turso") else "SQLite"
     )
+
+    connection_test = db_info.get("connection_test")
+
+    if connection_test:
+
+        if connection_test.get("connected"):
+            st.success(
+                connection_test.get(
+                    "message",
+                    "Turso 연결 성공"
+                )
+            )
+        else:
+            st.error(
+                connection_test.get(
+                    "message",
+                    "Turso 연결 실패"
+                )
+            )
+
+            if connection_test.get("error"):
+                st.caption(
+                    connection_test.get("error")
+                )
 
 
 # =========================================================
 # DB 저장 용량
 # =========================================================
 
-st.subheader(
-    "💾 DB 저장 용량"
-)
-
+st.subheader("💾 DB 저장 용량")
 
 try:
-
     usage = database.get_storage_usage()
-
 except Exception as e:
-
     usage = {
         "success": False,
         "size_mb": 0,
@@ -258,72 +243,45 @@ if usage.get("success"):
 
     u1.metric(
         "현재 DB 저장 크기",
-        f"{usage.get('size_mb', 0):.2f} MB"
+        f"{float(usage.get('size_mb', 0)):.2f} MB"
     )
 
     u2.metric(
         "저장 방식",
-        usage.get(
-            "storage_type",
-            "SQLite"
-        )
+        usage.get("storage_type", "SQLite")
     )
 
-
-    if usage.get(
-        "storage_type"
-    ) == "Turso":
+    if usage.get("storage_type") == "Turso":
 
         st.caption(
             "현재 표시되는 크기는 연결된 "
             "Turso DB의 논리적 저장 크기입니다."
         )
 
-        st.info(
-            "ℹ️ Turso 무료 플랜의 전체 사용량과 "
-            "남은 무료 한도는 이 값과 다를 수 있습니다. "
-            "무료 플랜 전체 사용량/남은 한도는 "
-            "Turso 콘솔에서 확인하세요."
-        )
-
     else:
 
         st.caption(
-            "현재 SQLite DB 저장 크기: "
-            f"{usage.get('size_gb', 0):.4f} GB"
+            f"현재 SQLite DB 저장 크기: "
+            f"{float(usage.get('size_gb', 0)):.4f} GB"
         )
 
 else:
 
-    st.error(
-        "DB 저장 용량을 확인할 수 없습니다."
-    )
+    st.error("DB 저장 용량을 확인할 수 없습니다.")
 
     if usage.get("error"):
-
-        st.caption(
-            usage.get("error")
-        )
+        st.caption(usage.get("error"))
 
 
 # =========================================================
 # 업체별 저장량
 # =========================================================
 
-st.subheader(
-    "🏢 업체별 저장 경기 수"
-)
-
+st.subheader("🏢 업체별 저장 경기 수")
 
 try:
-
-    company_counts = (
-        database.get_company_counts()
-        or {}
-    )
-
+    company_counts = database.get_company_counts() or {}
 except Exception:
-
     company_counts = {}
 
 
@@ -344,78 +302,58 @@ if company_counts:
 
 else:
 
-    st.info(
-        "저장된 업체별 데이터가 없습니다."
-    )
+    st.info("저장된 업체별 데이터가 없습니다.")
 
 
 # =========================================================
-# 현재 저장 상태
+# 현재 수집 상태
 # =========================================================
-
-state = database.get_collection_state()
-
-
-last_id = state.get(
-    "last_completed_id"
-)
-
 
 try:
-
-    last_id = (
-        int(last_id)
-        if last_id is not None
-        else 0
-    )
-
+    state = database.get_collection_state() or {}
 except Exception:
+    state = {}
 
+
+last_id = state.get("last_completed_id")
+
+try:
+    last_id = int(last_id) if last_id is not None else 0
+except Exception:
     last_id = 0
 
 
-saved_start = state.get(
-    "start_id"
-)
-
-saved_end = state.get(
-    "end_id"
-)
+saved_start = state.get("start_id")
+saved_end = state.get("end_id")
 
 
 try:
-
     saved_start = (
         int(saved_start)
         if saved_start is not None
         else None
     )
-
 except Exception:
-
     saved_start = None
 
 
 try:
-
     saved_end = (
         int(saved_end)
         if saved_end is not None
         else None
     )
-
 except Exception:
-
     saved_end = None
 
 
 # =========================================================
-# Scoreman 수집
+# Scoreman 자동수집
 # =========================================================
 
-st.subheader(
-    "📥 Scoreman 경기 ID 구간 자동수집"
-)
+st.divider()
+
+st.subheader("📥 Scoreman 경기 ID 구간 자동수집")
 
 
 col1, col2 = st.columns(2)
@@ -425,16 +363,16 @@ with col1:
 
     default_start = (
         saved_start
-        if saved_start
-        and saved_start > 0
+        if saved_start and saved_start > 0
         else 3001118
     )
 
     start_id = st.number_input(
         "시작 ID",
         min_value=1,
-        value=default_start,
-        step=1
+        value=int(default_start),
+        step=1,
+        key="start_id"
     )
 
 
@@ -442,24 +380,23 @@ with col2:
 
     default_end = (
         saved_end
-        if saved_end
-        and saved_end >= start_id
+        if saved_end and saved_end >= start_id
         else start_id
     )
 
     end_id = st.number_input(
         "마지막 ID",
         min_value=1,
-        value=default_end,
-        step=1
+        value=int(default_end),
+        step=1,
+        key="end_id"
     )
 
 
 if end_id >= start_id:
 
     st.caption(
-        f"검색 대상: "
-        f"{end_id - start_id + 1:,}개"
+        f"검색 대상: {end_id - start_id + 1:,}개"
     )
 
 else:
@@ -470,19 +407,17 @@ else:
 
 
 # =========================================================
-# 마지막 성공 지점
+# 마지막 완료 ID
 # =========================================================
 
 if last_id > 0:
 
     st.info(
-        f"📌 마지막 성공 완료 ID: "
-        f"{last_id:,}"
+        f"📌 마지막 성공 완료 ID: {last_id:,}"
     )
 
     st.caption(
-        f"다음 자동 시작 ID: "
-        f"{last_id + 1:,}"
+        f"다음 자동 시작 ID: {last_id + 1:,}"
     )
 
 else:
@@ -493,23 +428,14 @@ else:
 
 
 # =========================================================
-# 수집 업체
+# 업체 목록
 # =========================================================
 
-st.subheader(
-    "🏢 수집 업체"
-)
-
+st.subheader("🏢 수집 업체")
 
 try:
-
-    companies = (
-        analysis.get_company_list()
-        or []
-    )
-
+    companies = analysis.get_company_list() or []
 except Exception:
-
     companies = []
 
 
@@ -519,7 +445,8 @@ mode = st.radio(
         "전체 업체 자동수집",
         "특정 업체만 수집"
     ],
-    horizontal=True
+    horizontal=True,
+    key="collection_mode"
 )
 
 
@@ -537,8 +464,7 @@ else:
     selected = None
 
     st.success(
-        "전체 업체 선택 시 Scoreman에서 확인되는 "
-        "해외업체 최종배당을 자동 저장합니다."
+        "전체 업체 자동수집을 사용합니다."
     )
 
 
@@ -551,7 +477,9 @@ delay = st.number_input(
     min_value=0.1,
     max_value=10.0,
     value=0.5,
-    step=0.1
+    step=0.1,
+    format="%.1f",
+    key="collector_delay"
 )
 
 
@@ -564,7 +492,8 @@ if last_id > 0:
     if st.button(
         f"🔄 마지막 성공 지점부터 자동 이어받기 "
         f"({last_id + 1:,} → {end_id:,})",
-        use_container_width=True
+        use_container_width=True,
+        key="resume_button"
     ):
 
         if end_id < last_id + 1:
@@ -575,26 +504,69 @@ if last_id > 0:
 
         else:
 
-            ok = collector.start_background_collection(
-                last_id + 1,
-                end_id,
-                selected,
-                float(delay),
-                resume=False
-            )
+            try:
 
-            if ok:
-
-                st.success(
-                    f"{last_id + 1:,}번부터 "
-                    f"{end_id:,}번까지 "
-                    "백그라운드 수집을 시작했습니다."
+                ok = collector.start_background_collection(
+                    int(last_id + 1),
+                    int(end_id),
+                    selected,
+                    float(delay),
+                    resume=False
                 )
 
-            else:
+                if ok:
 
-                st.warning(
-                    "이미 수집 작업이 실행 중입니다."
+                    st.success(
+                        f"{last_id + 1:,}번부터 "
+                        f"{end_id:,}번까지 "
+                        "백그라운드 수집을 시작했습니다."
+                    )
+
+                    time.sleep(0.5)
+                    st.rerun()
+
+                else:
+
+                    st.warning(
+                        "이미 수집 작업이 실행 중입니다."
+                    )
+
+            except TypeError:
+
+                try:
+
+                    ok = collector.start_background_collection(
+                        int(last_id + 1),
+                        int(end_id),
+                        selected,
+                        float(delay)
+                    )
+
+                    if ok:
+
+                        st.success(
+                            "백그라운드 수집을 시작했습니다."
+                        )
+
+                        time.sleep(0.5)
+                        st.rerun()
+
+                    else:
+
+                        st.warning(
+                            "이미 수집 작업이 실행 중입니다."
+                        )
+
+                except Exception as e:
+
+                    st.error(
+                        f"수집 시작 오류: {e}"
+                    )
+
+            except Exception as e:
+
+                st.error(
+                    f"수집 시작 오류: {e}"
                 )
 
 
@@ -609,7 +581,8 @@ with b1:
 
     if st.button(
         "🚀 수집 시작",
-        use_container_width=True
+        use_container_width=True,
+        key="start_collection"
     ):
 
         if end_id < start_id:
@@ -629,25 +602,68 @@ with b1:
 
         else:
 
-            ok = collector.start_background_collection(
-                int(start_id),
-                int(end_id),
-                selected,
-                float(delay),
-                resume=True
-            )
+            try:
 
-            if ok:
-
-                st.success(
-                    "백그라운드 수집을 시작했습니다."
+                ok = collector.start_background_collection(
+                    int(start_id),
+                    int(end_id),
+                    selected,
+                    float(delay),
+                    resume=True
                 )
 
-            else:
+                if ok:
 
-                st.warning(
-                    "이미 수집 중이거나 "
-                    "수집할 ID가 없습니다."
+                    st.success(
+                        "백그라운드 수집을 시작했습니다."
+                    )
+
+                    time.sleep(0.5)
+                    st.rerun()
+
+                else:
+
+                    st.warning(
+                        "이미 수집 중이거나 "
+                        "수집할 ID가 없습니다."
+                    )
+
+            except TypeError:
+
+                try:
+
+                    ok = collector.start_background_collection(
+                        int(start_id),
+                        int(end_id),
+                        selected,
+                        float(delay)
+                    )
+
+                    if ok:
+
+                        st.success(
+                            "백그라운드 수집을 시작했습니다."
+                        )
+
+                        time.sleep(0.5)
+                        st.rerun()
+
+                    else:
+
+                        st.warning(
+                            "이미 수집 중입니다."
+                        )
+
+                except Exception as e:
+
+                    st.error(
+                        f"수집 시작 오류: {e}"
+                    )
+
+            except Exception as e:
+
+                st.error(
+                    f"수집 시작 오류: {e}"
                 )
 
 
@@ -655,59 +671,97 @@ with b2:
 
     if st.button(
         "🛑 수집 중지",
-        use_container_width=True
+        use_container_width=True,
+        key="stop_collection"
     ):
 
-        if collector.stop_background_collection():
+        try:
 
-            st.warning(
-                "수집 중지 요청을 보냈습니다."
+            stopped = (
+                collector.stop_background_collection()
             )
 
-        else:
+            if stopped:
 
-            st.info(
-                "현재 실행 중인 수집 작업이 없습니다."
+                st.warning(
+                    "🛑 수집 중지 요청을 보냈습니다."
+                )
+
+            else:
+
+                st.info(
+                    "현재 실행 중인 수집 작업이 없습니다."
+                )
+
+        except Exception as e:
+
+            st.error(
+                f"중지 오류: {e}"
             )
 
 
 # =========================================================
-# 작업 상태
+# Collector 작업 상태
 # =========================================================
 
 try:
 
-    job = collector.get_job_status()
+    job = collector.get_job_status() or {}
 
-except Exception:
+except Exception as e:
 
     job = {
         "running": False,
-        "finished": False
+        "finished": False,
+        "error": str(e)
     }
 
 
+# =========================================================
+# 수집 중
+# =========================================================
+
 if job.get("running"):
 
-    st.subheader(
-        "🟢 현재 수집 중"
-    )
+    st.divider()
+
+    st.subheader("🟢 현재 수집 중")
 
     total = int(
-        job.get("total", 0)
-        or 0
+        job.get("total", 0) or 0
     )
 
     current = int(
-        job.get("current", 0)
-        or 0
+        job.get("current", 0) or 0
     )
+
+    success = int(
+        job.get("success", 0) or 0
+    )
+
+    exists = int(
+        job.get("exists", 0) or 0
+    )
+
+    failed = int(
+        job.get("failed", 0) or 0
+    )
+
+    no_odds = int(
+        job.get("no_odds", 0) or 0
+    )
+
+    odds_count = int(
+        job.get("odds", 0) or 0
+    )
+
 
     progress = (
         current / total
         if total > 0
         else 0
     )
+
 
     st.progress(
         min(
@@ -717,10 +771,12 @@ if job.get("running"):
     )
 
     st.caption(
-        f"{progress * 100:.1f}%"
+        f"진행률 {progress * 100:.1f}%"
     )
 
-    a, b, c, d, e = st.columns(5)
+
+    a, b, c, d, e, f = st.columns(6)
+
 
     a.metric(
         "현재",
@@ -729,23 +785,37 @@ if job.get("running"):
 
     b.metric(
         "신규",
-        f"{int(job.get('success', 0) or 0):,}"
+        f"{success:,}"
     )
 
     c.metric(
-        "실패",
-        f"{int(job.get('failed', 0) or 0):,}"
+        "기존",
+        f"{exists:,}"
     )
 
     d.metric(
-        "배당 없음",
-        f"{int(job.get('no_odds', 0) or 0):,}"
+        "실패",
+        f"{failed:,}"
     )
 
     e.metric(
-        "최종배당",
-        f"{int(job.get('odds', 0) or 0):,}"
+        "배당 없음",
+        f"{no_odds:,}"
     )
+
+    f.metric(
+        "최종배당",
+        f"{odds_count:,}"
+    )
+
+
+    current_id = job.get("current_id")
+
+    if current_id:
+
+        st.info(
+            f"🔎 현재 처리 ID: {int(current_id):,}"
+        )
 
 
     current_last = job.get(
@@ -754,16 +824,17 @@ if job.get("running"):
 
     if current_last:
 
-        st.info(
+        st.success(
             f"📌 마지막 완료 ID: "
             f"{int(current_last):,}"
         )
 
 
-    if (
-        "show_collection_log"
-        not in st.session_state
-    ):
+    # -----------------------------------------------------
+    # 로그 표시 여부
+    # -----------------------------------------------------
+
+    if "show_collection_log" not in st.session_state:
 
         st.session_state[
             "show_collection_log"
@@ -773,11 +844,8 @@ if job.get("running"):
     if st.button(
         (
             "📝 로그 보기"
-            if not st.session_state[
-                "show_collection_log"
-            ]
-            else
-            "🙈 로그 숨기기"
+            if not st.session_state["show_collection_log"]
+            else "🙈 로그 숨기기"
         ),
         key="running_log"
     ):
@@ -788,17 +856,22 @@ if job.get("running"):
             "show_collection_log"
         ]
 
+        st.rerun()
 
-    if st.session_state[
-        "show_collection_log"
-    ]:
+
+    if st.session_state["show_collection_log"]:
 
         st.text_area(
             "수집 로그",
             job.get("log", ""),
-            height=300
+            height=300,
+            key="running_log_text"
         )
 
+
+    # -----------------------------------------------------
+    # 자동 새로고침
+    # -----------------------------------------------------
 
     time.sleep(1)
 
@@ -806,14 +879,14 @@ if job.get("running"):
 
 
 # =========================================================
-# 완료
+# 수집 완료
 # =========================================================
 
 elif job.get("finished"):
 
-    st.subheader(
-        "✅ 마지막 수집 결과"
-    )
+    st.divider()
+
+    st.subheader("✅ 마지막 수집 결과")
 
 
     if job.get("stopped"):
@@ -822,46 +895,49 @@ elif job.get("finished"):
             "🛑 수집이 중지되었습니다."
         )
 
+    else:
 
-    result = job.get(
-        "result"
-    )
+        st.success(
+            "✅ 수집 작업이 완료되었습니다."
+        )
+
+
+    result = job.get("result") or {}
 
 
     if result:
 
-        a, b, c, d, e = st.columns(5)
+        a, b, c, d, e, f = st.columns(6)
 
 
         a.metric(
             "전체",
-            f"{int(result.get('total', 0)):,}"
+            f"{int(result.get('total', 0) or 0):,}"
         )
 
         b.metric(
             "신규",
-            f"{int(result.get('success', 0)):,}"
+            f"{int(result.get('success', 0) or 0):,}"
         )
 
         c.metric(
             "기존",
-            f"{int(result.get('exists', 0)):,}"
+            f"{int(result.get('exists', 0) or 0):,}"
         )
 
         d.metric(
             "실패",
-            f"{int(result.get('failed', 0)):,}"
+            f"{int(result.get('failed', 0) or 0):,}"
         )
 
         e.metric(
             "배당 없음",
-            f"{int(result.get('no_odds', 0)):,}"
+            f"{int(result.get('no_odds', 0) or 0):,}"
         )
 
-
-        st.metric(
+        f.metric(
             "최종배당",
-            f"{int(result.get('odds', 0)):,}"
+            f"{int(result.get('odds', 0) or 0):,}"
         )
 
 
@@ -885,10 +961,7 @@ elif job.get("finished"):
         )
 
 
-    if (
-        "show_finished_log"
-        not in st.session_state
-    ):
+    if "show_finished_log" not in st.session_state:
 
         st.session_state[
             "show_finished_log"
@@ -898,11 +971,8 @@ elif job.get("finished"):
     if st.button(
         (
             "📝 로그 보기"
-            if not st.session_state[
-                "show_finished_log"
-            ]
-            else
-            "🙈 로그 숨기기"
+            if not st.session_state["show_finished_log"]
+            else "🙈 로그 숨기기"
         ),
         key="finished_log"
     ):
@@ -913,15 +983,16 @@ elif job.get("finished"):
             "show_finished_log"
         ]
 
+        st.rerun()
 
-    if st.session_state[
-        "show_finished_log"
-    ]:
+
+    if st.session_state["show_finished_log"]:
 
         st.text_area(
             "수집 로그",
             job.get("log", ""),
-            height=300
+            height=300,
+            key="finished_log_text"
         )
 
 
@@ -931,17 +1002,12 @@ elif job.get("finished"):
 
 st.divider()
 
-st.subheader(
-    "📋 저장된 경기 전체 조회"
-)
+st.subheader("📋 저장된 경기 전체 조회")
 
 
 try:
 
-    matches = (
-        database.get_all_matches()
-        or []
-    )
+    matches = database.get_all_matches() or []
 
 except Exception as e:
 
@@ -971,19 +1037,20 @@ else:
 # 경기별 최종배당
 # =========================================================
 
-st.subheader(
-    "🔎 경기별 최종배당 조회"
+st.subheader("🔎 경기별 최종배당 조회")
+
+
+lookup_default = (
+    last_id
+    if last_id > 0
+    else int(start_id)
 )
 
 
 lookup_id = st.number_input(
     "경기 ID",
     min_value=1,
-    value=(
-        int(last_id)
-        if last_id > 0
-        else 3001118
-    ),
+    value=int(lookup_default),
     step=1,
     key="lookup_id"
 )
@@ -991,12 +1058,23 @@ lookup_id = st.number_input(
 
 if st.button(
     "🔎 경기 조회",
-    use_container_width=True
+    use_container_width=True,
+    key="lookup_match"
 ):
 
-    match = database.get_match(
-        lookup_id
-    )
+    try:
+
+        match = database.get_match(
+            lookup_id
+        )
+
+    except Exception as e:
+
+        match = None
+
+        st.error(
+            f"경기 조회 오류: {e}"
+        )
 
 
     if not match:
@@ -1071,12 +1149,22 @@ if st.button(
         )
 
 
-        odds = (
-            database.get_odds_by_match(
-                lookup_id
+        try:
+
+            odds = (
+                database.get_odds_by_match(
+                    lookup_id
+                )
+                or []
             )
-            or []
-        )
+
+        except Exception as e:
+
+            odds = []
+
+            st.error(
+                f"배당 조회 오류: {e}"
+            )
 
 
         if not odds:
@@ -1088,34 +1176,34 @@ if st.button(
         else:
 
             st.success(
-                f"저장된 최종배당 "
-                f"{len(odds)}개"
+                f"저장된 최종배당 {len(odds):,}개"
             )
 
 
             st.dataframe(
                 [
                     {
-                        "업체":
-                            row.get(
-                                "bookmaker",
-                                ""
-                            ),
+                        "업체": row.get(
+                            "bookmaker",
+                            ""
+                        ),
 
-                        "승":
-                            row.get(
-                                "home_odds"
-                            ),
+                        "업체ID": row.get(
+                            "bookmaker_id",
+                            ""
+                        ),
 
-                        "무":
-                            row.get(
-                                "draw_odds"
-                            ),
+                        "승": row.get(
+                            "home_odds"
+                        ),
 
-                        "패":
-                            row.get(
-                                "away_odds"
-                            )
+                        "무": row.get(
+                            "draw_odds"
+                        ),
+
+                        "패": row.get(
+                            "away_odds"
+                        )
                     }
                     for row in odds
                 ],
@@ -1125,22 +1213,30 @@ if st.button(
 
 
 # =========================================================
-# 수동 배당 검색 / 분석
+# 동일배당 검색 / 분석
 # =========================================================
 
+st.divider()
+
 st.subheader(
-    "📈 승무패 배당으로 경기 검색"
+    "📈 승무패 배당으로 과거 경기 검색"
 )
 
 
-st.markdown(
-    "### 🏢 분석 업체 선택"
-)
+try:
+
+    analysis_companies_list = (
+        analysis.get_company_list() or companies
+    )
+
+except Exception:
+
+    analysis_companies_list = companies
 
 
 analysis_companies = st.multiselect(
-    "분석 업체",
-    companies,
+    "🏢 분석 업체",
+    analysis_companies_list,
     key="analysis_companies",
     placeholder="분석할 업체를 선택하세요"
 )
@@ -1148,13 +1244,18 @@ analysis_companies = st.multiselect(
 
 if analysis_companies:
 
+    st.markdown(
+        "### 배당 입력"
+    )
+
+
     odds_input = {}
 
 
     for company in analysis_companies:
 
         st.markdown(
-            f"### 🏢 {company}"
+            f"#### 🏢 {company}"
         )
 
 
@@ -1163,49 +1264,60 @@ if analysis_companies:
 
         with a:
 
-            h = st.number_input(
+            home = st.number_input(
                 f"{company} 승",
                 min_value=0.01,
                 value=2.00,
                 step=0.01,
                 format="%.2f",
-                key=f"{company}_h"
+                key=f"{company}_home"
             )
 
 
         with b:
 
-            d = st.number_input(
+            draw = st.number_input(
                 f"{company} 무",
                 min_value=0.01,
                 value=3.00,
                 step=0.01,
                 format="%.2f",
-                key=f"{company}_d"
+                key=f"{company}_draw"
             )
 
 
         with c:
 
-            aw = st.number_input(
+            away = st.number_input(
                 f"{company} 패",
                 min_value=0.01,
                 value=3.00,
                 step=0.01,
                 format="%.2f",
-                key=f"{company}_a"
+                key=f"{company}_away"
             )
 
 
         odds_input[company] = {
-            "home": h,
-            "draw": d,
-            "away": aw
+            "home": home,
+            "draw": draw,
+            "away": away
         }
 
 
+    tolerance = st.number_input(
+        "배당 허용 오차",
+        min_value=0.000,
+        max_value=0.100,
+        value=0.001,
+        step=0.001,
+        format="%.3f",
+        key="analysis_tolerance"
+    )
+
+
     if st.button(
-        "🔎 검색",
+        "🔎 동일배당 경기 검색",
         use_container_width=True,
         key="search_odds"
     ):
@@ -1214,8 +1326,27 @@ if analysis_companies:
 
             result = analysis.run_search(
                 analysis_companies,
-                odds_input
+                odds_input,
+                tolerance=tolerance
             )
+
+        except TypeError:
+
+            try:
+
+                result = analysis.run_search(
+                    analysis_companies,
+                    odds_input
+                )
+
+            except Exception as e:
+
+                result = {
+                    "success": False,
+                    "message": str(e),
+                    "results": [],
+                    "statistics": None
+                }
 
         except Exception as e:
 
@@ -1232,10 +1363,7 @@ if analysis_companies:
         ] = result
 
 
-        if not result.get(
-            "success",
-            False
-        ):
+        if not result.get("success", False):
 
             st.error(
                 result.get(
@@ -1249,7 +1377,8 @@ if analysis_companies:
             results = result.get(
                 "results",
                 []
-            )
+            ) or []
+
 
             stats = result.get(
                 "statistics"
@@ -1257,10 +1386,13 @@ if analysis_companies:
 
 
             st.success(
-                f"검색 경기: "
-                f"{len(results):,}개"
+                f"검색 경기: {len(results):,}개"
             )
 
+
+            # =================================================
+            # 통계
+            # =================================================
 
             if stats:
 
@@ -1281,7 +1413,7 @@ if analysis_companies:
 
 
                 st.write(
-                    "### 실제 결과 확률"
+                    "### 📊 실제 결과"
                 )
 
 
@@ -1289,25 +1421,23 @@ if analysis_companies:
 
 
                 a.metric(
-                    "실제 승률",
+                    "승",
                     f"{actual.get('home', 0):.2f}%"
                 )
 
-
                 b.metric(
-                    "실제 무승률",
+                    "무",
                     f"{actual.get('draw', 0):.2f}%"
                 )
 
-
                 c.metric(
-                    "실제 패율",
+                    "패",
                     f"{actual.get('away', 0):.2f}%"
                 )
 
 
                 st.write(
-                    "### 배당 기반 확률"
+                    "### 🎯 배당 기반 확률"
                 )
 
 
@@ -1319,12 +1449,10 @@ if analysis_companies:
                     f"{probability.get('home', 0):.2f}%"
                 )
 
-
                 b.metric(
                     "무",
                     f"{probability.get('draw', 0):.2f}%"
                 )
-
 
                 c.metric(
                     "패",
@@ -1333,7 +1461,7 @@ if analysis_companies:
 
 
                 st.write(
-                    "### 실제 결과 - 배당 확률"
+                    "### 📉 실제 결과 - 배당 확률"
                 )
 
 
@@ -1345,12 +1473,10 @@ if analysis_companies:
                     f"{shortage.get('home', 0):+.2f}%"
                 )
 
-
                 b.metric(
                     "무",
                     f"{shortage.get('draw', 0):+.2f}%"
                 )
-
 
                 c.metric(
                     "패",
@@ -1358,11 +1484,17 @@ if analysis_companies:
                 )
 
 
-                highest = (
-                    analysis.get_highest_shortage(
-                        stats
+                try:
+
+                    highest = (
+                        analysis.get_highest_shortage(
+                            stats
+                        )
                     )
-                )
+
+                except Exception:
+
+                    highest = None
 
 
                 if highest:
@@ -1373,15 +1505,23 @@ if analysis_companies:
                     )
 
 
+            # =================================================
+            # 검색 결과
+            # =================================================
+
             if results:
 
                 st.write(
-                    "### 📋 검색 결과"
+                    "### 📋 동일배당 경기 목록"
                 )
 
 
-                st.dataframe(
-                    [
+                display_rows = []
+
+
+                for row in results:
+
+                    display_rows.append(
                         {
                             "경기 ID":
                                 row.get(
@@ -1428,17 +1568,28 @@ if analysis_companies:
                                     "away_odds"
                                 ),
 
+                            "스코어":
+                                (
+                                    f"{row.get('home_score', '')}"
+                                    ":"
+                                    f"{row.get('away_score', '')}"
+                                ),
+
                             "결과":
                                 row.get(
                                     "result",
                                     ""
                                 )
                         }
-                        for row in results
-                    ],
+                    )
+
+
+                st.dataframe(
+                    display_rows,
                     use_container_width=True,
                     hide_index=True
                 )
+
 
             else:
 
@@ -1450,12 +1601,12 @@ if analysis_companies:
 else:
 
     st.info(
-        "🏢 먼저 분석할 업체를 선택하세요."
+        "🏢 분석할 업체를 하나 이상 선택하세요."
     )
 
 
 # =========================================================
-# 음성 배당 입력
+# 음성 기능
 # =========================================================
 
 st.divider()
@@ -1464,23 +1615,15 @@ st.subheader(
     "🎙️ 음성 배당 입력 / 결과 듣기"
 )
 
-
 st.caption(
-    "폰에서 🎤 말하기 버튼을 누르고 "
-    "예: 승 1.80 무 3.40 패 4.20 "
-    "이라고 말하세요."
+    "폰에서 🎤 말하기를 누르고 "
+    "예: 승 1.80 무 3.40 패 4.20"
 )
 
 
-# =========================================================
-# 마이크
-# =========================================================
-
 try:
 
-    from streamlit_mic_recorder import (
-        mic_recorder
-    )
+    from streamlit_mic_recorder import mic_recorder
 
 
     audio = mic_recorder(
@@ -1498,7 +1641,6 @@ try:
             "🎤 음성이 입력되었습니다."
         )
 
-
         st.audio(
             audio["bytes"],
             format="audio/wav"
@@ -1507,27 +1649,20 @@ try:
 
 except ImportError:
 
-    st.error(
-        "마이크 기능을 사용하려면 "
-        "streamlit-mic-recorder를 설치하세요."
+    st.warning(
+        "음성 녹음 기능은 "
+        "streamlit-mic-recorder 설치 후 사용할 수 있습니다."
     )
-
-
-    st.code(
-        "pip install streamlit-mic-recorder",
-        language="bash"
-    )
-
 
 except Exception as e:
 
-    st.error(
+    st.warning(
         f"마이크 기능 오류: {e}"
     )
 
 
 # =========================================================
-# 분석 결과 듣기
+# 분석 결과 음성 듣기
 # =========================================================
 
 if st.button(
@@ -1578,11 +1713,17 @@ if st.button(
             )
 
 
-            highest = (
-                analysis.get_highest_shortage(
-                    stats
+            try:
+
+                highest = (
+                    analysis.get_highest_shortage(
+                        stats
+                    )
                 )
-            )
+
+            except Exception:
+
+                highest = None
 
 
             speech_text = (
@@ -1607,8 +1748,11 @@ if st.button(
                 f"{probability.get('away', 0):.1f} 퍼센트입니다. "
 
                 f"실제 결과와 배당 확률의 차이는 "
+
                 f"승 {shortage.get('home', 0):+.1f} 퍼센트, "
+
                 f"무 {shortage.get('draw', 0):+.1f} 퍼센트, "
+
                 f"패 {shortage.get('away', 0):+.1f} 퍼센트입니다. "
             )
 
@@ -1642,9 +1786,8 @@ if st.button(
                         );
 
                     const text =
-                        new TextDecoder(
-                            "utf-8"
-                        ).decode(bytes);
+                        new TextDecoder("utf-8")
+                        .decode(bytes);
 
 
                     if (
@@ -1684,11 +1827,10 @@ if st.button(
 
 
 # =========================================================
-# 새로고침
+# 화면 새로고침
 # =========================================================
 
 st.divider()
-
 
 if st.button(
     "🔄 화면 새로고침",
