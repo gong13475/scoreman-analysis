@@ -1,6 +1,6 @@
 # ============================================================
 # database.py
-# ⚽ Scoreman 분석 DB - 기능 유지 + 안정화 확장판
+# ⚽ Scoreman 분석 DB - 최종 안정화판
 #
 # 기존 기능 유지
 # - Turso 영구 저장
@@ -12,15 +12,17 @@
 # - 수집 상태 저장
 # - Turso 용량 조회
 # - collector.py 연동
-#
-# 추가
-# - Turso SQLITE_BUSY 자동 재시도
-# - DB 저장 안정화
 # - 수동배당 저장
-# - 회사별 수동배당
-# - 승/무/패 배당상 확률
+# - 수동배당 확률
 # - 실제 결과 대비 부족확률
-# - 이어받기 상태 안정화
+#
+# 핵심 수정
+# - 배당 입력 시 완전 동일배당 검색
+# - 승/무/패 모두 소수점 2자리까지 동일해야 검색
+# - 예: 1.83 / 3.50 / 4.20
+#   → DB의 1.83 / 3.50 / 4.20만 검색
+# - 1.83 / 3.50 / 4.21 → 제외
+# - 1.84 / 3.50 / 4.20 → 제외
 # ============================================================
 
 import os
@@ -98,7 +100,9 @@ def get_connection():
     )
 
     try:
-        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute(
+            "PRAGMA busy_timeout = 30000"
+        )
     except Exception:
         pass
 
@@ -132,10 +136,6 @@ def _is_busy_error(error):
 
 # ============================================================
 # SQL 실행
-#
-# 핵심:
-# Turso에서 SQLITE_BUSY가 발생하면
-# 연결을 완전히 닫고 새로운 연결로 다시 실행한다.
 # ============================================================
 
 def _execute(
@@ -216,7 +216,6 @@ def _execute(
 
                 raise
 
-            # 재시도 전 짧은 대기
             wait = 0.5 * (attempt + 1)
 
             time.sleep(wait)
@@ -294,9 +293,6 @@ def init_database():
 
     # --------------------------------------------------------
     # manual_odds
-    #
-    # 수동 입력용 별도 테이블
-    # 기존 odds 테이블에는 영향을 주지 않는다.
     # --------------------------------------------------------
 
     _execute(
@@ -381,9 +377,6 @@ def save_match(match):
 
 # ============================================================
 # 경기 + 배당 저장
-#
-# 기존 collector.py에서 그대로 사용할 수 있도록
-# 함수 이름과 반환값 유지
 # ============================================================
 
 def save_match_with_odds(
@@ -391,17 +384,9 @@ def save_match_with_odds(
     odds_list
 ):
 
-    # --------------------------------------------------------
-    # 경기 저장
-    # --------------------------------------------------------
-
     save_match(match)
 
     saved = 0
-
-    # --------------------------------------------------------
-    # 배당 저장
-    # --------------------------------------------------------
 
     for row in odds_list:
 
@@ -436,16 +421,19 @@ def save_match_with_odds(
             ):
                 continue
 
-            final_home = float(
-                final_home
+            final_home = round(
+                float(final_home),
+                2
             )
 
-            final_draw = float(
-                final_draw
+            final_draw = round(
+                float(final_draw),
+                2
             )
 
-            final_away = float(
-                final_away
+            final_away = round(
+                float(final_away),
+                2
             )
 
             _execute(
@@ -485,8 +473,6 @@ def save_match_with_odds(
 
         except Exception:
 
-            # 기존 동작 유지:
-            # 한 업체 저장 실패가 전체 경기 저장 실패가 되지 않음
             continue
 
     return saved
@@ -637,7 +623,6 @@ def get_company_list():
         if row[0]
     ]
 
-    # 수동입력 업체도 포함
     try:
 
         manual_rows = _execute(
@@ -658,6 +643,7 @@ def get_company_list():
             ).strip()
 
             if name and name not in companies:
+
                 companies.append(name)
 
     except Exception:
@@ -759,7 +745,6 @@ def get_database_status():
 
         bookmakers = 0
 
-    # 수동 입력 건수
     try:
 
         manual_odds = int(
@@ -821,6 +806,7 @@ def save_collection_state(
 ):
 
     if selected_companies is None:
+
         selected_companies = []
 
     selected_json = json.dumps(
@@ -979,14 +965,7 @@ def get_resume_id():
 
 
 # ============================================================
-# 수동 배당 확률 계산
-#
-# 기본:
-# 확률 = 1 / 배당
-#
-# 추가로 정규화 확률도 계산
-# 정규화:
-# raw 확률 / 전체 raw 확률
+# 배당 확률 계산
 # ============================================================
 
 def calculate_odds_probabilities(
@@ -1004,6 +983,7 @@ def calculate_odds_probabilities(
         or draw_odds <= 0
         or away_odds <= 0
     ):
+
         raise ValueError(
             "승/무/패 배당은 0보다 커야 합니다."
         )
@@ -1031,6 +1011,7 @@ def calculate_odds_probabilities(
     )
 
     return {
+
         "home_probability":
             raw_home * 100,
 
@@ -1084,8 +1065,8 @@ def get_result_probability(
 
     if result in (
         "무",
-        "DRAW",
-        "D"
+        "D",
+        "DRAW"
     ) or result_upper == "DRAW":
 
         return float(
@@ -1099,7 +1080,10 @@ def get_result_probability(
         "원정",
         "A",
         "AWAY"
-    ) or result_upper == "LOSE":
+    ) or result_upper in (
+        "LOSE",
+        "LOSS"
+    ):
 
         return float(
             probabilities[
@@ -1111,18 +1095,7 @@ def get_result_probability(
 
 
 # ============================================================
-# 부족확률 계산
-#
-# 기준 확률을 별도로 넣으면:
-#
-# 부족확률 = 기준확률 - 배당상확률
-#
-# 예:
-# 기준 48%
-# 배당상 40%
-# 부족확률 = +8%p
-#
-# 기준확률이 없으면 0으로 계산
+# 부족확률
 # ============================================================
 
 def calculate_shortage_probability(
@@ -1172,8 +1145,6 @@ def calculate_shortage_probability(
 
 # ============================================================
 # 수동배당 저장
-#
-# app.py에서 사용할 함수
 # ============================================================
 
 def save_manual_odds(
@@ -1226,9 +1197,9 @@ def save_manual_odds(
         (
             str(schedule_id or ""),
             company_name,
-            float(home_odds),
-            float(draw_odds),
-            float(away_odds),
+            round(float(home_odds), 2),
+            round(float(draw_odds), 2),
+            round(float(away_odds), 2),
             str(result or ""),
             probabilities[
                 "home_normalized_probability"
@@ -1253,13 +1224,13 @@ def save_manual_odds(
             company_name,
 
         "home_odds":
-            float(home_odds),
+            round(float(home_odds), 2),
 
         "draw_odds":
-            float(draw_odds),
+            round(float(draw_odds), 2),
 
         "away_odds":
-            float(away_odds),
+            round(float(away_odds), 2),
 
         "result":
             str(result or ""),
@@ -1317,7 +1288,10 @@ def get_manual_odds(
     if company_name:
 
         conditions.append(
-            "LOWER(TRIM(company_name)) = LOWER(TRIM(?))"
+            """
+            LOWER(TRIM(company_name))
+            = LOWER(TRIM(?))
+            """
         )
 
         params.append(
@@ -1380,9 +1354,7 @@ def get_manual_odds(
 
 
 # ============================================================
-# 수동배당 결과 + 부족확률 업데이트
-#
-# 기준확률을 넣어 분석할 때 사용
+# 수동배당 부족확률 업데이트
 # ============================================================
 
 def update_manual_shortage(
@@ -1439,7 +1411,31 @@ def update_manual_shortage(
 
 
 # ============================================================
-# 동일배당 검색
+# ============================================================
+# ⭐ 완전 동일배당 검색
+# ============================================================
+#
+# 핵심 규칙
+#
+# 입력:
+#   1.83 / 3.50 / 4.20
+#
+# DB:
+#   1.83 / 3.50 / 4.20  → 검색
+#
+# DB:
+#   1.83 / 3.50 / 4.21  → 제외
+#
+# DB:
+#   1.84 / 3.50 / 4.20  → 제외
+#
+# DB:
+#   1.83 / 3.51 / 4.20  → 제외
+#
+# 즉 승/무/패 3개 모두 소수점 2자리까지 완전히 같아야 한다.
+#
+# 업체명도 완전히 같은 업체만 검색한다.
+# 대소문자/앞뒤 공백은 무시한다.
 # ============================================================
 
 def search_same_odds(
@@ -1449,6 +1445,30 @@ def search_same_odds(
     away_odds,
     tolerance=0.0001
 ):
+
+    # --------------------------------------------------------
+    # 입력값을 소수점 2자리로 고정
+    # --------------------------------------------------------
+
+    home_odds = round(
+        float(home_odds),
+        2
+    )
+
+    draw_odds = round(
+        float(draw_odds),
+        2
+    )
+
+    away_odds = round(
+        float(away_odds),
+        2
+    )
+
+    # --------------------------------------------------------
+    # tolerance는 호환성을 위해 인자로 유지하지만
+    # 실제 검색은 ROUND(..., 2) 완전일치 사용
+    # --------------------------------------------------------
 
     rows = _execute(
         """
@@ -1469,19 +1489,23 @@ def search_same_odds(
           ON m.schedule_id = o.schedule_id
         WHERE LOWER(TRIM(o.company_name))
               = LOWER(TRIM(?))
-          AND ABS(o.final_home - ?) <= ?
-          AND ABS(o.final_draw - ?) <= ?
-          AND ABS(o.final_away - ?) <= ?
+
+          AND ROUND(CAST(o.final_home AS REAL), 2)
+              = ROUND(CAST(? AS REAL), 2)
+
+          AND ROUND(CAST(o.final_draw AS REAL), 2)
+              = ROUND(CAST(? AS REAL), 2)
+
+          AND ROUND(CAST(o.final_away AS REAL), 2)
+              = ROUND(CAST(? AS REAL), 2)
+
         ORDER BY m.match_date DESC
         """,
         (
-            company_name,
-            float(home_odds),
-            float(tolerance),
-            float(draw_odds),
-            float(tolerance),
-            float(away_odds),
-            float(tolerance)
+            str(company_name),
+            home_odds,
+            draw_odds,
+            away_odds
         ),
         fetch=True
     )
@@ -1506,7 +1530,7 @@ def search_same_odds(
 
 
 # ============================================================
-# 수동 분석용 전체 동일배당 검색
+# 전체 업체 완전 동일배당 검색
 # ============================================================
 
 def search_same_odds_all_companies(
@@ -1515,6 +1539,21 @@ def search_same_odds_all_companies(
     away_odds,
     tolerance=0.0001
 ):
+
+    home_odds = round(
+        float(home_odds),
+        2
+    )
+
+    draw_odds = round(
+        float(draw_odds),
+        2
+    )
+
+    away_odds = round(
+        float(away_odds),
+        2
+    )
 
     rows = _execute(
         """
@@ -1533,18 +1572,22 @@ def search_same_odds_all_companies(
         FROM odds o
         JOIN matches m
           ON m.schedule_id = o.schedule_id
-        WHERE ABS(o.final_home - ?) <= ?
-          AND ABS(o.final_draw - ?) <= ?
-          AND ABS(o.final_away - ?) <= ?
+
+        WHERE ROUND(CAST(o.final_home AS REAL), 2)
+              = ROUND(CAST(? AS REAL), 2)
+
+          AND ROUND(CAST(o.final_draw AS REAL), 2)
+              = ROUND(CAST(? AS REAL), 2)
+
+          AND ROUND(CAST(o.final_away AS REAL), 2)
+              = ROUND(CAST(? AS REAL), 2)
+
         ORDER BY m.match_date DESC
         """,
         (
-            float(home_odds),
-            float(tolerance),
-            float(draw_odds),
-            float(tolerance),
-            float(away_odds),
-            float(tolerance)
+            home_odds,
+            draw_odds,
+            away_odds
         ),
         fetch=True
     )
@@ -1565,6 +1608,27 @@ def search_same_odds_all_companies(
         }
         for row in rows
     ]
+
+
+# ============================================================
+# 완전 동일배당 개수
+# ============================================================
+
+def count_same_odds(
+    company_name,
+    home_odds,
+    draw_odds,
+    away_odds
+):
+
+    rows = search_same_odds(
+        company_name,
+        home_odds,
+        draw_odds,
+        away_odds
+    )
+
+    return len(rows)
 
 
 # ============================================================
@@ -1622,7 +1686,7 @@ def test_database_connection():
 def get_storage_usage():
 
     # --------------------------------------------------------
-    # Turso / libSQL
+    # Turso
     # --------------------------------------------------------
 
     if _use_turso():
@@ -1639,6 +1703,7 @@ def get_storage_usage():
             page_count = 0
 
             if rows:
+
                 page_count = int(
                     rows[0][0] or 0
                 )
@@ -1653,6 +1718,7 @@ def get_storage_usage():
             page_size = 0
 
             if rows:
+
                 page_size = int(
                     rows[0][0] or 0
                 )
@@ -1676,6 +1742,7 @@ def get_storage_usage():
             }
 
         except Exception:
+
             pass
 
     # --------------------------------------------------------
@@ -1704,6 +1771,7 @@ def get_storage_usage():
             }
 
     except Exception:
+
         pass
 
     return {
