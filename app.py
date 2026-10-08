@@ -4,7 +4,6 @@
 # Scoreman 자동수집 / 최종배당 / 실제결과 / 확률분석
 # ============================================================
 
-import os
 import time
 
 import streamlit as st
@@ -38,16 +37,6 @@ st.markdown(
         padding-top: 1rem;
         padding-left: 1rem;
         padding-right: 1rem;
-    }
-
-    .big-number {
-        font-size: 28px;
-        font-weight: 700;
-    }
-
-    .small-text {
-        color: #777;
-        font-size: 13px;
     }
 
     button {
@@ -101,168 +90,41 @@ st.caption(
 
 status = database.get_database_status()
 
-
-# 안전하게 숫자 가져오기
-matches_count = status.get(
-    "matches",
-    0,
-)
-
-odds_count = status.get(
-    "odds",
-    0,
-)
-
-bookmakers_count = status.get(
-    "bookmakers",
-    0,
-)
-
-
-# ============================================================
-# DB 저장용량
-# ============================================================
-
-def get_db_size_text():
-
-    # --------------------------------------------------------
-    # 1. database.py가 이미 용량을 반환하는 경우
-    # --------------------------------------------------------
-
-    possible_keys = [
-        "db_size_mb",
-        "database_size_mb",
-        "size_mb",
-        "db_size",
-        "database_size",
-    ]
-
-    for key in possible_keys:
-
-        value = status.get(key)
-
-        if value is not None:
-
-            try:
-
-                number = float(value)
-
-                return f"{number:,.2f} MB"
-
-            except Exception:
-                pass
-
-
-    # --------------------------------------------------------
-    # 2. database.py가 bytes를 반환하는 경우
-    # --------------------------------------------------------
-
-    possible_byte_keys = [
-        "db_size_bytes",
-        "database_size_bytes",
-        "size_bytes",
-    ]
-
-    for key in possible_byte_keys:
-
-        value = status.get(key)
-
-        if value is not None:
-
-            try:
-
-                number = float(value)
-
-                if number >= 1024 * 1024 * 1024:
-
-                    return (
-                        f"{number / (1024 * 1024 * 1024):,.2f} GB"
-                    )
-
-                return (
-                    f"{number / (1024 * 1024):,.2f} MB"
-                )
-
-            except Exception:
-                pass
-
-
-    # --------------------------------------------------------
-    # 3. 로컬 SQLite 파일 크기 확인
-    # --------------------------------------------------------
-
-    possible_files = [
-        "scoreman.db",
-        "historical_odds.db",
-    ]
-
-    for filename in possible_files:
-
-        try:
-
-            if os.path.exists(filename):
-
-                size = os.path.getsize(
-                    filename
-                )
-
-                if size >= 1024 * 1024 * 1024:
-
-                    return (
-                        f"{size / (1024 * 1024 * 1024):,.2f} GB"
-                    )
-
-                return (
-                    f"{size / (1024 * 1024):,.2f} MB"
-                )
-
-        except Exception:
-            pass
-
-
-    # --------------------------------------------------------
-    # 4. 원격 DB인데 database.py에서 용량을
-    #    제공하지 않는 경우
-    # --------------------------------------------------------
-
-    return "확인 중"
-
-
-db_size_text = get_db_size_text()
-
-
-# ============================================================
-# DB 상태 표시
-# ============================================================
-
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
 
     st.metric(
         "저장 경기",
-        f"{matches_count:,}",
+        f"{status['matches']:,}",
     )
 
 with c2:
 
     st.metric(
         "저장 최종배당",
-        f"{odds_count:,}",
+        f"{status['odds']:,}",
     )
 
 with c3:
 
     st.metric(
         "실제 저장 업체",
-        f"{bookmakers_count:,}",
+        f"{status['bookmakers']:,}",
     )
 
 with c4:
 
     st.metric(
         "DB 저장용량",
-        db_size_text,
+        status["db_size_text"],
+    )
+
+with c5:
+
+    st.metric(
+        "DB 방식",
+        status["db_mode"],
     )
 
 
@@ -284,7 +146,7 @@ tab1, tab2, tab3, tab4 = st.tabs(
 
 
 # ============================================================
-# TAB 1 수집
+# TAB 1
 # ============================================================
 
 with tab1:
@@ -366,7 +228,10 @@ with tab1:
             use_container_width=True,
         ):
 
-            if company_mode == "선택 업체만 수집":
+            if (
+                company_mode
+                == "선택 업체만 수집"
+            ):
 
                 if not selected_companies:
 
@@ -377,7 +242,8 @@ with tab1:
                 else:
 
                     ok, message = (
-                        collector.start_background_collection(
+                        collector
+                        .start_background_collection(
                             start_id,
                             end_id,
                             selected_companies,
@@ -387,14 +253,14 @@ with tab1:
 
                     if ok:
                         st.success(message)
-
                     else:
                         st.error(message)
 
             else:
 
                 ok, message = (
-                    collector.start_background_collection(
+                    collector
+                    .start_background_collection(
                         start_id,
                         end_id,
                         [],
@@ -404,7 +270,6 @@ with tab1:
 
                 if ok:
                     st.success(message)
-
                 else:
                     st.error(message)
 
@@ -428,9 +293,9 @@ with tab1:
                 )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # 진행상태
-    # --------------------------------------------------------
+    # ========================================================
 
     st.markdown(
         "### 📈 수집 상태"
@@ -438,7 +303,7 @@ with tab1:
 
     progress = collector.get_progress()
 
-    p1, p2, p3, p4 = st.columns(4)
+    p1, p2, p3, p4, p5 = st.columns(5)
 
     with p1:
 
@@ -469,6 +334,12 @@ with tab1:
             f"{progress['failed']:,}",
         )
 
+    with p5:
+
+        st.metric(
+            "저장 배당",
+            f"{progress['odds']:,}",
+        )
 
     st.progress(
         min(
@@ -480,20 +351,14 @@ with tab1:
         )
     )
 
-
     st.write(
         f"진행률: "
         f"{progress['percent']:.1f}%"
     )
 
-
-    st.write(
-        f"저장된 배당: "
-        f"{progress['odds']:,}"
-    )
-
-
-    if progress["last_completed_id"]:
+    if progress[
+        "last_completed_id"
+    ]:
 
         st.write(
             "마지막 완료 ID:",
@@ -503,9 +368,9 @@ with tab1:
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # 자동 새로고침
-    # --------------------------------------------------------
+    # ========================================================
 
     if progress["running"]:
 
@@ -514,9 +379,9 @@ with tab1:
         st.rerun()
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # 로그
-    # --------------------------------------------------------
+    # ========================================================
 
     show_log = st.checkbox(
         "📜 수집 로그 보기",
@@ -553,22 +418,18 @@ with tab2:
 
     bookmakers = database.get_bookmakers()
 
-    bookmaker_options = [
-        "전체 업체"
-    ] + [
-        x["bookmaker"]
-        for x in bookmakers
-    ]
+    bookmaker_options = (
+        ["전체 업체"]
+        + [
+            x["bookmaker"]
+            for x in bookmakers
+        ]
+    )
 
     selected_bookmaker = st.selectbox(
         "업체",
         bookmaker_options,
     )
-
-
-    # --------------------------------------------------------
-    # 데이터
-    # --------------------------------------------------------
 
     if selected_bookmaker == "전체 업체":
 
@@ -580,15 +441,13 @@ with tab2:
             selected_bookmaker
         )
 
-
-    # --------------------------------------------------------
-    # 기본 통계
-    # --------------------------------------------------------
-
     stats = analysis.analyze_rows(
         rows
     )
 
+    # --------------------------------------------------------
+    # 기본 결과
+    # --------------------------------------------------------
 
     c1, c2, c3, c4 = st.columns(4)
 
@@ -624,108 +483,55 @@ with tab2:
         )
 
 
-    # ========================================================
-    # 전체 경기 배당 대비 확률
-    # ========================================================
+    # --------------------------------------------------------
+    # 핵심 기능
+    # --------------------------------------------------------
 
     st.markdown(
-        "### 🎯 전체 경기 배당 대비 확률"
+        "### 📊 전체 경기 배당대비 확률"
     )
 
-    probability = (
-        analysis.overall_probability_analysis(
+    st.caption(
+        "각 경기의 최종 승/무/패 배당을 "
+        "시장확률로 환산한 평균값과 "
+        "실제 결과 발생률을 비교합니다."
+    )
+
+    probability_summary = (
+        analysis.probability_summary(
             rows
         )
     )
 
+    if probability_summary:
 
-    st.caption(
-        "배당 기대확률 = 각 경기 최종 1X2 배당을 "
-        "정규화한 확률의 평균 / "
-        "부족확률 = 실제 발생확률 - 배당 기대확률"
-    )
+        st.dataframe(
+            probability_summary,
+            use_container_width=True,
+            hide_index=True,
+        )
 
+        st.info(
+            "부족확률 = "
+            "배당기준 평균확률이 "
+            "실제 발생률보다 높은 만큼입니다."
+        )
 
-    probability_table = [
+    else:
 
-        {
-            "결과": "승",
-            "경기수":
-                probability["win"]["count"],
-            "배당 기대확률":
-                f"{probability['win']['expected_pct']:.2f}%",
-            "실제 발생확률":
-                f"{probability['win']['actual_pct']:.2f}%",
-            "부족확률":
-                f"{probability['win']['shortfall_pct']:+.2f}%",
-        },
-
-        {
-            "결과": "무",
-            "경기수":
-                probability["draw"]["count"],
-            "배당 기대확률":
-                f"{probability['draw']['expected_pct']:.2f}%",
-            "실제 발생확률":
-                f"{probability['draw']['actual_pct']:.2f}%",
-            "부족확률":
-                f"{probability['draw']['shortfall_pct']:+.2f}%",
-        },
-
-        {
-            "결과": "패",
-            "경기수":
-                probability["lose"]["count"],
-            "배당 기대확률":
-                f"{probability['lose']['expected_pct']:.2f}%",
-            "실제 발생확률":
-                f"{probability['lose']['actual_pct']:.2f}%",
-            "부족확률":
-                f"{probability['lose']['shortfall_pct']:+.2f}%",
-        },
-    ]
-
-
-    st.dataframe(
-        probability_table,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
-    st.info(
-        f"전체 분석 경기: {probability['total']:,}경기 · "
-        f"유효한 1X2 최종배당이 있는 경기: "
-        f"{probability['valid_odds_games']:,}경기"
-    )
+        st.info(
+            "확률을 계산할 수 있는 "
+            "데이터가 없습니다."
+        )
 
 
     # --------------------------------------------------------
-    # 부족확률 설명
+    # 실제 결과
     # --------------------------------------------------------
-
-    st.markdown(
-        """
-        **부족확률 해석**
-
-        `+` 값 → 실제 결과가 배당에서 예상한 것보다 많이 발생
-
-        `-` 값 → 실제 결과가 배당에서 예상한 것보다 적게 발생
-
-        예: 부족확률 `+3.50%`
-        → 실제 발생률이 배당 기대확률보다 3.50%p 높음
-        """
-    )
-
-
-    # ========================================================
-    # 결과별 실제 비율
-    # ========================================================
 
     st.markdown(
         "### 📌 결과별 실제 비율"
     )
-
 
     result_summary = (
         analysis.result_probability_summary(
@@ -733,47 +539,22 @@ with tab2:
         )
     )
 
-
     if result_summary:
 
-        result_display = []
-
-        for item in result_summary:
-
-            result_display.append(
-                {
-                    "결과":
-                        item["result"],
-
-                    "경기수":
-                        item["count"],
-
-                    "실제 발생확률":
-                        f"{item['actual_pct']:.2f}%",
-
-                    "배당 기대확률":
-                        f"{item['expected_pct']:.2f}%",
-
-                    "부족확률":
-                        f"{item['shortfall_pct']:+.2f}%",
-                }
-            )
-
         st.dataframe(
-            result_display,
+            result_summary,
             use_container_width=True,
             hide_index=True,
         )
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # 업체별
-    # ========================================================
+    # --------------------------------------------------------
 
     st.markdown(
         "### 🏢 업체별 통계"
     )
-
 
     bookmaker_stats = (
         analysis.analyze_by_bookmaker(
@@ -781,130 +562,125 @@ with tab2:
         )
     )
 
-
     if bookmaker_stats:
 
-        bookmaker_display = []
-
-        for item in bookmaker_stats:
-
-            bookmaker_display.append(
-                {
-                    "업체":
-                        item["bookmaker"],
-
-                    "경기수":
-                        item["total"],
-
-                    "승 실제":
-                        f"{item['win_actual_pct']:.2f}%",
-
-                    "승 기대":
-                        f"{item['win_expected_pct']:.2f}%",
-
-                    "승 부족":
-                        f"{item['win_shortfall_pct']:+.2f}%",
-
-                    "무 실제":
-                        f"{item['draw_actual_pct']:.2f}%",
-
-                    "무 기대":
-                        f"{item['draw_expected_pct']:.2f}%",
-
-                    "무 부족":
-                        f"{item['draw_shortfall_pct']:+.2f}%",
-
-                    "패 실제":
-                        f"{item['lose_actual_pct']:.2f}%",
-
-                    "패 기대":
-                        f"{item['lose_expected_pct']:.2f}%",
-
-                    "패 부족":
-                        f"{item['lose_shortfall_pct']:+.2f}%",
-                }
-            )
-
-
         st.dataframe(
-            bookmaker_display,
+            bookmaker_stats,
             use_container_width=True,
             hide_index=True,
         )
 
 
-    # ========================================================
-    # 최근 저장 경기
-    # ========================================================
+    # --------------------------------------------------------
+    # 최근 경기
+    # --------------------------------------------------------
 
     st.markdown(
         "### ⚽ 최근 저장 경기"
     )
 
-
     if rows:
 
         display_rows = []
 
+        for row in rows[:500]:
 
-        for row in rows[:200]:
+            item = (
+                analysis.add_probability_to_row(
+                    row
+                )
+            )
 
             display_rows.append(
                 {
                     "경기ID":
-                        row.get(
+                        item.get(
                             "schedule_id"
                         ),
 
                     "날짜":
-                        row.get(
+                        item.get(
                             "match_date"
                         ),
 
                     "홈":
-                        row.get(
+                        item.get(
                             "home_team"
                         ),
 
                     "원정":
-                        row.get(
+                        item.get(
                             "away_team"
                         ),
 
                     "결과":
-                        row.get(
+                        item.get(
                             "result"
                         ),
 
                     "업체":
-                        row.get(
+                        item.get(
                             "bookmaker"
                         ),
 
                     "승배당":
-                        row.get(
+                        item.get(
                             "final_home"
                         ),
 
                     "무배당":
-                        row.get(
+                        item.get(
                             "final_draw"
                         ),
 
                     "패배당":
-                        row.get(
+                        item.get(
                             "final_away"
+                        ),
+
+                    "승확률":
+                        (
+                            f"{item['win_probability']:.2f}%"
+                            if item.get(
+                                "win_probability"
+                            ) is not None
+                            else ""
+                        ),
+
+                    "무확률":
+                        (
+                            f"{item['draw_probability']:.2f}%"
+                            if item.get(
+                                "draw_probability"
+                            ) is not None
+                            else ""
+                        ),
+
+                    "패확률":
+                        (
+                            f"{item['lose_probability']:.2f}%"
+                            if item.get(
+                                "lose_probability"
+                            ) is not None
+                            else ""
+                        ),
+
+                    "실제결과확률":
+                        (
+                            f"{item['actual_probability']:.2f}%"
+                            if item.get(
+                                "actual_probability"
+                            ) is not None
+                            else ""
                         ),
                 }
             )
-
 
         st.dataframe(
             display_rows,
             use_container_width=True,
             hide_index=True,
         )
-
 
     else:
 
@@ -924,13 +700,12 @@ with tab3:
     )
 
     st.caption(
-        "입력한 승/무/패 배당과 "
-        "**완전히 동일한 배당**만 검색합니다."
+        "허용오차 없음 · "
+        "승/무/패 3개 배당이 완전히 같은 "
+        "과거 경기만 검색합니다."
     )
 
-
     c1, c2, c3 = st.columns(3)
-
 
     with c1:
 
@@ -942,7 +717,6 @@ with tab3:
             format="%.2f",
         )
 
-
     with c2:
 
         target_draw = st.number_input(
@@ -952,7 +726,6 @@ with tab3:
             step=0.01,
             format="%.2f",
         )
-
 
     with c3:
 
@@ -965,26 +738,14 @@ with tab3:
         )
 
 
-    # ========================================================
-    # 허용오차 입력 삭제
-    # ========================================================
-
-    st.success(
-        "허용오차: 0.00 "
-        "→ 세 배당이 완전히 동일한 경기만 검색합니다."
-    )
-
-
     bookmaker = st.selectbox(
         "분석 업체",
-        [
-            "전체 업체"
-        ]
+        ["전체 업체"]
         + [
             x["bookmaker"]
             for x in database.get_bookmakers()
         ],
-        key="same_odds_bookmaker",
+        key="same_bookmaker",
     )
 
 
@@ -1005,24 +766,16 @@ with tab3:
         use_container_width=True,
     ):
 
-        # ----------------------------------------------------
-        # tolerance를 아예 0으로 고정
-        # ----------------------------------------------------
-
         result = analysis.same_odds_analysis(
             rows,
             target_home,
             target_draw,
             target_away,
-            0.0,
         )
-
 
         stat = result["stats"]
 
-
         c1, c2, c3, c4 = st.columns(4)
-
 
         with c1:
 
@@ -1030,7 +783,6 @@ with tab3:
                 "동일배당 경기",
                 stat["total"],
             )
-
 
         with c2:
 
@@ -1040,7 +792,6 @@ with tab3:
                 f"({stat['win_pct']:.2f}%)",
             )
 
-
         with c3:
 
             st.metric(
@@ -1048,7 +799,6 @@ with tab3:
                 f"{stat['draw']} "
                 f"({stat['draw_pct']:.2f}%)",
             )
-
 
         with c4:
 
@@ -1060,116 +810,101 @@ with tab3:
 
 
         # ----------------------------------------------------
-        # 동일배당의 배당 대비 확률
+        # 동일배당 확률
         # ----------------------------------------------------
 
-        same_probability = result.get(
-            "probability"
+        st.markdown(
+            "### 📊 해당 배당의 시장확률"
         )
 
-
-        if same_probability:
-
-            st.markdown(
-                "### 📊 동일배당 확률 대비 결과"
+        probability = (
+            analysis.odds_probability(
+                target_home,
+                target_draw,
+                target_away,
             )
+        )
 
+        if probability:
 
-            same_table = [
+            pc1, pc2, pc3 = st.columns(3)
 
-                {
-                    "결과": "승",
-                    "배당 기대확률":
-                        f"{same_probability['win']['expected_pct']:.2f}%",
-                    "실제 발생확률":
-                        f"{same_probability['win']['actual_pct']:.2f}%",
-                    "부족확률":
-                        f"{same_probability['win']['shortfall_pct']:+.2f}%",
-                },
+            with pc1:
+                st.metric(
+                    "승 시장확률",
+                    f"{probability['home']:.2f}%",
+                )
 
-                {
-                    "결과": "무",
-                    "배당 기대확률":
-                        f"{same_probability['draw']['expected_pct']:.2f}%",
-                    "실제 발생확률":
-                        f"{same_probability['draw']['actual_pct']:.2f}%",
-                    "부족확률":
-                        f"{same_probability['draw']['shortfall_pct']:+.2f}%",
-                },
+            with pc2:
+                st.metric(
+                    "무 시장확률",
+                    f"{probability['draw']:.2f}%",
+                )
 
-                {
-                    "결과": "패",
-                    "배당 기대확률":
-                        f"{same_probability['lose']['expected_pct']:.2f}%",
-                    "실제 발생확률":
-                        f"{same_probability['lose']['actual_pct']:.2f}%",
-                    "부족확률":
-                        f"{same_probability['lose']['shortfall_pct']:+.2f}%",
-                },
-            ]
-
-
-            st.dataframe(
-                same_table,
-                use_container_width=True,
-                hide_index=True,
-            )
+            with pc3:
+                st.metric(
+                    "패 시장확률",
+                    f"{probability['away']:.2f}%",
+                )
 
 
         matched = result["rows"]
-
 
         if matched:
 
             display = []
 
-
             for row in matched[:500]:
+
+                item = (
+                    analysis.add_probability_to_row(
+                        row
+                    )
+                )
 
                 display.append(
                     {
                         "날짜":
-                            row.get(
+                            item.get(
                                 "match_date"
                             ),
 
                         "홈":
-                            row.get(
+                            item.get(
                                 "home_team"
                             ),
 
                         "원정":
-                            row.get(
+                            item.get(
                                 "away_team"
                             ),
 
                         "결과":
-                            row.get(
+                            item.get(
                                 "result"
                             ),
 
                         "업체":
-                            row.get(
+                            item.get(
                                 "bookmaker"
                             ),
 
                         "승":
-                            row.get(
+                            item.get(
                                 "final_home"
                             ),
 
                         "무":
-                            row.get(
+                            item.get(
                                 "final_draw"
                             ),
 
                         "패":
-                            row.get(
+                            item.get(
                                 "final_away"
                             ),
                     }
                 )
-
 
             st.dataframe(
                 display,
@@ -1177,16 +912,16 @@ with tab3:
                 hide_index=True,
             )
 
-
         else:
 
             st.warning(
-                "조건에 맞는 과거 경기가 없습니다."
+                "완전히 동일한 배당의 "
+                "과거 경기가 없습니다."
             )
 
 
 # ============================================================
-# TAB 4 수동 배당
+# TAB 4 배당 분석
 # ============================================================
 
 with tab4:
@@ -1200,9 +935,7 @@ with tab4:
         "승/무/패 시장확률을 계산합니다."
     )
 
-
     c1, c2, c3 = st.columns(3)
-
 
     with c1:
 
@@ -1215,7 +948,6 @@ with tab4:
             key="manual_home",
         )
 
-
     with c2:
 
         manual_draw = st.number_input(
@@ -1226,7 +958,6 @@ with tab4:
             format="%.2f",
             key="manual_draw",
         )
-
 
     with c3:
 
@@ -1251,7 +982,6 @@ with tab4:
 
         c1, c2, c3 = st.columns(3)
 
-
         with c1:
 
             st.metric(
@@ -1259,14 +989,12 @@ with tab4:
                 f"{probability['승']:.2f}%",
             )
 
-
         with c2:
 
             st.metric(
                 "무 확률",
                 f"{probability['무']:.2f}%",
             )
-
 
         with c3:
 
@@ -1280,7 +1008,6 @@ with tab4:
             "### 📊 확률"
         )
 
-
         st.bar_chart(
             probability
         )
@@ -1290,8 +1017,7 @@ with tab4:
             "### 🔊 결과 음성듣기"
         )
 
-
-        text = (
+        speech_text = (
             f"승리 확률 "
             f"{probability['승']:.1f} 퍼센트. "
             f"무승부 확률 "
@@ -1301,17 +1027,14 @@ with tab4:
         )
 
 
-        # ----------------------------------------------------
-        # 브라우저 음성
-        # ----------------------------------------------------
-
         st.components.v1.html(
             f"""
             <button
                 onclick="
-                const u = new SpeechSynthesisUtterance(
-                    `{text}`
-                );
+                const u =
+                    new SpeechSynthesisUtterance(
+                        `{speech_text}`
+                    );
                 u.lang='ko-KR';
                 u.rate=0.9;
                 speechSynthesis.cancel();
@@ -1332,7 +1055,6 @@ with tab4:
             height=60,
         )
 
-
     else:
 
         st.warning(
@@ -1341,12 +1063,24 @@ with tab4:
 
 
 # ============================================================
-# 하단
+# 하단 DB 상태
 # ============================================================
 
 st.divider()
 
+latest_status = (
+    database.get_database_status()
+)
+
 st.caption(
     "⚽ Scoreman 데이터 분석 시스템 · "
     "최종배당 기준"
-    )
+)
+
+st.caption(
+    f"🗄️ DB: "
+    f"{latest_status['db_size_text']} · "
+    f"경기 {latest_status['matches']:,}개 · "
+    f"배당 {latest_status['odds']:,}개 · "
+    f"업체 {latest_status['bookmakers']:,}개"
+                )
