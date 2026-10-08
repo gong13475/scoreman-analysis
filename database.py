@@ -2,19 +2,19 @@
 # database.py
 # ⚽ Scoreman 영구 데이터베이스
 #
-# 최종 수정
+# 기능
 # - Turso / libSQL 영구저장
 # - SQLite fallback
 # - 기존 DB 데이터 유지
 # - 기존 DB 구조 자동 마이그레이션
-# - collection_state 누락 컬럼 자동 추가
-# - odds UNIQUE 제약이 없어도 저장 가능
-# - 최종배당 UPDATE → INSERT 방식
 # - 경기 저장
+# - 최종배당 저장
 # - 완전 동일배당 검색
 # - 업체별 통계
-# - 수집 진행상태
+# - 수집 진행상태 저장
 # - 중지 후 이어받기
+# - collection_state 자동 보정
+# - odds UNIQUE 문제 자동 우회
 # ============================================================
 
 import os
@@ -22,9 +22,17 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 
+
+# ============================================================
+# libSQL
+# ============================================================
+
 try:
+
     import libsql_experimental as libsql
+
 except Exception:
+
     libsql = None
 
 
@@ -32,14 +40,20 @@ except Exception:
 # 기본 설정
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(
+    __file__
+).resolve().parent
 
-SQLITE_FILE = BASE_DIR / "scoreman.db"
+SQLITE_FILE = (
+    BASE_DIR / "scoreman.db"
+)
 
 
 # ============================================================
 # DB LOCK
 # ============================================================
+
+DB_LOCK = None
 
 try:
 
@@ -75,15 +89,19 @@ def _get_auth_token():
 
 
 # ============================================================
-# Turso 설정
+# Turso 설정 여부
 # ============================================================
 
 def is_turso_configured():
 
     return bool(
+
         _get_database_url()
+
         and _get_auth_token()
+
         and libsql is not None
+
     )
 
 
@@ -108,10 +126,15 @@ def get_connection():
 
         try:
 
-            return libsql.connect(
+            conn = libsql.connect(
+
                 database=url,
+
                 auth_token=token
+
             )
+
+            return conn
 
         except Exception:
 
@@ -160,9 +183,13 @@ def _rows_to_dicts(rows):
 
     for row in rows:
 
+        # SQLite Row
         try:
 
-            if isinstance(row, sqlite3.Row):
+            if isinstance(
+                row,
+                sqlite3.Row
+            ):
 
                 result.append(
                     dict(row)
@@ -171,11 +198,16 @@ def _rows_to_dicts(rows):
                 continue
 
         except Exception:
+
             pass
 
+        # libSQL Row
         try:
 
-            if hasattr(row, "keys"):
+            if hasattr(
+                row,
+                "keys"
+            ):
 
                 result.append({
 
@@ -188,8 +220,10 @@ def _rows_to_dicts(rows):
                 continue
 
         except Exception:
+
             pass
 
+        # 일반 tuple / mapping
         try:
 
             result.append(
@@ -217,15 +251,11 @@ def _execute(
 
     conn = None
 
-    acquired = False
-
     try:
 
         if DB_LOCK:
 
             DB_LOCK.acquire()
-
-            acquired = True
 
         conn = get_connection()
 
@@ -280,103 +310,459 @@ def _execute(
 
             pass
 
-        if acquired:
+        if DB_LOCK:
 
             DB_LOCK.release()
 
 
 # ============================================================
-# 컬럼 존재 확인
+# 컬럼 존재 여부
 # ============================================================
 
-def _get_columns(
-    conn,
-    table_name
+def _column_exists(
+    cur,
+    table_name,
+    column_name
 ):
-
-    columns = set()
 
     try:
 
-        cur = conn.cursor()
-
         rows = cur.execute(
-            f"PRAGMA table_info({table_name})"
+
+            f"""
+            PRAGMA table_info(
+                {table_name}
+            )
+            """
+
         ).fetchall()
 
         for row in rows:
 
             try:
 
-                columns.add(
-                    str(row[1])
+                name = str(
+                    row[1]
                 )
 
             except Exception:
 
-                pass
+                try:
+
+                    name = str(
+                        row["name"]
+                    )
+
+                except Exception:
+
+                    continue
+
+            if name == column_name:
+
+                return True
 
     except Exception:
 
-        pass
+        return False
 
-    return columns
+    return False
 
 
 # ============================================================
 # 컬럼 자동 추가
 # ============================================================
 
-def _add_missing_columns(
-    conn,
+def _add_column_if_missing(
+    cur,
     table_name,
-    required_columns
+    column_name,
+    column_type
 ):
 
-    existing = _get_columns(
-        conn,
-        table_name
-    )
+    if _column_exists(
 
-    cur = conn.cursor()
+        cur,
+        table_name,
+        column_name
 
-    for column_name, column_type in required_columns.items():
+    ):
 
-        if column_name not in existing:
+        return
 
-            try:
+    try:
 
-                cur.execute(
+        cur.execute(
 
-                    f"""
-                    ALTER TABLE {table_name}
-                    ADD COLUMN {column_name} {column_type}
-                    """
+            f"""
+            ALTER TABLE {table_name}
+            ADD COLUMN {column_name}
+            {column_type}
+            """
 
-                )
+        )
 
-            except Exception:
+    except Exception:
 
-                pass
+        pass
 
 
 # ============================================================
-# DB 초기화 + 자동 마이그레이션
+# 기존 DB 자동 마이그레이션
+# ============================================================
+
+def _migrate_existing_database(cur):
+
+    # ========================================================
+    # matches
+    # ========================================================
+
+    _add_column_if_missing(
+        cur,
+        "matches",
+        "match_date",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "matches",
+        "home_team",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "matches",
+        "away_team",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "matches",
+        "home_score",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "matches",
+        "away_score",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "matches",
+        "result",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "matches",
+        "source",
+        "TEXT"
+    )
+
+    # ========================================================
+    # odds
+    # ========================================================
+
+    _add_column_if_missing(
+        cur,
+        "odds",
+        "schedule_id",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "odds",
+        "company_id",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "odds",
+        "company_name",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "odds",
+        "final_home",
+        "REAL"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "odds",
+        "final_draw",
+        "REAL"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "odds",
+        "final_away",
+        "REAL"
+    )
+
+    # ========================================================
+    # collection_state
+    # ========================================================
+
+    _add_column_if_missing(
+        cur,
+        "collection_state",
+        "start_id",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "collection_state",
+        "end_id",
+        "INTEGER"
+    )
+
+    # ★ 현재 발생한 오류 해결
+    _add_column_if_missing(
+        cur,
+        "collection_state",
+        "current_id",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "collection_state",
+        "last_completed_id",
+        "INTEGER"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "collection_state",
+        "running",
+        "INTEGER DEFAULT 0"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "collection_state",
+        "stopped",
+        "INTEGER DEFAULT 0"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "collection_state",
+        "updated_at",
+        "TEXT"
+    )
+
+    # ========================================================
+    # collection_logs
+    # ========================================================
+
+    _add_column_if_missing(
+        cur,
+        "collection_logs",
+        "created_at",
+        "TEXT"
+    )
+
+    _add_column_if_missing(
+        cur,
+        "collection_logs",
+        "message",
+        "TEXT"
+    )
+
+    # ========================================================
+    # odds 중복 제거
+    # ========================================================
+
+    try:
+
+        cur.execute(
+            """
+            DELETE FROM odds
+
+            WHERE id NOT IN (
+
+                SELECT MIN(id)
+
+                FROM odds
+
+                GROUP BY
+                    schedule_id,
+                    company_name
+
+            )
+            """
+        )
+
+    except Exception:
+
+        pass
+
+    # ========================================================
+    # odds UNIQUE INDEX
+    #
+    # 기존 테이블에 UNIQUE 제약이 없어도
+    # UNIQUE INDEX를 새로 생성
+    # ========================================================
+
+    try:
+
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+            uq_odds_schedule_company
+
+            ON odds(
+                schedule_id,
+                company_name
+            )
+            """
+        )
+
+    except Exception:
+
+        pass
+
+    # ========================================================
+    # 일반 인덱스
+    # ========================================================
+
+    try:
+
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_odds_schedule
+
+            ON odds(schedule_id)
+            """
+        )
+
+    except Exception:
+
+        pass
+
+    try:
+
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_odds_company
+
+            ON odds(company_name)
+            """
+        )
+
+    except Exception:
+
+        pass
+
+    try:
+
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_matches_date
+
+            ON matches(match_date)
+            """
+        )
+
+    except Exception:
+
+        pass
+
+    try:
+
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_odds_exact
+
+            ON odds(
+                company_name,
+                final_home,
+                final_draw,
+                final_away
+            )
+            """
+        )
+
+    except Exception:
+
+        pass
+
+    # ========================================================
+    # 상태 기본값
+    # ========================================================
+
+    try:
+
+        cur.execute(
+            """
+            UPDATE collection_state
+
+            SET
+
+                current_id =
+                    COALESCE(
+                        current_id,
+                        0
+                    ),
+
+                last_completed_id =
+                    COALESCE(
+                        last_completed_id,
+                        0
+                    ),
+
+                running =
+                    COALESCE(
+                        running,
+                        0
+                    ),
+
+                stopped =
+                    COALESCE(
+                        stopped,
+                        0
+                    )
+
+            WHERE id = 1
+            """
+        )
+
+    except Exception:
+
+        pass
+
+
+# ============================================================
+# DB 초기화
 # ============================================================
 
 def init_database():
 
     conn = None
 
-    acquired = False
-
     try:
 
         if DB_LOCK:
 
             DB_LOCK.acquire()
-
-            acquired = True
 
         conn = get_connection()
 
@@ -438,6 +824,8 @@ def init_database():
 
         # ====================================================
         # collection_state
+        #
+        # 기존 DB에는 없을 수 있음
         # ====================================================
 
         cur.execute(
@@ -483,266 +871,12 @@ def init_database():
         )
 
         # ====================================================
-        # 기존 matches 구조 보정
+        # ★ 기존 DB 자동 보정
         # ====================================================
 
-        _add_missing_columns(
-
-            conn,
-
-            "matches",
-
-            {
-
-                "match_date": "TEXT",
-
-                "home_team": "TEXT",
-
-                "away_team": "TEXT",
-
-                "home_score": "INTEGER",
-
-                "away_score": "INTEGER",
-
-                "result": "TEXT",
-
-                "source": "TEXT"
-
-            }
-
+        _migrate_existing_database(
+            cur
         )
-
-        # ====================================================
-        # 기존 odds 구조 보정
-        # ====================================================
-
-        _add_missing_columns(
-
-            conn,
-
-            "odds",
-
-            {
-
-                "schedule_id": "TEXT",
-
-                "company_id": "TEXT",
-
-                "company_name": "TEXT",
-
-                "final_home": "REAL",
-
-                "final_draw": "REAL",
-
-                "final_away": "REAL"
-
-            }
-
-        )
-
-        # ====================================================
-        # 기존 collection_state 구조 보정
-        # ====================================================
-
-        _add_missing_columns(
-
-            conn,
-
-            "collection_state",
-
-            {
-
-                "start_id": "INTEGER",
-
-                "end_id": "INTEGER",
-
-                "current_id": "INTEGER",
-
-                "last_completed_id": "INTEGER",
-
-                "running": "INTEGER DEFAULT 0",
-
-                "stopped": "INTEGER DEFAULT 0",
-
-                "updated_at": "TEXT"
-
-            }
-
-        )
-
-        # ====================================================
-        # 기존 collection_logs 구조 보정
-        # ====================================================
-
-        _add_missing_columns(
-
-            conn,
-
-            "collection_logs",
-
-            {
-
-                "created_at": "TEXT",
-
-                "message": "TEXT"
-
-            }
-
-        )
-
-        # ====================================================
-        # 인덱스
-        # ====================================================
-
-        try:
-
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_odds_schedule
-                ON odds(schedule_id)
-                """
-            )
-
-        except Exception:
-
-            pass
-
-        try:
-
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_odds_company
-                ON odds(company_name)
-                """
-            )
-
-        except Exception:
-
-            pass
-
-        try:
-
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_matches_date
-                ON matches(match_date)
-                """
-            )
-
-        except Exception:
-
-            pass
-
-        try:
-
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_odds_exact
-                ON odds(
-                    company_name,
-                    final_home,
-                    final_draw,
-                    final_away
-                )
-                """
-            )
-
-        except Exception:
-
-            pass
-
-        # ====================================================
-        # 중복 배당 정리용 인덱스
-        #
-        # UNIQUE 제약이 이미 있는 DB에서는 그대로 사용
-        #
-        # 기존 중복 데이터가 있어도 프로그램 전체가
-        # 죽지 않도록 예외 처리
-        # ====================================================
-
-        try:
-
-            cur.execute(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS
-                uq_odds_schedule_company
-                ON odds(
-                    schedule_id,
-                    company_name
-                )
-                """
-            )
-
-        except Exception:
-
-            # 기존 중복 데이터 때문에 생성 실패할 수 있음.
-            # save_odds()는 UPDATE → INSERT 방식이라
-            # 이 인덱스가 없어도 정상 저장 가능.
-            pass
-
-        # ====================================================
-        # collection_state 기본 행
-        # ====================================================
-
-        try:
-
-            cur.execute(
-                """
-                SELECT id
-                FROM collection_state
-                WHERE id = 1
-                LIMIT 1
-                """
-            )
-
-            state = cur.fetchone()
-
-            if state is None:
-
-                cur.execute(
-
-                    """
-                    INSERT INTO collection_state (
-                        id,
-                        start_id,
-                        end_id,
-                        current_id,
-                        last_completed_id,
-                        running,
-                        stopped,
-                        updated_at
-                    )
-                    VALUES (
-                        1,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        ?
-                    )
-                    """,
-
-                    (
-                        datetime.now().strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        ),
-                    )
-
-                )
-
-        except Exception:
-
-            pass
-
-        # ====================================================
-        # 저장
-        # ====================================================
 
         conn.commit()
 
@@ -758,7 +892,7 @@ def init_database():
 
             pass
 
-        if acquired:
+        if DB_LOCK:
 
             DB_LOCK.release()
 
@@ -779,7 +913,6 @@ def save_match(
 ):
 
     sql = """
-
         INSERT INTO matches (
 
             schedule_id,
@@ -819,7 +952,6 @@ def save_match(
 
             source =
                 excluded.source
-
     """
 
     return _execute(
@@ -854,9 +986,8 @@ def save_match(
 # ============================================================
 # 배당 저장
 #
-# 중요:
-# 기존 DB에 UNIQUE(schedule_id, company_name)이 없어도
-# 정상 저장되도록 UPDATE → INSERT 방식 사용
+# ON CONFLICT 사용 안 함
+# → 기존 Turso DB 구조에서도 안전
 # ============================================================
 
 def save_odds(
@@ -892,9 +1023,13 @@ def save_odds(
             f"배당 숫자 변환 실패: {e}"
         )
 
-    # --------------------------------------------------------
-    # 회사명
-    # --------------------------------------------------------
+    schedule_id = str(
+        schedule_id
+    )
+
+    company_id = str(
+        company_id or ""
+    )
 
     company_name = str(
         company_name or ""
@@ -906,34 +1041,16 @@ def save_odds(
             "회사명이 없습니다."
         )
 
-    schedule_id = str(
-        schedule_id
-    )
+    # ========================================================
+    # 기존 데이터 검색
+    # ========================================================
 
-    company_id = str(
-        company_id or ""
-    )
+    existing = _execute(
 
-    # --------------------------------------------------------
-    # UPDATE 먼저
-    #
-    # 기존 동일 경기 + 동일 업체가 있으면
-    # 새 배당으로 갱신
-    # --------------------------------------------------------
+        """
+        SELECT id
 
-    update_sql = """
-
-        UPDATE odds
-
-        SET
-
-            company_id = ?,
-
-            final_home = ?,
-
-            final_draw = ?,
-
-            final_away = ?
+        FROM odds
 
         WHERE schedule_id = ?
 
@@ -945,31 +1062,57 @@ def save_odds(
                 TRIM(?)
               )
 
-    """
+        LIMIT 1
+        """,
 
-    conn = None
+        (
 
-    acquired = False
+            schedule_id,
 
-    try:
+            company_name
 
-        if DB_LOCK:
+        ),
 
-            DB_LOCK.acquire()
+        fetchone=True
 
-            acquired = True
+    )
 
-        conn = get_connection()
+    # ========================================================
+    # 기존 업체 → UPDATE
+    # ========================================================
 
-        cur = conn.cursor()
+    if existing:
 
-        cur.execute(
+        row_id = existing.get(
+            "id"
+        )
 
-            update_sql,
+        result = _execute(
+
+            """
+            UPDATE odds
+
+            SET
+
+                company_id = ?,
+
+                company_name = ?,
+
+                final_home = ?,
+
+                final_draw = ?,
+
+                final_away = ?
+
+            WHERE id = ?
+
+            """,
 
             (
 
                 company_id,
+
+                company_name,
 
                 final_home,
 
@@ -977,105 +1120,71 @@ def save_odds(
 
                 final_away,
 
-                schedule_id,
+                row_id
 
-                company_name
+            ),
 
-            )
-
-        )
-
-        updated = getattr(
-            cur,
-            "rowcount",
-            0
-        )
-
-        # ----------------------------------------------------
-        # 이미 있으면 UPDATE 완료
-        # ----------------------------------------------------
-
-        if updated and int(updated) > 0:
-
-            conn.commit()
-
-            return True
-
-        # ----------------------------------------------------
-        # 없으면 INSERT
-        # ----------------------------------------------------
-
-        cur.execute(
-
-            """
-            INSERT INTO odds (
-
-                schedule_id,
-                company_id,
-                company_name,
-                final_home,
-                final_draw,
-                final_away
-
-            )
-
-            VALUES (?, ?, ?, ?, ?, ?)
-
-            """,
-
-            (
-
-                schedule_id,
-
-                company_id,
-
-                company_name,
-
-                final_home,
-
-                final_draw,
-
-                final_away
-
-            )
+            commit=True
 
         )
 
-        conn.commit()
+        if not result:
+
+            raise RuntimeError(
+                "최종배당 수정 실패"
+            )
 
         return True
 
-    except Exception as e:
+    # ========================================================
+    # 신규 업체 → INSERT
+    # ========================================================
 
-        try:
+    result = _execute(
 
-            if conn:
+        """
+        INSERT INTO odds (
 
-                conn.rollback()
+            schedule_id,
+            company_id,
+            company_name,
+            final_home,
+            final_draw,
+            final_away
 
-        except Exception:
-
-            pass
-
-        raise ValueError(
-            f"최종배당 저장 실패: {e}"
         )
 
-    finally:
+        VALUES (?, ?, ?, ?, ?, ?)
 
-        try:
+        """,
 
-            if conn:
+        (
 
-                conn.close()
+            schedule_id,
 
-        except Exception:
+            company_id,
 
-            pass
+            company_name,
 
-        if acquired:
+            final_home,
 
-            DB_LOCK.release()
+            final_draw,
+
+            final_away
+
+        ),
+
+        commit=True
+
+    )
+
+    if not result:
+
+        raise RuntimeError(
+            "최종배당 저장 실패"
+        )
+
+    return True
 
 
 # ============================================================
@@ -1089,7 +1198,6 @@ def match_exists(
     row = _execute(
 
         """
-
         SELECT schedule_id
 
         FROM matches
@@ -1097,7 +1205,6 @@ def match_exists(
         WHERE schedule_id = ?
 
         LIMIT 1
-
         """,
 
         (
@@ -1122,7 +1229,6 @@ def get_match(
     return _execute(
 
         """
-
         SELECT *
 
         FROM matches
@@ -1130,7 +1236,6 @@ def get_match(
         WHERE schedule_id = ?
 
         LIMIT 1
-
         """,
 
         (
@@ -1151,7 +1256,6 @@ def get_all_matches():
     return _execute(
 
         """
-
         SELECT *
 
         FROM matches
@@ -1189,7 +1293,6 @@ def get_odds_by_match(
     return _execute(
 
         """
-
         SELECT *
 
         FROM odds
@@ -1218,7 +1321,6 @@ def get_company_list():
     rows = _execute(
 
         """
-
         SELECT DISTINCT
 
             company_name
@@ -1227,7 +1329,7 @@ def get_company_list():
 
         WHERE company_name IS NOT NULL
 
-          AND TRIM(company_name) <> ''
+        AND TRIM(company_name) <> ''
 
         ORDER BY company_name
 
@@ -1256,7 +1358,7 @@ def get_company_list():
 
 
 # ============================================================
-# 업체별 저장 경기 수
+# 업체별 경기 수
 # ============================================================
 
 def get_company_counts():
@@ -1264,12 +1366,13 @@ def get_company_counts():
     rows = _execute(
 
         """
-
         SELECT
 
             company_name,
 
-            COUNT(DISTINCT schedule_id) AS cnt
+            COUNT(
+                DISTINCT schedule_id
+            ) AS cnt
 
         FROM odds
 
@@ -1300,6 +1403,7 @@ def get_company_counts():
                 "cnt",
                 0
             )
+
             or 0
 
         )
@@ -1316,7 +1420,6 @@ def get_database_status():
     row = _execute(
 
         """
-
         SELECT
 
             (
@@ -1338,7 +1441,7 @@ def get_database_status():
 
                 WHERE company_name IS NOT NULL
 
-                  AND TRIM(company_name) <> ''
+                AND TRIM(company_name) <> ''
 
             ) AS bookmakers
 
@@ -1363,7 +1466,6 @@ def get_database_status():
     return {
 
         "matches":
-
             int(
                 row.get(
                     "matches",
@@ -1373,7 +1475,6 @@ def get_database_status():
             ),
 
         "odds":
-
             int(
                 row.get(
                     "odds",
@@ -1383,7 +1484,6 @@ def get_database_status():
             ),
 
         "bookmakers":
-
             int(
                 row.get(
                     "bookmakers",
@@ -1444,13 +1544,12 @@ def get_storage_usage():
     try:
 
         # ----------------------------------------------------
-        # Turso / libSQL
+        # Turso / SQLite 공통
         # ----------------------------------------------------
 
         row = _execute(
 
             """
-
             SELECT
 
                 page_count,
@@ -1474,6 +1573,7 @@ def get_storage_usage():
                     "page_count",
                     0
                 )
+
                 or 0
 
             )
@@ -1484,6 +1584,7 @@ def get_storage_usage():
                     "page_size",
                     0
                 )
+
                 or 0
 
             )
@@ -1498,14 +1599,18 @@ def get_storage_usage():
             size_bytes = 0
 
         size_mb = (
+
             size_bytes
             / 1024
             / 1024
+
         )
 
         size_gb = (
+
             size_mb
             / 1024
+
         )
 
         return {
@@ -1576,7 +1681,6 @@ def search_same_odds(
     return _execute(
 
         """
-
         SELECT
 
             m.schedule_id,
@@ -1620,11 +1724,11 @@ def search_same_odds(
                 TRIM(?)
               )
 
-          AND o.final_home = ?
+        AND o.final_home = ?
 
-          AND o.final_draw = ?
+        AND o.final_draw = ?
 
-          AND o.final_away = ?
+        AND o.final_away = ?
 
         ORDER BY
 
@@ -1670,48 +1774,57 @@ def save_collection_state(
         "%Y-%m-%d %H:%M:%S"
     )
 
-    # --------------------------------------------------------
-    # 기존 DB 구조가 혹시 남아 있더라도
-    # 먼저 init_database()로 보정
-    # --------------------------------------------------------
+    # ========================================================
+    # 먼저 기존 상태 확인
+    # ========================================================
 
-    try:
+    existing = _execute(
 
-        init_database()
+        """
+        SELECT id
 
-    except Exception:
-
-        pass
-
-    sql = """
-
-        UPDATE collection_state
-
-        SET
-
-            start_id = ?,
-
-            end_id = ?,
-
-            current_id = ?,
-
-            last_completed_id = ?,
-
-            running = ?,
-
-            stopped = ?,
-
-            updated_at = ?
+        FROM collection_state
 
         WHERE id = 1
 
-    """
+        LIMIT 1
 
-    try:
+        """,
 
-        updated = _execute(
+        fetchone=True
 
-            sql,
+    )
+
+    # ========================================================
+    # UPDATE
+    # ========================================================
+
+    if existing:
+
+        return _execute(
+
+            """
+            UPDATE collection_state
+
+            SET
+
+                start_id = ?,
+
+                end_id = ?,
+
+                current_id = ?,
+
+                last_completed_id = ?,
+
+                running = ?,
+
+                stopped = ?,
+
+                updated_at = ?
+
+            WHERE id = 1
+
+            """,
 
             (
 
@@ -1721,7 +1834,9 @@ def save_collection_state(
 
                 int(current_id or 0),
 
-                int(last_completed_id or 0),
+                int(
+                    last_completed_id or 0
+                ),
 
                 1 if running else 0,
 
@@ -1735,22 +1850,13 @@ def save_collection_state(
 
         )
 
-        if updated:
-
-            return True
-
-    except Exception:
-
-        pass
-
-    # --------------------------------------------------------
-    # 혹시 기존 state가 없으면 INSERT
-    # --------------------------------------------------------
+    # ========================================================
+    # INSERT
+    # ========================================================
 
     return _execute(
 
         """
-
         INSERT INTO collection_state (
 
             id,
@@ -1774,7 +1880,13 @@ def save_collection_state(
         VALUES (
 
             1,
-            ?, ?, ?, ?, ?, ?, ?
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?
 
         )
 
@@ -1788,7 +1900,9 @@ def save_collection_state(
 
             int(current_id or 0),
 
-            int(last_completed_id or 0),
+            int(
+                last_completed_id or 0
+            ),
 
             1 if running else 0,
 
@@ -1809,18 +1923,9 @@ def save_collection_state(
 
 def get_collection_state():
 
-    try:
-
-        init_database()
-
-    except Exception:
-
-        pass
-
     row = _execute(
 
         """
-
         SELECT *
 
         FROM collection_state
@@ -1853,7 +1958,6 @@ def save_collection_log(
     return _execute(
 
         """
-
         INSERT INTO collection_logs (
 
             created_at,
@@ -1889,7 +1993,6 @@ def get_collection_logs(
     rows = _execute(
 
         """
-
         SELECT
 
             created_at,
@@ -1922,19 +2025,32 @@ def get_collection_logs(
 
 if __name__ == "__main__":
 
+    print(
+        "DB 초기화 시작..."
+    )
+
     init_database()
 
     print(
-        "DB 정보:",
+        "DB 정보:"
+    )
+
+    print(
         get_database_info()
     )
 
     print(
-        "DB 상태:",
+        "DB 상태:"
+    )
+
+    print(
         get_database_status()
     )
 
     print(
-        "수집 상태:",
-        get_collection_state()
+        "수집 상태:"
     )
+
+    print(
+        get_collection_state()
+)
