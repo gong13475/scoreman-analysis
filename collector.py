@@ -1,33 +1,26 @@
 # ============================================================
 # collector.py
-# ⚽ Scoreman 전종목 해외배당 자동수집기
-#
-# 기존 기능 유지 + 안정화 확장
+# ⚽ Scoreman 자동 수집기
 #
 # 기능
-# - Scoreman 경기 ID 수집
-# - 경기 결과 수집
-# - 전체 해외업체 최종배당 수집
-# - 업체 수동 선택
-# - 백그라운드 수집
-# - 수집 시작 / 중지
-# - 진행률
-# - 신규 / 기존 / 실패 / 배당없음
-# - 마지막 성공 ID 저장
-# - 중지 후 이어받기
-# - Turso / SQLite database.py 연동
-# - 실패 자동 재시도
-# - DB 저장 재시도
-# - Streamlit 화면을 닫아도 서버에서 실행
+# - Scoreman 경기 페이지 수집
+# - 실제 경기 결과 수집
+# - 최종 해외배당 수집
+# - 전체 업체 자동수집
+# - 특정 업체 수집
+# - 백그라운드 실행
+# - 중지
+# - 중지 지점 이어받기
+# - 실패 1회 재시도
 # ============================================================
 
 import json
 import re
 import threading
 import time
-from datetime import datetime
 
 import requests
+from bs4 import BeautifulSoup
 
 import database
 
@@ -39,72 +32,113 @@ import database
 BASE_URL = "https://www.scoreman123.com"
 
 MATCH_URL = (
-    BASE_URL + "/match/data-{schedule_id}"
+    BASE_URL +
+    "/match/data-{schedule_id}"
 )
 
 ODDS_URL = (
-    BASE_URL + "/ajax/soccerajax"
+    BASE_URL +
+    "/ajax/soccerajax"
+    "?type=14&t=1&id={schedule_id}&h=0"
 )
 
+
+# ============================================================
+# HTTP
+# ============================================================
+
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Linux; Android 10) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/130.0 Mobile Safari/537.36"
-    ),
-    "Referer": BASE_URL + "/",
-    "Accept": "application/json,text/plain,*/*",
+
+    "User-Agent":
+        (
+            "Mozilla/5.0 "
+            "(Linux; Android 10) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/130.0 Mobile Safari/537.36"
+        ),
+
+    "Accept":
+        "text/html,application/xhtml+xml,"
+        "application/json,text/plain,*/*",
+
+    "Referer":
+        BASE_URL + "/"
+
 }
-
-REQUEST_TIMEOUT = 15
-
-# 기존: 실패 1회 자동 재시도
-# 총 2회 시도
-MAX_RETRY = 2
-
-# DB 저장 재시도
-DB_RETRY = 4
 
 
 # ============================================================
 # 작업 상태
 # ============================================================
 
-_JOB_LOCK = threading.RLock()
+JOB_LOCK = threading.RLock()
 
 JOB = {
-    "running": False,
-    "finished": False,
-    "stopped": False,
 
-    "start_id": 0,
-    "end_id": 0,
+    "running": False,
+
+    "finished": False,
 
     "current": 0,
+
     "total": 0,
 
     "success": 0,
+
     "exists": 0,
+
     "failed": 0,
+
     "no_odds": 0,
+
     "odds": 0,
+
+    "start_id": 0,
+
+    "end_id": 0,
 
     "last_completed_id": 0,
 
     "selected_companies": None,
 
-    "log": "",
-
-    "result": None,
+    "result": {},
 
     "error": "",
+
+    "stopped": False,
+
+    "log": ""
+
 }
 
+STOP_EVENT = threading.Event()
+WORKER = None
 
-_STOP_EVENT = threading.Event()
 
-_WORKER = None
+# ============================================================
+# 숫자
+# ============================================================
+
+def to_float(value):
+
+    try:
+
+        if value is None:
+            return None
+
+        text = str(value).strip()
+
+        if not text:
+            return None
+
+        return float(
+            text.replace(",", "")
+        )
+
+    except Exception:
+
+        return None
 
 
 # ============================================================
@@ -113,806 +147,713 @@ _WORKER = None
 
 def _log(message):
 
-    timestamp = datetime.now().strftime(
-        "%H:%M:%S"
-    )
+    text = str(message)
 
-    line = f"[{timestamp}] {message}"
+    try:
+        database.save_collection_log(text)
+    except Exception:
+        pass
 
-    with _JOB_LOCK:
+    with JOB_LOCK:
 
-        old = JOB.get(
-            "log",
-            ""
+        old = str(
+            JOB.get("log", "")
+            or ""
         )
 
         JOB["log"] = (
             old
-            + line
+            + text
             + "\n"
         )
 
-        if len(JOB["log"]) > 30000:
+        # 화면에 너무 많은 로그가 쌓이지 않도록
+        lines = JOB["log"].splitlines()
 
-            JOB["log"] = JOB["log"][-30000:]
+        if len(lines) > 500:
 
-
-# ============================================================
-# HTTP 요청
-# ============================================================
-
-def _request(
-    url,
-    params=None,
-    timeout=REQUEST_TIMEOUT,
-):
-
-    return requests.get(
-        url,
-        params=params,
-        headers=HEADERS,
-        timeout=timeout,
-    )
-
-
-# ============================================================
-# 숫자 변환
-# ============================================================
-
-def _to_float(value):
-
-    try:
-
-        if value is None:
-            return None
-
-        value = str(
-            value
-        ).strip()
-
-        if not value:
-            return None
-
-        value = value.replace(
-            ",",
-            ""
-        )
-
-        number = float(
-            value
-        )
-
-        if number <= 0:
-            return None
-
-        return number
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# 정수 변환
-# ============================================================
-
-def _safe_int(value):
-
-    try:
-
-        if value is None:
-            return None
-
-        found = re.search(
-            r"-?\d+",
-            str(value),
-        )
-
-        if not found:
-            return None
-
-        return int(
-            found.group(0)
-        )
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# 경기 페이지
-# ============================================================
-
-def _get_match_data(schedule_id):
-
-    url = MATCH_URL.format(
-        schedule_id=schedule_id
-    )
-
-    response = _request(
-        url,
-        timeout=REQUEST_TIMEOUT,
-    )
-
-    if response.status_code != 200:
-
-        raise RuntimeError(
-            f"HTTP={response.status_code}"
-        )
-
-    html = response.text
-
-    if not html:
-
-        raise RuntimeError(
-            "빈 경기 페이지"
-        )
-
-    return html
+            JOB["log"] = "\n".join(
+                lines[-500:]
+            )
 
 
 # ============================================================
 # JSON 추출
 # ============================================================
 
-def _extract_json(response):
+def _find_json_objects(text):
+
+    objects = []
+
+    if not text:
+        return objects
+
+    # 전체가 JSON
+    try:
+
+        obj = json.loads(text)
+
+        objects.append(obj)
+
+        return objects
+
+    except Exception:
+        pass
+
+    # HTML 안 JSON 후보
+    patterns = [
+
+        r'\{.*?"mixodds".*?\}',
+
+        r'\{.*?"Data".*?\}',
+
+        r'\[.*?"mixodds".*?\]'
+
+    ]
+
+    for pattern in patterns:
+
+        try:
+
+            matches = re.findall(
+                pattern,
+                text,
+                re.S
+            )
+
+            for item in matches:
+
+                try:
+
+                    objects.append(
+                        json.loads(item)
+                    )
+
+                except Exception:
+                    continue
+
+        except Exception:
+            continue
+
+    return objects
+
+
+# ============================================================
+# 숫자 추출
+# ============================================================
+
+def _score_from_text(text):
+
+    if not text:
+        return None, None
+
+    patterns = [
+
+        r'(\d+)\s*[-:]\s*(\d+)',
+
+        r'(\d+)\s*:\s*(\d+)',
+
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text
+        )
+
+        if match:
+
+            try:
+
+                return (
+                    int(match.group(1)),
+                    int(match.group(2))
+                )
+
+            except Exception:
+                pass
+
+    return None, None
+
+
+# ============================================================
+# 경기 결과
+# ============================================================
+
+def _result_from_score(
+    home_score,
+    away_score
+):
+
+    if (
+        home_score is None
+        or away_score is None
+    ):
+
+        return ""
+
+    if home_score > away_score:
+        return "승"
+
+    if home_score == away_score:
+        return "무"
+
+    return "패"
+
+
+# ============================================================
+# 팀명 추출
+# ============================================================
+
+def _extract_teams(
+    soup,
+    text
+):
+
+    home = ""
+    away = ""
+
+    # --------------------------------------------------------
+    # 일반적인 Scoreman class
+    # --------------------------------------------------------
+
+    selectors = [
+
+        ".team_name",
+
+        ".teamname",
+
+        ".team",
+
+        ".home",
+
+        ".away",
+
+        ".homeTeam",
+
+        ".awayTeam",
+
+        "[class*='home']",
+
+        "[class*='away']"
+
+    ]
+
+    candidates = []
+
+    for selector in selectors:
+
+        try:
+
+            for node in soup.select(selector):
+
+                value = node.get_text(
+                    " ",
+                    strip=True
+                )
+
+                if (
+                    value
+                    and len(value) < 100
+                    and value not in candidates
+                ):
+
+                    candidates.append(value)
+
+        except Exception:
+            continue
+
+    if len(candidates) >= 2:
+
+        home = candidates[0]
+        away = candidates[1]
+
+    # --------------------------------------------------------
+    # title fallback
+    # --------------------------------------------------------
+
+    if not home or not away:
+
+        title = ""
+
+        try:
+            title = soup.title.get_text(
+                " ",
+                strip=True
+            )
+        except Exception:
+            pass
+
+        match = re.search(
+            r'(.{2,50}?)\s+(?:vs|VS|v\.|:)\s+(.{2,50})',
+            title
+        )
+
+        if match:
+
+            home = (
+                home
+                or match.group(1).strip()
+            )
+
+            away = (
+                away
+                or match.group(2).strip()
+            )
+
+    # --------------------------------------------------------
+    # 텍스트 fallback
+    # --------------------------------------------------------
+
+    if not home or not away:
+
+        lines = [
+            x.strip()
+            for x in text.splitlines()
+            if x.strip()
+        ]
+
+        for line in lines:
+
+            match = re.search(
+                r'^(.{2,50})\s+(?:vs|VS)\s+(.{2,50})$',
+                line
+            )
+
+            if match:
+
+                home = (
+                    home
+                    or match.group(1).strip()
+                )
+
+                away = (
+                    away
+                    or match.group(2).strip()
+                )
+
+                break
+
+    return home, away
+
+
+# ============================================================
+# 경기 날짜
+# ============================================================
+
+def _extract_date(
+    soup,
+    text
+):
+
+    patterns = [
+
+        r'(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}'
+        r'(?:\s+\d{1,2}:\d{2})?)',
+
+        r'(20\d{2}\d{2}\d{2})'
+
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text
+        )
+
+        if match:
+
+            value = match.group(1)
+
+            if len(value) == 8:
+
+                return (
+                    value[0:4]
+                    + "-"
+                    + value[4:6]
+                    + "-"
+                    + value[6:8]
+                )
+
+            return value
 
     try:
 
-        return response.json()
+        meta = soup.find(
+            "meta",
+            attrs={
+                "property":
+                    "article:published_time"
+            }
+        )
+
+        if meta:
+
+            return meta.get(
+                "content",
+                ""
+            )
 
     except Exception:
+        pass
 
-        text = response.text.strip()
+    return ""
 
-        if not text:
+
+# ============================================================
+# 경기 페이지 수집
+# ============================================================
+
+def fetch_match(
+    schedule_id
+):
+
+    url = MATCH_URL.format(
+        schedule_id=schedule_id
+    )
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+
             return None
+
+        html_text = response.text
+
+        if not html_text:
+
+            return None
+
+        soup = BeautifulSoup(
+            html_text,
+            "html.parser"
+        )
+
+        text = soup.get_text(
+            "\n",
+            strip=True
+        )
+
+        home_team, away_team = (
+            _extract_teams(
+                soup,
+                text
+            )
+        )
+
+        home_score = None
+        away_score = None
+
+        # ----------------------------------------------------
+        # score selectors
+        # ----------------------------------------------------
+
+        score_candidates = []
+
+        for selector in [
+
+            ".score",
+
+            ".scores",
+
+            ".result",
+
+            ".final_score",
+
+            "[class*='score']"
+
+        ]:
+
+            try:
+
+                for node in soup.select(selector):
+
+                    value = node.get_text(
+                        " ",
+                        strip=True
+                    )
+
+                    if value:
+
+                        score_candidates.append(
+                            value
+                        )
+
+            except Exception:
+                continue
+
+        for candidate in score_candidates:
+
+            h, a = _score_from_text(
+                candidate
+            )
+
+            if h is not None:
+
+                home_score = h
+                away_score = a
+
+                break
+
+        # ----------------------------------------------------
+        # 전체 텍스트 fallback
+        # ----------------------------------------------------
+
+        if home_score is None:
+
+            home_score, away_score = (
+                _score_from_text(text)
+            )
+
+        result = _result_from_score(
+            home_score,
+            away_score
+        )
+
+        match_date = _extract_date(
+            soup,
+            text
+        )
+
+        # ----------------------------------------------------
+        # 최소 검증
+        # ----------------------------------------------------
+
+        if not home_team and not away_team:
+
+            return None
+
+        return {
+
+            "schedule_id":
+                str(schedule_id),
+
+            "match_date":
+                match_date,
+
+            "home_team":
+                home_team,
+
+            "away_team":
+                away_team,
+
+            "home_score":
+                home_score,
+
+            "away_score":
+                away_score,
+
+            "result":
+                result,
+
+            "source":
+                "Scoreman"
+
+        }
+
+    except Exception as e:
+
+        _log(
+            f"[경기 오류] ID={schedule_id} {e}"
+        )
+
+        return None
+
+
+# ============================================================
+# 최종배당 API
+# ============================================================
+
+def fetch_odds(
+    schedule_id
+):
+
+    url = ODDS_URL.format(
+        schedule_id=schedule_id
+    )
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+
+            return []
+
+        text = response.text
 
         try:
 
-            return json.loads(
-                text
-            )
+            payload = response.json()
 
         except Exception:
 
-            return None
+            payload = None
 
+        if payload is None:
 
-# ============================================================
-# 경기 HTML 파싱
-# ============================================================
-
-def _parse_match_html(
-    html,
-    schedule_id,
-):
-
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
-    )
-
-    text = soup.get_text(
-        " ",
-        strip=True,
-    )
-
-    scripts = soup.find_all(
-        "script"
-    )
-
-    script_text = "\n".join(
-        s.get_text(
-            " ",
-            strip=False,
-        )
-        for s in scripts
-    )
-
-    combined = (
-        text
-        + "\n"
-        + script_text
-    )
-
-    home_team = ""
-    away_team = ""
-
-    match_date = ""
-
-    home_score = None
-    away_score = None
-
-    # ========================================================
-    # 날짜
-    # ========================================================
-
-    date_patterns = [
-
-        r"(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\s+\d{1,2}:\d{2})",
-
-        r"(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2})",
-
-    ]
-
-    for pattern in date_patterns:
-
-        found = re.search(
-            pattern,
-            combined,
-            re.I,
-        )
-
-        if found:
-
-            match_date = found.group(1)
-
-            break
-
-    # ========================================================
-    # 홈 스코어
-    # ========================================================
-
-    home_score_patterns = [
-
-        r'"home_score"\s*:\s*"?(.*?)"?[,}]',
-
-        r'"homescore"\s*:\s*"?(.*?)"?[,}]',
-
-        r'"hscore"\s*:\s*"?(.*?)"?[,}]',
-
-        r'"homeScore"\s*:\s*"?(.*?)"?[,}]',
-
-    ]
-
-    for pattern in home_score_patterns:
-
-        found = re.search(
-            pattern,
-            combined,
-            re.I,
-        )
-
-        if found:
-
-            value = _safe_int(
-                found.group(1)
+            objects = _find_json_objects(
+                text
             )
 
-            if value is not None:
+            if objects:
+                payload = objects[0]
 
-                home_score = value
+        if payload is None:
 
-                break
+            return []
 
-    # ========================================================
-    # 원정 스코어
-    # ========================================================
+        mixodds = None
 
-    away_score_patterns = [
+        # ----------------------------------------------------
+        # Data.mixodds
+        # ----------------------------------------------------
 
-        r'"away_score"\s*:\s*"?(.*?)"?[,}]',
+        if isinstance(payload, dict):
 
-        r'"awayscore"\s*:\s*"?(.*?)"?[,}]',
-
-        r'"ascore"\s*:\s*"?(.*?)"?[,}]',
-
-        r'"awayScore"\s*:\s*"?(.*?)"?[,}]',
-
-    ]
-
-    for pattern in away_score_patterns:
-
-        found = re.search(
-            pattern,
-            combined,
-            re.I,
-        )
-
-        if found:
-
-            value = _safe_int(
-                found.group(1)
+            data = payload.get(
+                "Data"
             )
 
-            if value is not None:
+            if isinstance(data, dict):
 
-                away_score = value
+                mixodds = data.get(
+                    "mixodds"
+                )
 
-                break
+            if mixodds is None:
 
-    # ========================================================
-    # 홈팀
-    # ========================================================
-
-    home_patterns = [
-
-        r'"home_team"\s*:\s*"([^"]+)"',
-
-        r'"hometeam"\s*:\s*"([^"]+)"',
-
-        r'"homeName"\s*:\s*"([^"]+)"',
-
-        r'"home_name"\s*:\s*"([^"]+)"',
-
-    ]
-
-    for pattern in home_patterns:
-
-        found = re.search(
-            pattern,
-            combined,
-            re.I,
-        )
-
-        if found:
-
-            home_team = (
-                found.group(1)
-                .strip()
-            )
-
-            break
-
-    # ========================================================
-    # 원정팀
-    # ========================================================
-
-    away_patterns = [
-
-        r'"away_team"\s*:\s*"([^"]+)"',
-
-        r'"awayteam"\s*:\s*"([^"]+)"',
-
-        r'"awayName"\s*:\s*"([^"]+)"',
-
-        r'"away_name"\s*:\s*"([^"]+)"',
-
-    ]
-
-    for pattern in away_patterns:
-
-        found = re.search(
-            pattern,
-            combined,
-            re.I,
-        )
-
-        if found:
-
-            away_team = (
-                found.group(1)
-                .strip()
-            )
-
-            break
-
-    # ========================================================
-    # 결과
-    # ========================================================
-
-    result = ""
-
-    if (
-        home_score is not None
-        and away_score is not None
-    ):
-
-        if home_score > away_score:
-
-            result = "승"
-
-        elif home_score < away_score:
-
-            result = "패"
-
-        else:
-
-            result = "무"
-
-    return {
-
-        "schedule_id":
-            str(schedule_id),
-
-        "match_date":
-            match_date,
-
-        "home_team":
-            home_team,
-
-        "away_team":
-            away_team,
-
-        "home_score":
-            home_score,
-
-        "away_score":
-            away_score,
-
-        "result":
-            result,
-
-        "source":
-            "scoreman",
-
-    }
-
-
-# ============================================================
-# mixodds 탐색
-# ============================================================
-
-def _find_mixodds(obj):
-
-    if isinstance(
-        obj,
-        dict
-    ):
-
-        if "mixodds" in obj:
-
-            return obj["mixodds"]
-
-        if "Data" in obj:
-
-            found = _find_mixodds(
-                obj["Data"]
-            )
-
-            if found is not None:
-
-                return found
-
-        for value in obj.values():
-
-            found = _find_mixodds(
-                value
-            )
-
-            if found is not None:
-
-                return found
-
-    elif isinstance(
-        obj,
-        list
-    ):
-
-        for item in obj:
-
-            found = _find_mixodds(
-                item
-            )
-
-            if found is not None:
-
-                return found
-
-    return None
-
-
-# ============================================================
-# 최종배당 파싱
-# ============================================================
-
-def _parse_final_odds(data):
-
-    mixodds = _find_mixodds(
-        data
-    )
-
-    if not mixodds:
-
-        return []
-
-    if isinstance(
-        mixodds,
-        dict
-    ):
-
-        mixodds = [
-            mixodds
-        ]
-
-    results = []
-
-    for company in mixodds:
+                mixodds = payload.get(
+                    "mixodds"
+                )
 
         if not isinstance(
-            company,
-            dict
+            mixodds,
+            list
         ):
 
-            continue
+            return []
 
-        company_id = (
-            company.get("cid")
-            or company.get("id")
-            or ""
-        )
+        result = []
 
-        company_name = (
-            company.get("cn")
-            or company.get("name")
-            or company.get("company_name")
-            or ""
-        )
+        for item in mixodds:
 
-        euro = (
-            company.get("euro")
-            or {}
-        )
+            if not isinstance(
+                item,
+                dict
+            ):
 
-        # 최종배당
-        final = (
-            euro.get("l")
-            or {}
-        )
+                continue
 
-        if not final:
-
-            continue
-
-        home = _to_float(
-            final.get("u")
-        )
-
-        draw = _to_float(
-            final.get("g")
-        )
-
-        away = _to_float(
-            final.get("d")
-        )
-
-        if (
-            home is None
-            or draw is None
-            or away is None
-        ):
-
-            continue
-
-        name = str(
-            company_name
-        ).strip()
-
-        if not name:
-
-            continue
-
-        results.append({
-
-            "company_id":
-                str(company_id),
-
-            "company_name":
-                name,
-
-            "final_home":
-                home,
-
-            "final_draw":
-                draw,
-
-            "final_away":
-                away,
-
-        })
-
-    return results
-
-
-# ============================================================
-# 최종배당 요청
-# ============================================================
-
-def _get_final_odds(schedule_id):
-
-    params = {
-
-        "type": 14,
-
-        "t": 1,
-
-        "id": schedule_id,
-
-        "h": 0,
-
-    }
-
-    response = _request(
-        ODDS_URL,
-        params=params,
-        timeout=REQUEST_TIMEOUT,
-    )
-
-    if response.status_code != 200:
-
-        raise RuntimeError(
-            f"배당 HTTP={response.status_code}"
-        )
-
-    data = _extract_json(
-        response
-    )
-
-    if data is None:
-
-        raise RuntimeError(
-            "배당 JSON 파싱 실패"
-        )
-
-    return _parse_final_odds(
-        data
-    )
-
-
-# ============================================================
-# 업체 필터
-# ============================================================
-
-def _filter_companies(
-    odds_list,
-    selected_companies,
-):
-
-    if not selected_companies:
-
-        return odds_list
-
-    selected = {
-
-        str(x)
-        .strip()
-        .lower()
-
-        for x in selected_companies
-
-        if str(x).strip()
-
-    }
-
-    result = []
-
-    for row in odds_list:
-
-        name = str(
-            row.get(
-                "company_name",
-                "",
-            )
-        ).strip().lower()
-
-        if name in selected:
-
-            result.append(
-                row
+            company_id = (
+                item.get("cid")
+                or item.get("company_id")
+                or ""
             )
 
-    return result
-
-
-# ============================================================
-# DB 저장
-# ============================================================
-
-def _save_match_odds(
-    match,
-    odds_list,
-):
-
-    last_error = None
-
-    for attempt in range(
-        DB_RETRY
-    ):
-
-        try:
-
-            saved = (
-                database.save_match_with_odds(
-                    match,
-                    odds_list,
-                )
+            company_name = (
+                item.get("cn")
+                or item.get("company_name")
+                or item.get("name")
+                or ""
             )
 
-            if saved > 0:
-
-                return saved
-
-            last_error = (
-                "최종배당 저장 결과 0건"
+            euro = item.get(
+                "euro"
             )
 
-        except Exception as e:
+            if not isinstance(
+                euro,
+                dict
+            ):
 
-            last_error = e
+                continue
 
-            if attempt < DB_RETRY - 1:
-
-                _log(
-                    "[DB 재시도] "
-                    f"{attempt + 1}/{DB_RETRY} "
-                    f"오류={e}"
-                )
-
-                time.sleep(
-                    0.7
-                    * (attempt + 1)
-                )
-
-    raise RuntimeError(
-        f"최종배당 저장 실패: {last_error}"
-    )
-
-
-# ============================================================
-# 수집 상태 저장
-#
-# Turso 오류가 발생해도 수집 자체가 죽지 않도록 한다.
-# ============================================================
-
-def _save_state(
-    start_id,
-    end_id,
-    last_completed_id,
-    current,
-    total,
-    running,
-    stopped,
-    selected_companies,
-):
-
-    for attempt in range(
-        DB_RETRY
-    ):
-
-        try:
-
-            database.save_collection_state(
-
-                start_id,
-
-                end_id,
-
-                last_completed_id,
-
-                current,
-
-                total,
-
-                running,
-
-                stopped,
-
-                selected_companies,
-
+            final_data = euro.get(
+                "l"
             )
 
-            return True
+            if not isinstance(
+                final_data,
+                dict
+            ):
 
-        except Exception as e:
+                continue
 
-            if attempt < DB_RETRY - 1:
+            home = to_float(
+                final_data.get("u")
+            )
 
-                time.sleep(
-                    0.4
-                    * (attempt + 1)
+            draw = to_float(
+                final_data.get("g")
+            )
+
+            away = to_float(
+                final_data.get("d")
+            )
+
+            if (
+                home is None
+                or draw is None
+                or away is None
+            ):
+
+                continue
+
+            if (
+                home <= 0
+                or draw <= 0
+                or away <= 0
+            ):
+
+                continue
+
+            if not company_name:
+
+                company_name = (
+                    f"업체_{company_id}"
                 )
 
-            else:
+            result.append({
 
-                _log(
-                    f"[상태 저장 실패] {e}"
-                )
+                "company_id":
+                    str(company_id),
 
-    return False
+                "company_name":
+                    str(company_name).strip(),
+
+                "final_home":
+                    home,
+
+                "final_draw":
+                    draw,
+
+                "final_away":
+                    away
+
+            })
+
+        return result
+
+    except Exception as e:
+
+        _log(
+            f"[배당 오류] ID={schedule_id} {e}"
+        )
+
+        return []
 
 
 # ============================================================
@@ -921,180 +862,169 @@ def _save_state(
 
 def collect_one(
     schedule_id,
-    selected_companies=None,
+    selected_companies=None
 ):
 
-    schedule_id = int(
+    match = fetch_match(
         schedule_id
-    )
-
-    _log(
-        f"[수집 시작] ID={schedule_id}"
-    )
-
-    # ========================================================
-    # 경기 페이지
-    # ========================================================
-
-    html = _get_match_data(
-        schedule_id
-    )
-
-    _log(
-        f"[페이지] ID={schedule_id} "
-        f"HTTP=200 "
-        f"SIZE={len(html):,}"
-    )
-
-    # ========================================================
-    # 경기 정보
-    # ========================================================
-
-    match = _parse_match_html(
-        html,
-        schedule_id,
     )
 
     if not match:
 
-        raise RuntimeError(
-            "경기 데이터 파싱 실패"
-        )
+        return {
+            "status": "failed",
+            "odds": 0
+        }
 
-    # ========================================================
-    # 최종배당
-    # ========================================================
-
-    odds_list = _get_final_odds(
+    odds = fetch_odds(
         schedule_id
     )
 
-    if not odds_list:
-
-        _log(
-            f"[배당 없음] ID={schedule_id}"
-        )
+    if not odds:
 
         return {
-
-            "status":
-                "no_odds",
-
-            "match":
-                match,
-
-            "odds":
-                [],
-
-            "saved_odds":
-                0,
-
+            "status": "no_odds",
+            "odds": 0
         }
 
-    # ========================================================
-    # 업체 선택
-    # ========================================================
-
-    filtered = _filter_companies(
-        odds_list,
-        selected_companies,
-    )
+    # --------------------------------------------------------
+    # 업체 필터
+    # --------------------------------------------------------
 
     if selected_companies:
 
-        _log(
-            f"[업체 필터] "
-            f"{len(odds_list)} → "
-            f"{len(filtered)}"
-        )
-
-    if not filtered:
-
-        _log(
-            f"[선택 업체 배당 없음] "
-            f"ID={schedule_id}"
-        )
-
-        return {
-
-            "status":
-                "no_odds",
-
-            "match":
-                match,
-
-            "odds":
-                [],
-
-            "saved_odds":
-                0,
-
+        wanted = {
+            str(x).strip().lower()
+            for x in selected_companies
         }
 
-    # ========================================================
-    # 기존 경기 확인
-    # ========================================================
+        filtered = []
 
-    existed = (
-        database.get_match(
-            schedule_id
-        ) is not None
+        for item in odds:
+
+            name = str(
+                item.get(
+                    "company_name",
+                    ""
+                )
+            ).strip().lower()
+
+            if name in wanted:
+
+                filtered.append(item)
+
+        odds = filtered
+
+    if not odds:
+
+        return {
+            "status": "no_odds",
+            "odds": 0
+        }
+
+    # --------------------------------------------------------
+    # 경기 저장
+    # --------------------------------------------------------
+
+    database.save_match(
+        schedule_id=
+            match["schedule_id"],
+
+        match_date=
+            match["match_date"],
+
+        home_team=
+            match["home_team"],
+
+        away_team=
+            match["away_team"],
+
+        home_score=
+            match["home_score"],
+
+        away_score=
+            match["away_score"],
+
+        result=
+            match["result"],
+
+        source=
+            match["source"]
     )
 
-    # ========================================================
-    # DB 저장
-    # ========================================================
+    # --------------------------------------------------------
+    # 배당 저장
+    # --------------------------------------------------------
 
-    saved = _save_match_odds(
-        match,
-        filtered,
-    )
+    saved_odds = 0
 
-    if saved <= 0:
+    for item in odds:
 
-        raise RuntimeError(
-            "최종배당 저장 실패"
-        )
+        try:
 
-    if existed:
+            database.save_odds(
 
-        _log(
-            f"[기존 갱신] "
-            f"ID={schedule_id} "
-            f"배당={saved}"
-        )
+                schedule_id=
+                    match["schedule_id"],
 
-        status = "exists"
+                company_id=
+                    item.get(
+                        "company_id",
+                        ""
+                    ),
 
-    else:
+                company_name=
+                    item.get(
+                        "company_name",
+                        ""
+                    ),
 
-        _log(
-            f"[신규 저장] "
-            f"ID={schedule_id} "
-            f"배당={saved}"
-        )
+                final_home=
+                    item.get(
+                        "final_home"
+                    ),
 
-        status = "success"
+                final_draw=
+                    item.get(
+                        "final_draw"
+                    ),
+
+                final_away=
+                    item.get(
+                        "final_away"
+                    )
+
+            )
+
+            saved_odds += 1
+
+        except Exception as e:
+
+            _log(
+                f"[배당 저장 실패] "
+                f"ID={schedule_id} "
+                f"{e}"
+            )
+
+    if saved_odds <= 0:
+
+        return {
+            "status": "no_odds",
+            "odds": 0
+        }
+
+    # --------------------------------------------------------
+    # 기존 여부
+    # --------------------------------------------------------
 
     return {
-
-        "status":
-            status,
-
-        "match":
-            match,
-
-        "odds":
-            filtered,
-
-        "saved_odds":
-            saved,
-
+        "status": "success",
+        "odds": saved_odds
     }
 
 
 # ============================================================
-# 백그라운드 작업
+# 백그라운드 수집
 # ============================================================
 
 def _worker(
@@ -1102,350 +1032,298 @@ def _worker(
     end_id,
     selected_companies,
     delay,
-    resume,
+    resume
 ):
 
+    global JOB
+
     total = (
-        end_id
-        - start_id
+        int(end_id)
+        - int(start_id)
         + 1
     )
 
-    result = {
+    with JOB_LOCK:
 
-        "start_id":
-            start_id,
+        JOB["running"] = True
+        JOB["finished"] = False
+        JOB["current"] = 0
+        JOB["total"] = max(total, 0)
 
-        "end_id":
-            end_id,
+        JOB["success"] = 0
+        JOB["exists"] = 0
+        JOB["failed"] = 0
+        JOB["no_odds"] = 0
+        JOB["odds"] = 0
 
-        "total":
-            total,
+        JOB["start_id"] = int(start_id)
+        JOB["end_id"] = int(end_id)
 
-        "success":
-            0,
+        JOB["last_completed_id"] = 0
 
-        "exists":
-            0,
+        JOB["selected_companies"] = (
+            selected_companies
+        )
 
-        "failed":
-            0,
+        JOB["error"] = ""
+        JOB["stopped"] = False
+        JOB["result"] = {}
 
-        "no_odds":
-            0,
+        JOB["log"] = ""
 
-        "odds":
-            0,
+    STOP_EVENT.clear()
 
-        "last_completed_id":
-            0,
+    database.save_collection_state(
+        start_id,
+        end_id,
+        start_id,
+        0,
+        True,
+        False
+    )
 
-        "stopped":
-            False,
+    _log(
+        "========================================"
+    )
 
-    }
+    _log(
+        "⚽ Scoreman 백그라운드 수집 시작"
+    )
+
+    _log(
+        f"범위: {start_id:,} ~ {end_id:,}"
+    )
+
+    _log(
+        "실패 경기 / 배당 없음은 "
+        "완료 ID로 저장하지 않음"
+    )
+
+    _log(
+        "실패는 1회 자동 재시도"
+    )
+
+    if selected_companies:
+
+        _log(
+            "수집 업체: "
+            + ", ".join(
+                selected_companies
+            )
+        )
+
+    else:
+
+        _log(
+            "수집 업체: 전체 업체 자동수집"
+        )
+
+    _log(
+        "========================================"
+    )
+
+    last_completed = 0
 
     try:
 
         for index, schedule_id in enumerate(
-
             range(
-                start_id,
-                end_id + 1,
+                int(start_id),
+                int(end_id) + 1
             ),
-
-            start=1,
-
+            start=1
         ):
 
-            # =================================================
-            # 중지 확인
-            # =================================================
-
-            if _STOP_EVENT.is_set():
-
-                result[
-                    "stopped"
-                ] = True
+            if STOP_EVENT.is_set():
 
                 _log(
-                    "🛑 수집 중지 요청 확인"
+                    "🛑 중지 요청 감지"
                 )
 
                 break
 
-            with _JOB_LOCK:
+            with JOB_LOCK:
 
-                JOB[
-                    "current"
-                ] = index
+                JOB["current"] = index
 
-            # =================================================
-            # 경기 수집
-            # 실패하면 1회 재시도
-            # =================================================
+            database.save_collection_state(
+                start_id,
+                end_id,
+                schedule_id,
+                last_completed,
+                True,
+                False
+            )
 
-            completed_successfully = False
+            _log(
+                f"[수집 시작] ID={schedule_id}"
+            )
 
-            for attempt in range(
-                MAX_RETRY
-            ):
+            # ------------------------------------------------
+            # 이미 DB에 경기 + 배당이 있으면 중복
+            # ------------------------------------------------
 
-                try:
+            already_exists = False
 
-                    data = collect_one(
+            try:
 
-                        schedule_id,
+                if database.match_exists(
+                    schedule_id
+                ):
 
-                        selected_companies,
-
+                    old_odds = (
+                        database.get_odds_by_match(
+                            schedule_id
+                        )
                     )
 
-                    status = data.get(
-                        "status"
-                    )
+                    if old_odds:
 
-                    # -----------------------------------------
-                    # 신규
-                    # -----------------------------------------
+                        already_exists = True
 
-                    if status == "success":
+            except Exception:
+                already_exists = False
 
-                        result[
-                            "success"
-                        ] += 1
+            # ------------------------------------------------
+            # 기존 데이터
+            # ------------------------------------------------
 
-                        result[
-                            "odds"
-                        ] += int(
-                            data.get(
-                                "saved_odds",
-                                0,
-                            )
-                            or 0
-                        )
+            if already_exists:
 
-                        completed_successfully = True
+                with JOB_LOCK:
 
-                        break
+                    JOB["exists"] += 1
 
-                    # -----------------------------------------
-                    # 기존
-                    # -----------------------------------------
+                last_completed = schedule_id
 
-                    if status == "exists":
-
-                        result[
-                            "exists"
-                        ] += 1
-
-                        result[
-                            "odds"
-                        ] += int(
-                            data.get(
-                                "saved_odds",
-                                0,
-                            )
-                            or 0
-                        )
-
-                        completed_successfully = True
-
-                        break
-
-                    # -----------------------------------------
-                    # 배당 없음
-                    # -----------------------------------------
-
-                    if status == "no_odds":
-
-                        result[
-                            "no_odds"
-                        ] += 1
-
-                        # 중요:
-                        # 배당없음은 완료 ID로 저장하지 않음
-                        break
-
-                except Exception as e:
-
-                    if attempt < MAX_RETRY - 1:
-
-                        _log(
-                            f"[재시도] "
-                            f"ID={schedule_id} "
-                            f"오류={e}"
-                        )
-
-                        time.sleep(
-                            0.7
-                        )
-
-                    else:
-
-                        result[
-                            "failed"
-                        ] += 1
-
-                        _log(
-                            f"[실패] "
-                            f"ID={schedule_id} "
-                            f"오류={e}"
-                        )
-
-            # =================================================
-            # 마지막 완료 ID
-            #
-            # 성공 또는 기존 갱신만 완료 처리
-            # 실패 / 배당없음은 완료 처리하지 않음
-            # =================================================
-
-            if completed_successfully:
-
-                result[
-                    "last_completed_id"
-                ] = schedule_id
-
-                with _JOB_LOCK:
+                with JOB_LOCK:
 
                     JOB[
                         "last_completed_id"
-                    ] = schedule_id
+                    ] = last_completed
 
-            # =================================================
-            # 현재 JOB 수치
-            # =================================================
-
-            with _JOB_LOCK:
-
-                JOB[
-                    "success"
-                ] = result[
-                    "success"
-                ]
-
-                JOB[
-                    "exists"
-                ] = result[
-                    "exists"
-                ]
-
-                JOB[
-                    "failed"
-                ] = result[
-                    "failed"
-                ]
-
-                JOB[
-                    "no_odds"
-                ] = result[
-                    "no_odds"
-                ]
-
-                JOB[
-                    "odds"
-                ] = result[
-                    "odds"
-                ]
-
-            # =================================================
-            # 진행상태 DB 저장
-            # =================================================
-
-            _save_state(
-
-                start_id,
-
-                end_id,
-
-                result[
-                    "last_completed_id"
-                ],
-
-                index,
-
-                total,
-
-                True,
-
-                False,
-
-                selected_companies,
-
-            )
-
-            # =================================================
-            # 중지 요청이 들어왔는지 다시 확인
-            # =================================================
-
-            if _STOP_EVENT.is_set():
-
-                result[
-                    "stopped"
-                ] = True
-
-                _log(
-                    "🛑 현재 경기 처리 후 "
-                    "수집을 중지합니다."
+                database.save_collection_state(
+                    start_id,
+                    end_id,
+                    schedule_id,
+                    last_completed,
+                    True,
+                    False
                 )
 
-                break
+                _log(
+                    f"[중복] ID={schedule_id}"
+                )
 
-            # =================================================
-            # 요청 간격
-            # =================================================
+                if delay > 0:
+                    time.sleep(delay)
+
+                continue
+
+            # ------------------------------------------------
+            # 첫 번째 시도
+            # ------------------------------------------------
+
+            result = collect_one(
+                schedule_id,
+                selected_companies
+            )
+
+            # ------------------------------------------------
+            # 실패 재시도
+            # ------------------------------------------------
+
+            if result.get("status") == "failed":
+
+                _log(
+                    f"[재시도] ID={schedule_id}"
+                )
+
+                time.sleep(
+                    max(
+                        0.5,
+                        delay
+                    )
+                )
+
+                result = collect_one(
+                    schedule_id,
+                    selected_companies
+                )
+
+            status = result.get(
+                "status"
+            )
+
+            odds_count = int(
+                result.get(
+                    "odds",
+                    0
+                )
+                or 0
+            )
+
+            if status == "success":
+
+                with JOB_LOCK:
+
+                    JOB["success"] += 1
+                    JOB["odds"] += odds_count
+
+                last_completed = schedule_id
+
+                with JOB_LOCK:
+
+                    JOB[
+                        "last_completed_id"
+                    ] = last_completed
+
+                database.save_collection_state(
+                    start_id,
+                    end_id,
+                    schedule_id,
+                    last_completed,
+                    True,
+                    False
+                )
+
+                _log(
+                    f"[완료] ID={schedule_id} "
+                    f"배당={odds_count}"
+                )
+
+            elif status == "no_odds":
+
+                with JOB_LOCK:
+
+                    JOB["no_odds"] += 1
+
+                _log(
+                    f"[배당 없음] ID={schedule_id}"
+                )
+
+            else:
+
+                with JOB_LOCK:
+
+                    JOB["failed"] += 1
+
+                _log(
+                    f"[실패] ID={schedule_id}"
+                )
 
             if delay > 0:
 
-                # 긴 sleep 대신 작은 단위로 확인
-                # 중지 버튼 반응속도 향상
-                remaining = float(
-                    delay
+                time.sleep(
+                    float(delay)
                 )
-
-                while remaining > 0:
-
-                    if _STOP_EVENT.is_set():
-
-                        result[
-                            "stopped"
-                        ] = True
-
-                        break
-
-                    step = min(
-                        0.1,
-                        remaining
-                    )
-
-                    time.sleep(
-                        step
-                    )
-
-                    remaining -= step
-
-                if result[
-                    "stopped"
-                ]:
-
-                    break
-
-        result[
-            "stopped"
-        ] = (
-            _STOP_EVENT.is_set()
-            or result[
-                "stopped"
-            ]
-        )
 
     except Exception as e:
 
-        with _JOB_LOCK:
+        with JOB_LOCK:
 
-            JOB[
-                "error"
-            ] = str(e)
+            JOB["error"] = str(e)
+            JOB["failed"] += 1
 
         _log(
             f"[치명적 오류] {e}"
@@ -1453,122 +1331,76 @@ def _worker(
 
     finally:
 
-        # =====================================================
-        # 마지막 상태
-        # =====================================================
+        stopped = STOP_EVENT.is_set()
 
-        with _JOB_LOCK:
+        with JOB_LOCK:
 
-            JOB[
-                "running"
-            ] = False
+            JOB["running"] = False
+            JOB["finished"] = True
+            JOB["stopped"] = stopped
 
-            JOB[
-                "finished"
-            ] = True
+            JOB["last_completed_id"] = (
+                last_completed
+            )
 
-            JOB[
-                "stopped"
-            ] = result[
-                "stopped"
-            ]
+            JOB["result"] = {
 
-            JOB[
-                "result"
-            ] = result
+                "success":
+                    JOB["success"],
 
-            JOB[
-                "success"
-            ] = result[
-                "success"
-            ]
+                "exists":
+                    JOB["exists"],
 
-            JOB[
-                "exists"
-            ] = result[
-                "exists"
-            ]
+                "failed":
+                    JOB["failed"],
 
-            JOB[
-                "failed"
-            ] = result[
-                "failed"
-            ]
+                "no_odds":
+                    JOB["no_odds"],
 
-            JOB[
-                "no_odds"
-            ] = result[
-                "no_odds"
-            ]
+                "odds":
+                    JOB["odds"],
 
-            JOB[
-                "odds"
-            ] = result[
-                "odds"
-            ]
+                "stopped":
+                    stopped
 
-            JOB[
-                "last_completed_id"
-            ] = result[
-                "last_completed_id"
-            ]
+            }
 
-        # =====================================================
-        # 최종 DB 상태
-        # =====================================================
-
-        _save_state(
-
+        database.save_collection_state(
             start_id,
-
             end_id,
-
-            result[
-                "last_completed_id"
-            ],
-
-            JOB.get(
-                "current",
-                0
+            (
+                last_completed
+                if last_completed > 0
+                else start_id
             ),
-
-            total,
-
+            last_completed,
             False,
-
-            result[
-                "stopped"
-            ],
-
-            selected_companies,
-
+            stopped
         )
-
-        # =====================================================
-        # 이벤트 초기화
-        # =====================================================
-
-        _STOP_EVENT.clear()
 
         _log(
             "========================================"
         )
 
-        _log(
-            "수집 작업 종료"
-        )
+        if stopped:
+
+            _log(
+                "🛑 수집 작업 중지"
+            )
+
+        else:
+
+            _log(
+                "✅ 수집 작업 완료"
+            )
 
         _log(
-            f"신규={result['success']} "
-            f"기존={result['exists']} "
-            f"실패={result['failed']} "
-            f"배당없음={result['no_odds']} "
-            f"최종배당={result['odds']}"
+            "========================================"
         )
 
 
 # ============================================================
-# 백그라운드 수집 시작
+# 수집 시작
 # ============================================================
 
 def start_background_collection(
@@ -1576,447 +1408,69 @@ def start_background_collection(
     end_id,
     selected_companies=None,
     delay=0.5,
-    resume=False,
+    resume=True
 ):
 
-    global _WORKER
+    global WORKER
 
-    try:
+    with JOB_LOCK:
 
-        start_id = int(
-            start_id
-        )
-
-        end_id = int(
-            end_id
-        )
-
-        delay = float(
-            delay
-        )
-
-    except Exception:
-
-        return False
-
-    if end_id < start_id:
-
-        return False
-
-    with _JOB_LOCK:
-
-        # ====================================================
-        # 이미 실행 중
-        # ====================================================
-
-        if JOB.get(
-            "running"
-        ):
+        if JOB.get("running"):
 
             return False
 
-        # ====================================================
-        # 이어받기
-        #
-        # resume=True일 때만 DB의 마지막 완료 ID 사용
-        # ====================================================
+    if int(end_id) < int(start_id):
 
-        if resume:
+        return False
 
-            try:
+    STOP_EVENT.clear()
 
-                state = (
-                    database.get_collection_state()
-                    or {}
-                )
+    WORKER = threading.Thread(
 
-            except Exception:
+        target=_worker,
 
-                state = {}
+        args=(
 
-            last_id = state.get(
-                "last_completed_id",
-                0,
-            )
+            int(start_id),
 
-            try:
-
-                last_id = int(
-                    last_id or 0
-                )
-
-            except Exception:
-
-                last_id = 0
-
-            saved_end = state.get(
-                "end_id",
-                0,
-            )
-
-            try:
-
-                saved_end = int(
-                    saved_end or 0
-                )
-
-            except Exception:
-
-                saved_end = 0
-
-            # ------------------------------------------------
-            # 기존 범위 안에서 이어받기
-            # ------------------------------------------------
-
-            if (
-                last_id >= start_id
-                and last_id < end_id
-            ):
-
-                start_id = (
-                    last_id + 1
-                )
-
-            # ------------------------------------------------
-            # 이전 작업의 범위를 이용
-            # ------------------------------------------------
-
-            elif (
-                last_id > 0
-                and saved_end > 0
-                and last_id < saved_end
-            ):
-
-                start_id = (
-                    last_id + 1
-                )
-
-                if end_id < saved_end:
-
-                    end_id = saved_end
-
-            # ------------------------------------------------
-            # 이미 끝까지 완료
-            # ------------------------------------------------
-
-            elif (
-                last_id >= end_id
-            ):
-
-                return False
-
-        # ====================================================
-        # JOB 초기화
-        # ====================================================
-
-        JOB.clear()
-
-        JOB.update({
-
-            "running":
-                True,
-
-            "finished":
-                False,
-
-            "stopped":
-                False,
-
-            "start_id":
-                start_id,
-
-            "end_id":
-                end_id,
-
-            "current":
-                0,
-
-            "total":
-                (
-                    end_id
-                    - start_id
-                    + 1
-                ),
-
-            "success":
-                0,
-
-            "exists":
-                0,
-
-            "failed":
-                0,
-
-            "no_odds":
-                0,
-
-            "odds":
-                0,
-
-            "last_completed_id":
-                0,
-
-            "selected_companies":
-                selected_companies,
-
-            "log":
-                "",
-
-            "result":
-                None,
-
-            "error":
-                "",
-
-        })
-
-        _STOP_EVENT.clear()
-
-        # ====================================================
-        # 로그
-        # ====================================================
-
-        _log(
-            "========================================"
-        )
-
-        _log(
-            "⚽ Scoreman 백그라운드 수집 시작"
-        )
-
-        _log(
-            f"범위: {start_id:,} ~ {end_id:,}"
-        )
-
-        _log(
-            "실패 경기 / 배당 없음은 "
-            "완료 ID로 저장하지 않음"
-        )
-
-        _log(
-            "실패는 1회 자동 재시도"
-        )
-
-        if selected_companies:
-
-            _log(
-                "수집 업체: "
-                + ", ".join(
-                    str(x)
-                    for x in selected_companies
-                )
-            )
-
-        else:
-
-            _log(
-                "수집 업체: 전체 업체 자동수집"
-            )
-
-        _log(
-            f"요청 간격: {delay:.2f}초"
-        )
-
-        if resume:
-
-            _log(
-                "▶ 이전 중단 지점부터 "
-                "이어받기 모드"
-            )
-
-        # ====================================================
-        # DB 상태
-        #
-        # 새 작업이면 0부터
-        # 이어받기라도 마지막 ID 자체는 worker가
-        # 성공할 때마다 갱신한다.
-        # ====================================================
-
-        initial_last_id = 0
-
-        if resume:
-
-            try:
-
-                state = (
-                    database.get_collection_state()
-                    or {}
-                )
-
-                initial_last_id = int(
-                    state.get(
-                        "last_completed_id",
-                        0
-                    )
-                    or 0
-                )
-
-            except Exception:
-
-                initial_last_id = 0
-
-        _save_state(
-
-            start_id,
-
-            end_id,
-
-            initial_last_id,
-
-            0,
-
-            end_id - start_id + 1,
-
-            True,
-
-            False,
+            int(end_id),
 
             selected_companies,
 
-        )
+            float(delay),
 
-        # ====================================================
-        # 백그라운드 스레드
-        # ====================================================
+            bool(resume)
 
-        _WORKER = threading.Thread(
+        ),
 
-            target=_worker,
+        daemon=True
 
-            args=(
-
-                start_id,
-
-                end_id,
-
-                selected_companies,
-
-                delay,
-
-                resume,
-
-            ),
-
-            daemon=True,
-
-            name="ScoremanCollector",
-
-        )
-
-        _WORKER.start()
-
-        return True
-
-
-# ============================================================
-# 수집 중지
-# ============================================================
-
-def stop_background_collection():
-
-    with _JOB_LOCK:
-
-        if not JOB.get(
-            "running"
-        ):
-
-            return False
-
-        JOB[
-            "stopped"
-        ] = True
-
-        _STOP_EVENT.set()
-
-        # 현재 마지막 완료 ID 확보
-        current_last_id = JOB.get(
-            "last_completed_id",
-            0
-        )
-
-        current_start = JOB.get(
-            "start_id",
-            0
-        )
-
-        current_end = JOB.get(
-            "end_id",
-            0
-        )
-
-        current_index = JOB.get(
-            "current",
-            0
-        )
-
-        total = JOB.get(
-            "total",
-            0
-        )
-
-        selected = JOB.get(
-            "selected_companies"
-        )
-
-    # ========================================================
-    # 중지 요청 즉시 상태 저장
-    # ========================================================
-
-    try:
-
-        _save_state(
-
-            current_start,
-
-            current_end,
-
-            current_last_id,
-
-            current_index,
-
-            total,
-
-            True,
-
-            True,
-
-            selected,
-
-        )
-
-    except Exception:
-
-        pass
-
-    _log(
-        "🛑 사용자에 의해 "
-        "수집 중지 요청"
     )
 
-    _log(
-        f"▶ 마지막 완료 ID="
-        f"{current_last_id}"
-    )
-
-    _log(
-        "▶ 다시 시작하면 "
-        "마지막 완료 ID 다음부터 진행"
-    )
+    WORKER.start()
 
     return True
 
 
 # ============================================================
-# 작업 상태
+# 중지
 # ============================================================
 
-def get_job_status():
+def stop_background_collection():
 
-    with _JOB_LOCK:
+    with JOB_LOCK:
 
-        return dict(
-            JOB
-        )
+        if not JOB.get("running"):
+
+            return False
+
+    STOP_EVENT.set()
+
+    _log(
+        "🛑 수집중지 요청"
+    )
+
+    return True
 
 
 # ============================================================
@@ -2025,313 +1479,38 @@ def get_job_status():
 
 def is_running():
 
-    with _JOB_LOCK:
+    with JOB_LOCK:
 
         return bool(
-            JOB.get(
-                "running"
-            )
+            JOB.get("running")
         )
 
 
 # ============================================================
-# 진행률
+# 작업 상태
 # ============================================================
 
-def get_progress():
+def get_job_status():
 
-    with _JOB_LOCK:
+    with JOB_LOCK:
 
-        current = int(
-            JOB.get(
-                "current",
-                0
-            )
-            or 0
+        result = dict(
+            JOB
         )
 
-        total = int(
-            JOB.get(
-                "total",
-                0
-            )
-            or 0
-        )
-
-    if total <= 0:
-
-        return 0.0
-
-    return min(
-        1.0,
-        current / total
-    )
+    return result
 
 
 # ============================================================
-# 현재 작업 초기화
+# 단일 테스트
 # ============================================================
 
-def clear_finished_job():
+if __name__ == "__main__":
 
-    with _JOB_LOCK:
+    database.init_database()
 
-        if JOB.get(
-            "running"
-        ):
-
-            return False
-
-        JOB[
-            "finished"
-        ] = False
-
-        JOB[
-            "result"
-        ] = None
-
-        JOB[
-            "error"
-        ] = ""
-
-        JOB[
-            "log"
-        ] = ""
-
-        return True
-
-
-# ============================================================
-# 마지막 완료 ID
-# ============================================================
-
-def get_last_completed_id():
-
-    with _JOB_LOCK:
-
-        value = JOB.get(
-            "last_completed_id",
-            0
+    print(
+        collect_one(
+            2716488
         )
-
-    try:
-
-        value = int(
-            value or 0
-        )
-
-    except Exception:
-
-        value = 0
-
-    # 메모리 값이 없으면 DB에서 확인
-    if value <= 0:
-
-        try:
-
-            value = int(
-                database.get_last_completed_id()
-                or 0
             )
-
-        except Exception:
-
-            value = 0
-
-    return value
-
-
-# ============================================================
-# 다음 시작 ID
-# ============================================================
-
-def get_next_start_id():
-
-    last_id = get_last_completed_id()
-
-    if last_id > 0:
-
-        return (
-            last_id + 1
-        )
-
-    try:
-
-        state = (
-            database.get_collection_state()
-            or {}
-        )
-
-        last_id = int(
-            state.get(
-                "last_completed_id",
-                0
-            )
-            or 0
-        )
-
-        if last_id > 0:
-
-            return (
-                last_id + 1
-            )
-
-    except Exception:
-
-        pass
-
-    return 0
-
-
-# ============================================================
-# 이어받기 가능 여부
-# ============================================================
-
-def can_resume():
-
-    if is_running():
-
-        return False
-
-    try:
-
-        state = (
-            database.get_collection_state()
-            or {}
-        )
-
-        last_id = int(
-            state.get(
-                "last_completed_id",
-                0
-            )
-            or 0
-        )
-
-        end_id = int(
-            state.get(
-                "end_id",
-                0
-            )
-            or 0
-        )
-
-        stopped = bool(
-            state.get(
-                "stopped",
-                False
-            )
-        )
-
-        if (
-            stopped
-            and last_id > 0
-            and end_id > last_id
-        ):
-
-            return True
-
-    except Exception:
-
-        pass
-
-    return False
-
-
-# ============================================================
-# 이어받기 정보
-# ============================================================
-
-def get_resume_info():
-
-    try:
-
-        state = (
-            database.get_collection_state()
-            or {}
-        )
-
-        last_id = int(
-            state.get(
-                "last_completed_id",
-                0
-            )
-            or 0
-        )
-
-        end_id = int(
-            state.get(
-                "end_id",
-                0
-            )
-            or 0
-        )
-
-        if last_id > 0:
-
-            next_id = (
-                last_id + 1
-            )
-
-        else:
-
-            next_id = int(
-                state.get(
-                    "start_id",
-                    0
-                )
-                or 0
-            )
-
-        return {
-
-            "available":
-                (
-                    bool(
-                        state.get(
-                            "stopped",
-                            False
-                        )
-                    )
-                    and
-                    next_id > 0
-                    and
-                    end_id >= next_id
-                ),
-
-            "start_id":
-                next_id,
-
-            "end_id":
-                end_id,
-
-            "last_completed_id":
-                last_id,
-
-            "selected_companies":
-                state.get(
-                    "selected_companies"
-                ),
-
-        }
-
-    except Exception:
-
-        return {
-
-            "available":
-                False,
-
-            "start_id":
-                0,
-
-            "end_id":
-                0,
-
-            "last_completed_id":
-                0,
-
-            "selected_companies":
-                None,
-
-    }
