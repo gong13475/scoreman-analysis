@@ -1,7 +1,8 @@
 # ============================================================
 # database.py
-# ⚽ Scoreman 분석 DB - 최종 교체본
+# ⚽ Scoreman 분석 DB - 기능 유지 + 안정화 확장판
 #
+# 기존 기능 유지
 # - Turso 영구 저장
 # - SQLite fallback
 # - 경기 저장
@@ -10,12 +11,22 @@
 # - 동일배당 검색
 # - 수집 상태 저장
 # - Turso 용량 조회
-# - collector.py 완전 연동
+# - collector.py 연동
+#
+# 추가
+# - Turso SQLITE_BUSY 자동 재시도
+# - DB 저장 안정화
+# - 수동배당 저장
+# - 회사별 수동배당
+# - 승/무/패 배당상 확률
+# - 실제 결과 대비 부족확률
+# - 이어받기 상태 안정화
 # ============================================================
 
 import os
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 
@@ -43,11 +54,13 @@ TURSO_AUTH_TOKEN = os.getenv(
 # ============================================================
 
 try:
+
     import libsql_experimental as libsql
 
     LIBSQL_AVAILABLE = True
 
 except Exception:
+
     libsql = None
     LIBSQL_AVAILABLE = False
 
@@ -57,6 +70,7 @@ except Exception:
 # ============================================================
 
 def _use_turso():
+
     return bool(
         TURSO_DATABASE_URL
         and TURSO_AUTH_TOKEN
@@ -83,50 +97,135 @@ def get_connection():
         check_same_thread=False
     )
 
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000")
+    except Exception:
+        pass
+
     return conn
 
 
 # ============================================================
+# SQLITE_BUSY 판단
+# ============================================================
+
+def _is_busy_error(error):
+
+    text = str(error).lower()
+
+    keywords = [
+        "sqlite_busy",
+        "database is locked",
+        "database table is locked",
+        "busy",
+        "stream error",
+        "interactive transaction",
+        "rolled back because the stream was idle",
+        "retry the transaction"
+    ]
+
+    return any(
+        keyword in text
+        for keyword in keywords
+    )
+
+
+# ============================================================
 # SQL 실행
+#
+# 핵심:
+# Turso에서 SQLITE_BUSY가 발생하면
+# 연결을 완전히 닫고 새로운 연결로 다시 실행한다.
 # ============================================================
 
 def _execute(
     sql,
     params=(),
     fetch=False,
-    many=False
+    many=False,
+    retries=4
 ):
 
-    conn = get_connection()
+    last_error = None
 
-    try:
+    for attempt in range(retries):
 
-        cur = conn.cursor()
-
-        if many:
-            cur.executemany(
-                sql,
-                params
-            )
-        else:
-            cur.execute(
-                sql,
-                params
-            )
-
-        if fetch:
-            return cur.fetchall()
-
-        conn.commit()
-
-        return []
-
-    finally:
+        conn = None
 
         try:
-            conn.close()
-        except Exception:
-            pass
+
+            conn = get_connection()
+
+            cur = conn.cursor()
+
+            if many:
+
+                cur.executemany(
+                    sql,
+                    params
+                )
+
+            else:
+
+                cur.execute(
+                    sql,
+                    params
+                )
+
+            if fetch:
+
+                rows = cur.fetchall()
+
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+                return rows
+
+            conn.commit()
+
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+            return []
+
+        except Exception as e:
+
+            last_error = e
+
+            try:
+
+                if conn is not None:
+                    conn.rollback()
+
+            except Exception:
+                pass
+
+            try:
+
+                if conn is not None:
+                    conn.close()
+
+            except Exception:
+                pass
+
+            if not _is_busy_error(e):
+
+                raise
+
+            # 재시도 전 짧은 대기
+            wait = 0.5 * (attempt + 1)
+
+            time.sleep(wait)
+
+    if last_error is not None:
+
+        raise last_error
+
+    return []
 
 
 # ============================================================
@@ -193,6 +292,33 @@ def init_database():
         """
     )
 
+    # --------------------------------------------------------
+    # manual_odds
+    #
+    # 수동 입력용 별도 테이블
+    # 기존 odds 테이블에는 영향을 주지 않는다.
+    # --------------------------------------------------------
+
+    _execute(
+        """
+        CREATE TABLE IF NOT EXISTS manual_odds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schedule_id TEXT,
+            company_name TEXT NOT NULL,
+            home_odds REAL,
+            draw_odds REAL,
+            away_odds REAL,
+            result TEXT,
+            home_probability REAL,
+            draw_probability REAL,
+            away_probability REAL,
+            result_probability REAL,
+            shortage_probability REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
 
 # ============================================================
 # 경기 저장
@@ -215,20 +341,49 @@ def save_match(match):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            str(match.get("schedule_id", "")),
-            match.get("match_date", ""),
-            match.get("home_team", ""),
-            match.get("away_team", ""),
-            match.get("home_score"),
-            match.get("away_score"),
-            match.get("result", ""),
-            match.get("source", "scoreman")
+            str(
+                match.get(
+                    "schedule_id",
+                    ""
+                )
+            ),
+            match.get(
+                "match_date",
+                ""
+            ),
+            match.get(
+                "home_team",
+                ""
+            ),
+            match.get(
+                "away_team",
+                ""
+            ),
+            match.get(
+                "home_score"
+            ),
+            match.get(
+                "away_score"
+            ),
+            match.get(
+                "result",
+                ""
+            ),
+            match.get(
+                "source",
+                "scoreman"
+            )
         )
     )
+
+    return True
 
 
 # ============================================================
 # 경기 + 배당 저장
+#
+# 기존 collector.py에서 그대로 사용할 수 있도록
+# 함수 이름과 반환값 유지
 # ============================================================
 
 def save_match_with_odds(
@@ -236,9 +391,17 @@ def save_match_with_odds(
     odds_list
 ):
 
+    # --------------------------------------------------------
+    # 경기 저장
+    # --------------------------------------------------------
+
     save_match(match)
 
     saved = 0
+
+    # --------------------------------------------------------
+    # 배당 저장
+    # --------------------------------------------------------
 
     for row in odds_list:
 
@@ -253,6 +416,37 @@ def save_match_with_odds(
 
             if not company_name:
                 continue
+
+            final_home = row.get(
+                "final_home"
+            )
+
+            final_draw = row.get(
+                "final_draw"
+            )
+
+            final_away = row.get(
+                "final_away"
+            )
+
+            if (
+                final_home is None
+                or final_draw is None
+                or final_away is None
+            ):
+                continue
+
+            final_home = float(
+                final_home
+            )
+
+            final_draw = float(
+                final_draw
+            )
+
+            final_away = float(
+                final_away
+            )
 
             _execute(
                 """
@@ -280,27 +474,19 @@ def save_match_with_odds(
                         )
                     ),
                     company_name,
-                    float(
-                        row.get(
-                            "final_home"
-                        )
-                    ),
-                    float(
-                        row.get(
-                            "final_draw"
-                        )
-                    ),
-                    float(
-                        row.get(
-                            "final_away"
-                        )
-                    )
-                )
+                    final_home,
+                    final_draw,
+                    final_away
+                ),
+                retries=4
             )
 
             saved += 1
 
         except Exception:
+
+            # 기존 동작 유지:
+            # 한 업체 저장 실패가 전체 경기 저장 실패가 되지 않음
             continue
 
     return saved
@@ -445,11 +631,42 @@ def get_company_list():
         fetch=True
     )
 
-    return [
+    companies = [
         str(row[0])
         for row in rows
         if row[0]
     ]
+
+    # 수동입력 업체도 포함
+    try:
+
+        manual_rows = _execute(
+            """
+            SELECT DISTINCT company_name
+            FROM manual_odds
+            WHERE company_name IS NOT NULL
+              AND TRIM(company_name) <> ''
+            ORDER BY company_name
+            """,
+            fetch=True
+        )
+
+        for row in manual_rows:
+
+            name = str(
+                row[0]
+            ).strip()
+
+            if name and name not in companies:
+                companies.append(name)
+
+    except Exception:
+        pass
+
+    return sorted(
+        companies,
+        key=lambda x: x.lower()
+    )
 
 
 # ============================================================
@@ -475,11 +692,14 @@ def get_company_counts():
         )
 
         return {
-            str(row[0]): int(row[1] or 0)
+            str(row[0]): int(
+                row[1] or 0
+            )
             for row in rows
         }
 
     except Exception:
+
         return {}
 
 
@@ -490,6 +710,7 @@ def get_company_counts():
 def get_database_status():
 
     try:
+
         matches = int(
             _execute(
                 """
@@ -499,10 +720,13 @@ def get_database_status():
                 fetch=True
             )[0][0]
         )
+
     except Exception:
+
         matches = 0
 
     try:
+
         odds = int(
             _execute(
                 """
@@ -512,10 +736,13 @@ def get_database_status():
                 fetch=True
             )[0][0]
         )
+
     except Exception:
+
         odds = 0
 
     try:
+
         bookmakers = int(
             _execute(
                 """
@@ -527,13 +754,33 @@ def get_database_status():
                 fetch=True
             )[0][0]
         )
+
     except Exception:
+
         bookmakers = 0
+
+    # 수동 입력 건수
+    try:
+
+        manual_odds = int(
+            _execute(
+                """
+                SELECT COUNT(*)
+                FROM manual_odds
+                """,
+                fetch=True
+            )[0][0]
+        )
+
+    except Exception:
+
+        manual_odds = 0
 
     return {
         "matches": matches,
         "odds": odds,
-        "bookmakers": bookmakers
+        "bookmakers": bookmakers,
+        "manual_odds": manual_odds
     }
 
 
@@ -573,6 +820,9 @@ def save_collection_state(
     selected_companies=None
 ):
 
+    if selected_companies is None:
+        selected_companies = []
+
     selected_json = json.dumps(
         selected_companies,
         ensure_ascii=False
@@ -596,16 +846,19 @@ def save_collection_state(
         )
         """,
         (
-            int(start_id),
-            int(end_id),
+            int(start_id or 0),
+            int(end_id or 0),
             int(last_completed_id or 0),
             int(current or 0),
             int(total or 0),
             1 if running else 0,
             1 if stopped else 0,
             selected_json
-        )
+        ),
+        retries=4
     )
+
+    return True
 
 
 # ============================================================
@@ -650,10 +903,13 @@ def get_collection_state():
         row = rows[0]
 
         try:
+
             selected = json.loads(
                 row[7]
             )
+
         except Exception:
+
             selected = None
 
         return {
@@ -668,107 +924,518 @@ def get_collection_state():
         }
 
     except Exception:
-        return {}
+
+        return {
+            "start_id": None,
+            "end_id": None,
+            "last_completed_id": 0,
+            "current": 0,
+            "total": 0,
+            "running": False,
+            "stopped": False,
+            "selected_companies": None
+        }
 
 
 # ============================================================
-# 저장용량
+# 이어받기 시작 ID
 # ============================================================
 
-def get_storage_usage():
+def get_resume_id():
 
-    # --------------------------------------------------------
-    # Turso / libSQL
-    # --------------------------------------------------------
-
-    if _use_turso():
-
-        try:
-
-            rows = _execute(
-                """
-                PRAGMA page_count
-                """,
-                fetch=True
-            )
-
-            page_count = 0
-
-            if rows:
-                page_count = int(
-                    rows[0][0] or 0
-                )
-
-            rows = _execute(
-                """
-                PRAGMA page_size
-                """,
-                fetch=True
-            )
-
-            page_size = 0
-
-            if rows:
-                page_size = int(
-                    rows[0][0] or 0
-                )
-
-            size_bytes = (
-                page_count * page_size
-            )
-
-            size_mb = (
-                size_bytes
-                / 1024
-                / 1024
-            )
-
-            return {
-                "success": True,
-                "size_mb": size_mb,
-                "size_gb": size_mb / 1024,
-                "storage_type": "Turso"
-            }
-
-        except Exception:
-            pass
-
-    # --------------------------------------------------------
-    # SQLite
-    # --------------------------------------------------------
+    state = get_collection_state()
 
     try:
 
-        if DB_FILE.exists():
+        last_id = int(
+            state.get(
+                "last_completed_id",
+                0
+            ) or 0
+        )
 
-            size_bytes = (
-                DB_FILE.stat().st_size
-            )
+        end_id = int(
+            state.get(
+                "end_id",
+                0
+            ) or 0
+        )
 
-            size_mb = (
-                size_bytes
-                / 1024
-                / 1024
-            )
+        if last_id > 0:
 
-            return {
-                "success": True,
-                "size_mb": size_mb,
-                "size_gb": size_mb / 1024,
-                "storage_type": "SQLite"
-            }
+            next_id = last_id + 1
+
+            if end_id <= 0:
+                return next_id
+
+            if next_id <= end_id:
+                return next_id
 
     except Exception:
+
         pass
 
+    return None
+
+
+# ============================================================
+# 수동 배당 확률 계산
+#
+# 기본:
+# 확률 = 1 / 배당
+#
+# 추가로 정규화 확률도 계산
+# 정규화:
+# raw 확률 / 전체 raw 확률
+# ============================================================
+
+def calculate_odds_probabilities(
+    home_odds,
+    draw_odds,
+    away_odds
+):
+
+    home_odds = float(home_odds)
+    draw_odds = float(draw_odds)
+    away_odds = float(away_odds)
+
+    if (
+        home_odds <= 0
+        or draw_odds <= 0
+        or away_odds <= 0
+    ):
+        raise ValueError(
+            "승/무/패 배당은 0보다 커야 합니다."
+        )
+
+    raw_home = 1.0 / home_odds
+    raw_draw = 1.0 / draw_odds
+    raw_away = 1.0 / away_odds
+
+    total = (
+        raw_home
+        + raw_draw
+        + raw_away
+    )
+
+    normalized_home = (
+        raw_home / total
+    )
+
+    normalized_draw = (
+        raw_draw / total
+    )
+
+    normalized_away = (
+        raw_away / total
+    )
+
     return {
-        "success": False,
-        "size_mb": 0,
-        "size_gb": 0,
-        "storage_type": "SQLite",
-        "error":
-            "DB 저장 용량을 확인할 수 없습니다."
+        "home_probability":
+            raw_home * 100,
+
+        "draw_probability":
+            raw_draw * 100,
+
+        "away_probability":
+            raw_away * 100,
+
+        "home_normalized_probability":
+            normalized_home * 100,
+
+        "draw_normalized_probability":
+            normalized_draw * 100,
+
+        "away_normalized_probability":
+            normalized_away * 100,
+
+        "overround":
+            total * 100
     }
+
+
+# ============================================================
+# 실제 결과의 배당상 확률
+# ============================================================
+
+def get_result_probability(
+    result,
+    probabilities
+):
+
+    result = str(
+        result or ""
+    ).strip()
+
+    result_upper = result.upper()
+
+    if result in (
+        "승",
+        "홈",
+        "H",
+        "HOME"
+    ) or result_upper == "WIN":
+
+        return float(
+            probabilities[
+                "home_normalized_probability"
+            ]
+        )
+
+    if result in (
+        "무",
+        "DRAW",
+        "D"
+    ) or result_upper == "DRAW":
+
+        return float(
+            probabilities[
+                "draw_normalized_probability"
+            ]
+        )
+
+    if result in (
+        "패",
+        "원정",
+        "A",
+        "AWAY"
+    ) or result_upper == "LOSE":
+
+        return float(
+            probabilities[
+                "away_normalized_probability"
+            ]
+        )
+
+    return 0.0
+
+
+# ============================================================
+# 부족확률 계산
+#
+# 기준 확률을 별도로 넣으면:
+#
+# 부족확률 = 기준확률 - 배당상확률
+#
+# 예:
+# 기준 48%
+# 배당상 40%
+# 부족확률 = +8%p
+#
+# 기준확률이 없으면 0으로 계산
+# ============================================================
+
+def calculate_shortage_probability(
+    result,
+    probabilities,
+    expected_probability=None
+):
+
+    result_probability = get_result_probability(
+        result,
+        probabilities
+    )
+
+    if expected_probability is None:
+
+        return {
+            "result_probability":
+                result_probability,
+
+            "expected_probability":
+                None,
+
+            "shortage_probability":
+                None
+        }
+
+    expected_probability = float(
+        expected_probability
+    )
+
+    shortage = (
+        expected_probability
+        - result_probability
+    )
+
+    return {
+        "result_probability":
+            result_probability,
+
+        "expected_probability":
+            expected_probability,
+
+        "shortage_probability":
+            shortage
+    }
+
+
+# ============================================================
+# 수동배당 저장
+#
+# app.py에서 사용할 함수
+# ============================================================
+
+def save_manual_odds(
+    schedule_id,
+    company_name,
+    home_odds,
+    draw_odds,
+    away_odds,
+    result=""
+):
+
+    company_name = str(
+        company_name or ""
+    ).strip()
+
+    if not company_name:
+
+        raise ValueError(
+            "회사를 선택해주세요."
+        )
+
+    probabilities = calculate_odds_probabilities(
+        home_odds,
+        draw_odds,
+        away_odds
+    )
+
+    result_probability = get_result_probability(
+        result,
+        probabilities
+    )
+
+    _execute(
+        """
+        INSERT INTO manual_odds (
+            schedule_id,
+            company_name,
+            home_odds,
+            draw_odds,
+            away_odds,
+            result,
+            home_probability,
+            draw_probability,
+            away_probability,
+            result_probability,
+            shortage_probability
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(schedule_id or ""),
+            company_name,
+            float(home_odds),
+            float(draw_odds),
+            float(away_odds),
+            str(result or ""),
+            probabilities[
+                "home_normalized_probability"
+            ],
+            probabilities[
+                "draw_normalized_probability"
+            ],
+            probabilities[
+                "away_normalized_probability"
+            ],
+            result_probability,
+            None
+        ),
+        retries=4
+    )
+
+    return {
+        "schedule_id":
+            str(schedule_id or ""),
+
+        "company_name":
+            company_name,
+
+        "home_odds":
+            float(home_odds),
+
+        "draw_odds":
+            float(draw_odds),
+
+        "away_odds":
+            float(away_odds),
+
+        "result":
+            str(result or ""),
+
+        "home_probability":
+            probabilities[
+                "home_normalized_probability"
+            ],
+
+        "draw_probability":
+            probabilities[
+                "draw_normalized_probability"
+            ],
+
+        "away_probability":
+            probabilities[
+                "away_normalized_probability"
+            ],
+
+        "result_probability":
+            result_probability,
+
+        "shortage_probability":
+            None,
+
+        "overround":
+            probabilities[
+                "overround"
+            ]
+    }
+
+
+# ============================================================
+# 수동배당 조회
+# ============================================================
+
+def get_manual_odds(
+    schedule_id=None,
+    company_name=None
+):
+
+    conditions = []
+    params = []
+
+    if schedule_id is not None:
+
+        conditions.append(
+            "schedule_id = ?"
+        )
+
+        params.append(
+            str(schedule_id)
+        )
+
+    if company_name:
+
+        conditions.append(
+            "LOWER(TRIM(company_name)) = LOWER(TRIM(?))"
+        )
+
+        params.append(
+            str(company_name)
+        )
+
+    where = ""
+
+    if conditions:
+
+        where = (
+            "WHERE "
+            + " AND ".join(
+                conditions
+            )
+        )
+
+    rows = _execute(
+        f"""
+        SELECT
+            id,
+            schedule_id,
+            company_name,
+            home_odds,
+            draw_odds,
+            away_odds,
+            result,
+            home_probability,
+            draw_probability,
+            away_probability,
+            result_probability,
+            shortage_probability,
+            created_at
+        FROM manual_odds
+        {where}
+        ORDER BY id DESC
+        """,
+        tuple(params),
+        fetch=True
+    )
+
+    return [
+        {
+            "id": row[0],
+            "schedule_id": row[1],
+            "company_name": row[2],
+            "home_odds": row[3],
+            "draw_odds": row[4],
+            "away_odds": row[5],
+            "result": row[6],
+            "home_probability": row[7],
+            "draw_probability": row[8],
+            "away_probability": row[9],
+            "result_probability": row[10],
+            "shortage_probability": row[11],
+            "created_at": row[12]
+        }
+        for row in rows
+    ]
+
+
+# ============================================================
+# 수동배당 결과 + 부족확률 업데이트
+#
+# 기준확률을 넣어 분석할 때 사용
+# ============================================================
+
+def update_manual_shortage(
+    manual_id,
+    expected_probability
+):
+
+    rows = _execute(
+        """
+        SELECT
+            result_probability
+        FROM manual_odds
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (
+            int(manual_id),
+        ),
+        fetch=True
+    )
+
+    if not rows:
+
+        return False
+
+    result_probability = float(
+        rows[0][0] or 0
+    )
+
+    expected_probability = float(
+        expected_probability
+    )
+
+    shortage = (
+        expected_probability
+        - result_probability
+    )
+
+    _execute(
+        """
+        UPDATE manual_odds
+        SET
+            shortage_probability = ?
+        WHERE id = ?
+        """,
+        (
+            shortage,
+            int(manual_id)
+        ),
+        retries=4
+    )
+
+    return True
 
 
 # ============================================================
@@ -901,10 +1568,162 @@ def search_same_odds_all_companies(
 
 
 # ============================================================
+# 마지막 완료 ID
+# ============================================================
+
+def get_last_completed_id():
+
+    state = get_collection_state()
+
+    try:
+
+        return int(
+            state.get(
+                "last_completed_id",
+                0
+            ) or 0
+        )
+
+    except Exception:
+
+        return 0
+
+
+# ============================================================
+# DB 저장 테스트
+# ============================================================
+
+def test_database_connection():
+
+    try:
+
+        rows = _execute(
+            """
+            SELECT 1
+            """,
+            fetch=True,
+            retries=4
+        )
+
+        return bool(
+            rows
+            and rows[0][0] == 1
+        )
+
+    except Exception:
+
+        return False
+
+
+# ============================================================
+# 저장용량
+# ============================================================
+
+def get_storage_usage():
+
+    # --------------------------------------------------------
+    # Turso / libSQL
+    # --------------------------------------------------------
+
+    if _use_turso():
+
+        try:
+
+            rows = _execute(
+                """
+                PRAGMA page_count
+                """,
+                fetch=True
+            )
+
+            page_count = 0
+
+            if rows:
+                page_count = int(
+                    rows[0][0] or 0
+                )
+
+            rows = _execute(
+                """
+                PRAGMA page_size
+                """,
+                fetch=True
+            )
+
+            page_size = 0
+
+            if rows:
+                page_size = int(
+                    rows[0][0] or 0
+                )
+
+            size_bytes = (
+                page_count
+                * page_size
+            )
+
+            size_mb = (
+                size_bytes
+                / 1024
+                / 1024
+            )
+
+            return {
+                "success": True,
+                "size_mb": size_mb,
+                "size_gb": size_mb / 1024,
+                "storage_type": "Turso"
+            }
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # SQLite
+    # --------------------------------------------------------
+
+    try:
+
+        if DB_FILE.exists():
+
+            size_bytes = (
+                DB_FILE.stat().st_size
+            )
+
+            size_mb = (
+                size_bytes
+                / 1024
+                / 1024
+            )
+
+            return {
+                "success": True,
+                "size_mb": size_mb,
+                "size_gb": size_mb / 1024,
+                "storage_type": "SQLite"
+            }
+
+    except Exception:
+        pass
+
+    return {
+        "success": False,
+        "size_mb": 0,
+        "size_gb": 0,
+        "storage_type": "SQLite",
+        "error":
+            "DB 저장 용량을 확인할 수 없습니다."
+    }
+
+
+# ============================================================
 # 모듈 로드 시 DB 초기화
 # ============================================================
 
 try:
+
     init_database()
+
 except Exception:
+
     pass
