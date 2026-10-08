@@ -1,8 +1,8 @@
 # ============================================================
 # analysis.py
-# ⚽ Scoreman 배당 분석 최종본
+# ⚽ Scoreman 배당 분석
 #
-# 핵심
+# 기능
 # - 회사별 분석
 # - 완전 동일배당
 # - 최근 5년
@@ -92,19 +92,26 @@ def analyze_manual_odds(
         }
 
     if (
+
         home_odds <= 1
+
         or draw_odds <= 1
+
         or away_odds <= 1
+
     ):
 
         return {
+
             "success": False,
-            "error": "배당은 1.01 이상이어야 합니다."
+
+            "error":
+                "배당은 1.01 이상이어야 합니다."
+
         }
 
     # --------------------------------------------------------
     # 완전 동일배당
-    # tolerance를 전달받더라도 0으로 강제
     # --------------------------------------------------------
 
     rows = database.search_same_odds(
@@ -138,16 +145,16 @@ def analyze_manual_odds(
             for row in rows:
 
                 date_text = str(
+
                     row.get(
                         "match_date",
                         ""
                     )
                     or ""
+
                 )
 
-                # 날짜가 없으면 제외
                 if not date_text:
-
                     continue
 
                 if date_text[:10] >= cutoff:
@@ -158,20 +165,28 @@ def analyze_manual_odds(
 
             rows = filtered
 
+    # --------------------------------------------------------
+    # 결과 계산
+    # --------------------------------------------------------
+
     total = len(rows)
 
     home_count = 0
     draw_count = 0
     away_count = 0
 
+    unknown_count = 0
+
     for row in rows:
 
         result = str(
+
             row.get(
                 "result",
                 ""
             )
             or ""
+
         ).strip()
 
         if result == "승":
@@ -185,6 +200,10 @@ def analyze_manual_odds(
         elif result == "패":
 
             away_count += 1
+
+        else:
+
+            unknown_count += 1
 
     if total > 0:
 
@@ -239,6 +258,9 @@ def analyze_manual_odds(
 
         "away_count":
             away_count,
+
+        "unknown_count":
+            unknown_count,
 
         "actual_home":
             actual_home,
