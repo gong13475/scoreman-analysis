@@ -5,14 +5,15 @@
 #
 # 기능
 # - 경기 영구 저장
-# - 최종배당 영구 저장
-# - 수집 완료 상태 저장
-# - DB 사용용량 표시
+# - 해외업체 최종배당 영구 저장
+# - 수집 완료상태 영구 저장
+# - 이어받기 위치 저장
+# - DB 용량 조회
+# - 기존 DB 컬럼 자동 보정
 # ============================================================
 
 import os
 import sqlite3
-
 from pathlib import Path
 from datetime import datetime
 
@@ -25,13 +26,13 @@ DB_FILE = (
 
 TURSO_DATABASE_URL = os.getenv(
     "TURSO_DATABASE_URL",
-    ""
+    "",
 ).strip()
 
 
 TURSO_AUTH_TOKEN = os.getenv(
     "TURSO_AUTH_TOKEN",
-    ""
+    "",
 ).strip()
 
 
@@ -40,6 +41,10 @@ TURSO_AUTH_TOKEN = os.getenv(
 # ============================================================
 
 def get_connection():
+
+    # --------------------------------------------------------
+    # Turso
+    # --------------------------------------------------------
 
     if (
         TURSO_DATABASE_URL
@@ -60,6 +65,10 @@ def get_connection():
             print(
                 f"[Turso 연결 실패] {e}"
             )
+
+    # --------------------------------------------------------
+    # Local SQLite
+    # --------------------------------------------------------
 
     conn = sqlite3.connect(
         str(DB_FILE),
@@ -89,12 +98,32 @@ def get_connection():
     return conn
 
 
+# ============================================================
+# 커밋
+# ============================================================
+
 def _commit(conn):
 
     try:
         conn.commit()
+
     except Exception:
         pass
+
+
+# ============================================================
+# DB 종류
+# ============================================================
+
+def get_database_type():
+
+    if (
+        TURSO_DATABASE_URL
+        and TURSO_AUTH_TOKEN
+    ):
+        return "Turso 영구 DB"
+
+    return "로컬 SQLite"
 
 
 # ============================================================
@@ -106,6 +135,10 @@ def init_database():
     conn = get_connection()
 
     try:
+
+        # ----------------------------------------------------
+        # 경기
+        # ----------------------------------------------------
 
         conn.execute(
             """
@@ -122,6 +155,10 @@ def init_database():
             """
         )
 
+        # ----------------------------------------------------
+        # 배당
+        # ----------------------------------------------------
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS odds (
@@ -129,14 +166,17 @@ def init_database():
                 schedule_id TEXT NOT NULL,
                 company_id TEXT,
                 company_name TEXT,
-                bookmaker TEXT NOT NULL,
+                bookmaker TEXT,
                 final_home REAL,
                 final_draw REAL,
-                final_away REAL,
-                UNIQUE(schedule_id, bookmaker)
+                final_away REAL
             )
             """
         )
+
+        # ----------------------------------------------------
+        # 수집 상태
+        # ----------------------------------------------------
 
         conn.execute(
             """
@@ -158,15 +198,80 @@ def init_database():
 
         try:
             conn.close()
+
         except Exception:
             pass
 
 
 # ============================================================
-# 컬럼 보정
+# 컬럼 자동 보정
 # ============================================================
 
 def ensure_columns(conn):
+
+    # --------------------------------------------------------
+    # matches
+    # --------------------------------------------------------
+
+    try:
+
+        rows = conn.execute(
+            "PRAGMA table_info(matches)"
+        ).fetchall()
+
+        columns = set()
+
+        for row in rows:
+
+            try:
+                columns.add(row["name"])
+
+            except Exception:
+                columns.add(row[1])
+
+        required = {
+            "match_date":
+                "TEXT",
+
+            "home_team":
+                "TEXT",
+
+            "away_team":
+                "TEXT",
+
+            "home_score":
+                "INTEGER",
+
+            "away_score":
+                "INTEGER",
+
+            "result":
+                "TEXT",
+
+            "source":
+                "TEXT",
+        }
+
+        for name, typ in required.items():
+
+            if name not in columns:
+
+                conn.execute(
+                    f"""
+                    ALTER TABLE matches
+                    ADD COLUMN {name} {typ}
+                    """
+                )
+
+    except Exception as e:
+
+        print(
+            f"[matches 컬럼 확인] {e}"
+        )
+
+    # --------------------------------------------------------
+    # odds
+    # --------------------------------------------------------
 
     try:
 
@@ -180,62 +285,42 @@ def ensure_columns(conn):
 
             try:
                 columns.add(row["name"])
+
             except Exception:
                 columns.add(row[1])
 
-        if "company_id" not in columns:
+        required = {
+            "company_id":
+                "TEXT",
 
-            conn.execute(
-                """
-                ALTER TABLE odds
-                ADD COLUMN company_id TEXT
-                """
-            )
+            "company_name":
+                "TEXT",
 
-        if "company_name" not in columns:
+            "bookmaker":
+                "TEXT",
 
-            conn.execute(
-                """
-                ALTER TABLE odds
-                ADD COLUMN company_name TEXT
-                """
-            )
+            "final_home":
+                "REAL",
 
-        if "bookmaker" not in columns:
+            "final_draw":
+                "REAL",
 
-            conn.execute(
-                """
-                ALTER TABLE odds
-                ADD COLUMN bookmaker TEXT
-                """
-            )
+            "final_away":
+                "REAL",
+        }
 
-        if "final_home" not in columns:
+        for name, typ in required.items():
 
-            conn.execute(
-                """
-                ALTER TABLE odds
-                ADD COLUMN final_home REAL
-                """
-            )
+            if name not in columns:
 
-        if "final_draw" not in columns:
+                conn.execute(
+                    f"""
+                    ALTER TABLE odds
+                    ADD COLUMN {name} {typ}
+                    """
+                )
 
-            conn.execute(
-                """
-                ALTER TABLE odds
-                ADD COLUMN final_draw REAL
-                """
-            )
-
-        if "final_away" not in columns:
-
-            conn.execute(
-                """
-                ALTER TABLE odds
-                ADD COLUMN final_away REAL
-                """
-            )
+        # 기존 bookmaker 보정
 
         conn.execute(
             """
@@ -257,6 +342,10 @@ def ensure_columns(conn):
             f"[odds 컬럼 확인] {e}"
         )
 
+    # --------------------------------------------------------
+    # collection_state
+    # --------------------------------------------------------
+
     try:
 
         rows = conn.execute(
@@ -269,6 +358,7 @@ def ensure_columns(conn):
 
             try:
                 columns.add(row["name"])
+
             except Exception:
                 columns.add(row[1])
 
@@ -360,6 +450,7 @@ def save_match(
 
         try:
             conn.rollback()
+
         except Exception:
             pass
 
@@ -375,6 +466,7 @@ def save_match(
 
         try:
             conn.close()
+
         except Exception:
             pass
 
@@ -410,23 +502,30 @@ def save_odds(
             company_name or ""
         ).strip()
 
-        bookmaker = company_name
+        bookmaker = (
+            company_name
+            if company_name
+            else f"CID_{company_id}"
+        )
 
-        if not bookmaker:
+        home = float(final_home)
+        draw = float(final_draw)
+        away = float(final_away)
 
-            bookmaker = (
-                f"CID_{company_id}"
-            )
+        # ----------------------------------------------------
+        # 기존 업체 확인
+        # ----------------------------------------------------
 
         row = conn.execute(
             """
             SELECT id
             FROM odds
-            WHERE schedule_id = ?
-              AND (
+            WHERE
+                schedule_id = ?
+                AND (
                     bookmaker = ?
                     OR company_name = ?
-                  )
+                )
             LIMIT 1
             """,
             (
@@ -440,6 +539,7 @@ def save_odds(
 
             try:
                 row_id = row["id"]
+
             except Exception:
                 row_id = row[0]
 
@@ -459,9 +559,9 @@ def save_odds(
                     company_id,
                     company_name,
                     bookmaker,
-                    float(final_home),
-                    float(final_draw),
-                    float(final_away),
+                    home,
+                    draw,
+                    away,
                     row_id,
                 ),
             )
@@ -486,9 +586,9 @@ def save_odds(
                     company_id,
                     company_name,
                     bookmaker,
-                    float(final_home),
-                    float(final_draw),
-                    float(final_away),
+                    home,
+                    draw,
+                    away,
                 ),
             )
 
@@ -500,6 +600,7 @@ def save_odds(
 
         try:
             conn.rollback()
+
         except Exception:
             pass
 
@@ -516,12 +617,13 @@ def save_odds(
 
         try:
             conn.close()
+
         except Exception:
             pass
 
 
 # ============================================================
-# 완료 상태 저장
+# 수집 상태 저장
 # ============================================================
 
 def save_collection_state(
@@ -536,6 +638,9 @@ def save_collection_state(
         now = datetime.now().isoformat(
             timespec="seconds"
         )
+
+        # 반드시 UPSERT
+        # UNIQUE constraint 오류 방지
 
         conn.execute(
             """
@@ -566,6 +671,7 @@ def save_collection_state(
 
         try:
             conn.rollback()
+
         except Exception:
             pass
 
@@ -580,6 +686,7 @@ def save_collection_state(
 
         try:
             conn.close()
+
         except Exception:
             pass
 
@@ -589,7 +696,7 @@ def save_collection_state(
 # ============================================================
 
 def is_collection_completed(
-    schedule_id
+    schedule_id,
 ):
 
     conn = get_connection()
@@ -603,7 +710,9 @@ def is_collection_completed(
             WHERE id = ?
             LIMIT 1
             """,
-            (str(schedule_id),),
+            (
+                str(schedule_id),
+            ),
         ).fetchone()
 
         if not row:
@@ -611,10 +720,14 @@ def is_collection_completed(
 
         try:
             status = row["status"]
+
         except Exception:
             status = row[0]
 
-        return status == "completed"
+        return (
+            str(status)
+            == "completed"
+        )
 
     except Exception:
 
@@ -624,117 +737,128 @@ def is_collection_completed(
 
         try:
             conn.close()
+
         except Exception:
             pass
 
 
 # ============================================================
-# DB 사용용량
+# 마지막 완료 ID
 # ============================================================
 
-def get_database_size():
+def get_last_completed_id():
 
-    # --------------------------------------------------------
-    # 로컬 SQLite
-    # --------------------------------------------------------
-
-    if not (
-        TURSO_DATABASE_URL
-        and TURSO_AUTH_TOKEN
-    ):
-
-        try:
-
-            if DB_FILE.exists():
-
-                size = DB_FILE.stat().st_size
-
-                return {
-                    "bytes": int(size),
-                    "mb": size / 1024 / 1024,
-                    "gb": size / 1024 / 1024 / 1024,
-                    "text":
-                        f"{size / 1024 / 1024:.2f} MB",
-                    "mode": "로컬 SQLite",
-                    "available": True,
-                }
-
-        except Exception:
-            pass
-
-        return {
-            "bytes": 0,
-            "mb": 0,
-            "gb": 0,
-            "text": "0 MB",
-            "mode": "로컬 SQLite",
-            "available": False,
-        }
-
-    # --------------------------------------------------------
-    # Turso
-    # --------------------------------------------------------
-
-    conn = None
+    conn = get_connection()
 
     try:
 
-        conn = get_connection()
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM collection_state
+            WHERE status = 'completed'
+            """
+        ).fetchall()
 
-        page_count_row = conn.execute(
-            "PRAGMA page_count"
-        ).fetchone()
+        values = []
 
-        page_size_row = conn.execute(
-            "PRAGMA page_size"
-        ).fetchone()
+        for row in rows:
 
-        page_count = int(
-            page_count_row[0]
-        )
+            try:
+                value = row["id"]
 
-        page_size = int(
-            page_size_row[0]
-        )
+            except Exception:
+                value = row[0]
 
-        size = (
-            page_count
-            * page_size
-        )
+            try:
+                values.append(
+                    int(value)
+                )
 
-        return {
-            "bytes": int(size),
-            "mb": size / 1024 / 1024,
-            "gb": size / 1024 / 1024 / 1024,
-            "text":
-                f"{size / 1024 / 1024:.2f} MB",
-            "mode": "Turso",
-            "available": True,
-        }
+            except Exception:
+                continue
 
-    except Exception as e:
+        if not values:
+            return None
 
-        print(
-            f"[Turso DB 용량 조회 실패] {e}"
-        )
+        return max(values)
 
-        return {
-            "bytes": 0,
-            "mb": 0,
-            "gb": 0,
-            "text": "조회 불가",
-            "mode": "Turso",
-            "available": False,
-        }
+    except Exception:
+
+        return None
 
     finally:
 
-        if conn:
+        try:
+            conn.close()
+
+        except Exception:
+            pass
+
+
+# ============================================================
+# 특정 범위 마지막 완료 ID
+# ============================================================
+
+def get_last_completed_id_in_range(
+    start_id,
+    end_id,
+):
+
+    conn = get_connection()
+
+    try:
+
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM collection_state
+            WHERE
+                status = 'completed'
+                AND CAST(id AS INTEGER)
+                    BETWEEN ?
+                    AND ?
+            """,
+            (
+                int(start_id),
+                int(end_id),
+            ),
+        ).fetchall()
+
+        values = []
+
+        for row in rows:
 
             try:
-                conn.close()
+                value = row["id"]
+
             except Exception:
-                pass
+                value = row[0]
+
+            try:
+                values.append(
+                    int(value)
+                )
+
+            except Exception:
+                continue
+
+        if not values:
+            return None
+
+        return max(values)
+
+    except Exception:
+
+        return None
+
+    finally:
+
+        try:
+            conn.close()
+
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -749,6 +873,12 @@ def get_database_status():
         "matches": 0,
         "odds": 0,
         "bookmakers": 0,
+        "completed": 0,
+        "size_bytes": 0,
+        "size_mb": 0.0,
+        "type": get_database_type(),
+        "last_completed_id":
+            get_last_completed_id(),
     }
 
     try:
@@ -758,26 +888,106 @@ def get_database_status():
         ).fetchone()
 
         if row:
-            result["matches"] = int(row[0])
+            result["matches"] = int(
+                row[0]
+            )
 
         row = conn.execute(
             "SELECT COUNT(*) FROM odds"
         ).fetchone()
 
         if row:
-            result["odds"] = int(row[0])
+            result["odds"] = int(
+                row[0]
+            )
 
         row = conn.execute(
             """
             SELECT COUNT(DISTINCT bookmaker)
             FROM odds
-            WHERE bookmaker IS NOT NULL
-              AND bookmaker != ''
+            WHERE
+                bookmaker IS NOT NULL
+                AND bookmaker != ''
             """
         ).fetchone()
 
         if row:
-            result["bookmakers"] = int(row[0])
+            result["bookmakers"] = int(
+                row[0]
+            )
+
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM collection_state
+            WHERE status = 'completed'
+            """
+        ).fetchone()
+
+        if row:
+            result["completed"] = int(
+                row[0]
+            )
+
+        # ----------------------------------------------------
+        # SQLite/Turso 용량
+        # ----------------------------------------------------
+
+        try:
+
+            page_count = conn.execute(
+                "PRAGMA page_count"
+            ).fetchone()
+
+            page_size = conn.execute(
+                "PRAGMA page_size"
+            ).fetchone()
+
+            if page_count and page_size:
+
+                size_bytes = (
+                    int(page_count[0])
+                    * int(page_size[0])
+                )
+
+                result["size_bytes"] = (
+                    size_bytes
+                )
+
+                result["size_mb"] = (
+                    size_bytes
+                    / 1024
+                    / 1024
+                )
+
+        except Exception:
+            pass
+
+        # 로컬 SQLite 실제 파일 크기도 확인
+
+        if (
+            result["size_bytes"] == 0
+            and DB_FILE.exists()
+        ):
+
+            try:
+
+                size_bytes = (
+                    DB_FILE.stat().st_size
+                )
+
+                result["size_bytes"] = (
+                    size_bytes
+                )
+
+                result["size_mb"] = (
+                    size_bytes
+                    / 1024
+                    / 1024
+                )
+
+            except Exception:
+                pass
 
     except Exception as e:
 
@@ -789,22 +999,9 @@ def get_database_status():
 
         try:
             conn.close()
+
         except Exception:
             pass
-
-    size = get_database_size()
-
-    result.update(
-        {
-            "db_bytes": size["bytes"],
-            "db_mb": size["mb"],
-            "db_gb": size["gb"],
-            "db_size_text": size["text"],
-            "db_mode": size["mode"],
-            "db_size_available":
-                size["available"],
-        }
-    )
 
     return result
 
@@ -825,8 +1022,9 @@ def get_bookmakers():
                 bookmaker,
                 COUNT(*) AS games
             FROM odds
-            WHERE bookmaker IS NOT NULL
-              AND bookmaker != ''
+            WHERE
+                bookmaker IS NOT NULL
+                AND bookmaker != ''
             GROUP BY bookmaker
             ORDER BY bookmaker
             """
@@ -837,9 +1035,12 @@ def get_bookmakers():
         for row in rows:
 
             try:
+
                 name = row["bookmaker"]
                 games = row["games"]
+
             except Exception:
+
                 name = row[0]
                 games = row[1]
 
@@ -860,12 +1061,13 @@ def get_bookmakers():
 
         try:
             conn.close()
+
         except Exception:
             pass
 
 
 # ============================================================
-# 분석용 전체 데이터
+# 분석 데이터
 # ============================================================
 
 def get_analysis_rows(
@@ -876,45 +1078,61 @@ def get_analysis_rows(
 
     try:
 
-        sql = """
-            SELECT
-                m.schedule_id,
-                m.match_date,
-                m.home_team,
-                m.away_team,
-                m.home_score,
-                m.away_score,
-                m.result,
-                o.bookmaker,
-                o.company_id,
-                o.final_home,
-                o.final_draw,
-                o.final_away
-            FROM matches m
-            INNER JOIN odds o
-                ON m.schedule_id = o.schedule_id
-        """
-
-        params = ()
-
         if bookmaker:
 
-            sql += """
+            rows = conn.execute(
+                """
+                SELECT
+                    m.schedule_id,
+                    m.match_date,
+                    m.home_team,
+                    m.away_team,
+                    m.home_score,
+                    m.away_score,
+                    m.result,
+                    o.bookmaker,
+                    o.company_id,
+                    o.company_name,
+                    o.final_home,
+                    o.final_draw,
+                    o.final_away
+                FROM matches m
+                INNER JOIN odds o
+                    ON m.schedule_id =
+                       o.schedule_id
                 WHERE o.bookmaker = ?
-            """
+                ORDER BY m.match_date DESC
+                """,
+                (
+                    bookmaker,
+                ),
+            ).fetchall()
 
-            params = (
-                bookmaker,
-            )
+        else:
 
-        sql += """
-            ORDER BY m.match_date DESC
-        """
-
-        rows = conn.execute(
-            sql,
-            params,
-        ).fetchall()
+            rows = conn.execute(
+                """
+                SELECT
+                    m.schedule_id,
+                    m.match_date,
+                    m.home_team,
+                    m.away_team,
+                    m.home_score,
+                    m.away_score,
+                    m.result,
+                    o.bookmaker,
+                    o.company_id,
+                    o.company_name,
+                    o.final_home,
+                    o.final_draw,
+                    o.final_away
+                FROM matches m
+                INNER JOIN odds o
+                    ON m.schedule_id =
+                       o.schedule_id
+                ORDER BY m.match_date DESC
+                """
+            ).fetchall()
 
         result = []
 
@@ -939,9 +1157,10 @@ def get_analysis_rows(
                         "result": row[6],
                         "bookmaker": row[7],
                         "company_id": row[8],
-                        "final_home": row[9],
-                        "final_draw": row[10],
-                        "final_away": row[11],
+                        "company_name": row[9],
+                        "final_home": row[10],
+                        "final_draw": row[11],
+                        "final_away": row[12],
                     }
                 )
 
@@ -959,6 +1178,7 @@ def get_analysis_rows(
 
         try:
             conn.close()
+
         except Exception:
             pass
 
@@ -968,7 +1188,7 @@ def get_analysis_rows(
 # ============================================================
 
 def get_match_odds(
-    schedule_id
+    schedule_id,
 ):
 
     conn = get_connection()
@@ -981,15 +1201,19 @@ def get_match_odds(
                 m.*,
                 o.bookmaker,
                 o.company_id,
+                o.company_name,
                 o.final_home,
                 o.final_draw,
                 o.final_away
             FROM matches m
             LEFT JOIN odds o
-                ON m.schedule_id = o.schedule_id
+                ON m.schedule_id =
+                   o.schedule_id
             WHERE m.schedule_id = ?
             """,
-            (str(schedule_id),),
+            (
+                str(schedule_id),
+            ),
         ).fetchall()
 
         result = []
@@ -1000,6 +1224,7 @@ def get_match_odds(
                 result.append(
                     dict(row)
                 )
+
             except Exception:
                 pass
 
@@ -1013,6 +1238,7 @@ def get_match_odds(
 
         try:
             conn.close()
+
         except Exception:
             pass
 
