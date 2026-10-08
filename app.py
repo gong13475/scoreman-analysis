@@ -1,13 +1,11 @@
 # ============================================================
 # app.py
 # ⚽ 전종목 해외배당 분석
-# Scoreman 자동수집 · 최종배당 · 실제결과 · 확률분석
 # ============================================================
 
 import time
-from datetime import datetime
-
 import streamlit as st
+import pandas as pd
 
 import database
 import collector
@@ -15,30 +13,22 @@ import analysis
 
 
 # ============================================================
-# 페이지
+# 기본 설정
 # ============================================================
 
 st.set_page_config(
     page_title="⚽ 전종목 해외배당 분석",
     page_icon="⚽",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
-
-
-# ============================================================
-# 초기화
-# ============================================================
-
-database.init_database()
 
 
 # ============================================================
 # 제목
 # ============================================================
 
-st.title(
-    "⚽ 전종목 해외배당 분석"
-)
+st.title("⚽ 전종목 해외배당 분석")
 
 st.caption(
     "스코어맨 자동수집 · 해외업체 최종배당 · "
@@ -47,89 +37,138 @@ st.caption(
 
 
 # ============================================================
-# 사이드바
+# DB 상태
 # ============================================================
 
-with st.sidebar:
+database.init_database()
 
-    st.header(
-        "⚙️ 수집 설정"
-    )
+db = database.get_database_status()
+size = database.get_database_size()
+
+st.subheader("🗄️ 데이터베이스 상태")
+
+c1, c2, c3, c4, c5 = st.columns(5)
+
+c1.metric(
+    "저장 경기",
+    f"{db['matches']:,}",
+)
+
+c2.metric(
+    "저장 최종배당",
+    f"{db['odds']:,}",
+)
+
+c3.metric(
+    "실제 저장 업체",
+    f"{db['bookmakers']:,}",
+)
+
+c4.metric(
+    "실제 결과",
+    f"{db['results']:,}",
+)
+
+c5.metric(
+    "결과 미확인",
+    f"{db['unresolved']:,}",
+)
+
+st.caption(
+    f"DB: {size['mode']} · "
+    f"{size['mb']:.2f} MB"
+)
+
+
+# ============================================================
+# 수집
+# ============================================================
+
+st.divider()
+
+st.header("📥 Scoreman 백그라운드 수집")
+
+col1, col2 = st.columns(2)
+
+with col1:
 
     start_id = st.number_input(
         "시작 ID",
         min_value=1,
-        value=2800026,
+        value=2005000,
         step=1,
+        format="%d",
     )
+
+with col2:
 
     end_id = st.number_input(
         "종료 ID",
         min_value=1,
-        value=3000000,
+        value=3001118,
         step=1,
+        format="%d",
     )
 
-    st.write(
-        f"수집 경기 수: "
-        f"{max(0, int(end_id - start_id + 1)):,}"
-    )
 
-    delay = st.number_input(
-        "요청 간격(초)",
-        min_value=0.0,
-        max_value=10.0,
-        value=0.50,
-        step=0.10,
-    )
+# ============================================================
+# 업체
+# ============================================================
 
-    st.divider()
+bookmakers = database.get_bookmakers()
 
-    company_mode = st.radio(
+known_names = [
+    "18Bet",
+    "Bet365",
+    "Crown",
+    "Sbobet",
+    "pinnacle",
+]
+
+for item in bookmakers:
+
+    name = item.get("bookmaker")
+
+    if name and name not in known_names:
+        known_names.append(name)
+
+
+mode = st.radio(
+    "수집 업체",
+    [
+        "전체 업체 자동수집",
         "업체 선택",
-        [
-            "전체 업체",
-            "업체 선택",
-        ],
+    ],
+    horizontal=True,
+)
+
+selected = []
+
+if mode == "업체 선택":
+
+    selected = st.multiselect(
+        "수집할 업체",
+        known_names,
+        default=[],
     )
 
-    companies = [
-        "18Bet",
-        "Bet365",
-        "Crown",
-        "Sbobet",
-        "pinnacle",
-    ]
 
-    if company_mode == "업체 선택":
-
-        selected_companies = (
-            st.multiselect(
-                "수집 업체",
-                companies,
-                default=[
-                    "18Bet",
-                    "Bet365",
-                    "Crown",
-                    "Sbobet",
-                    "pinnacle",
-                ],
-            )
-        )
-
-    else:
-
-        selected_companies = []
+delay = st.number_input(
+    "요청 간격(초)",
+    min_value=0.0,
+    max_value=10.0,
+    value=0.5,
+    step=0.1,
+)
 
 
 # ============================================================
-# 수집 버튼
+# 버튼
 # ============================================================
 
-col1, col2, col3 = st.columns(3)
+b1, b2, b3 = st.columns(3)
 
-
-with col1:
+with b1:
 
     if st.button(
         "▶️ 수집시작",
@@ -137,29 +176,20 @@ with col1:
         use_container_width=True,
     ):
 
-        ok, message = (
-            collector.start_background_collection(
-                int(start_id),
-                int(end_id),
-                selected_companies,
-                float(delay),
-            )
+        ok, message = collector.start_background_collection(
+            int(start_id),
+            int(end_id),
+            selected,
+            delay,
         )
 
         if ok:
-
-            st.success(
-                message
-            )
-
+            st.success(message)
         else:
-
-            st.warning(
-                message
-            )
+            st.error(message)
 
 
-with col2:
+with b2:
 
     if st.button(
         "⏹️ 수집중지",
@@ -167,245 +197,114 @@ with col2:
     ):
 
         if collector.stop_collection():
-
-            st.warning(
-                "수집 중지 요청을 보냈습니다."
-            )
-
+            st.warning("수집 중지 요청을 보냈습니다.")
         else:
-
-            st.info(
-                "현재 수집 중이 아닙니다."
-            )
+            st.info("현재 실행 중인 수집이 없습니다.")
 
 
-with col3:
+with b3:
 
     if st.button(
-        "▶️ 마지막 완료 ID부터 이어받기",
+        "▶️ 마지막 완료부터 이어받기",
         use_container_width=True,
     ):
 
-        ok, message = (
-            collector.resume_collection(
-                int(end_id),
-                selected_companies,
-                float(delay),
-            )
+        ok, message = collector.resume_collection(
+            int(end_id),
+            selected,
+            delay,
         )
 
         if ok:
-
-            st.success(
-                message
-            )
-
+            st.success(message)
         else:
-
-            st.warning(
-                message
-            )
+            st.warning(message)
 
 
 # ============================================================
-# 진행 상태
+# 진행상태
 # ============================================================
 
-st.subheader(
-    "📡 수집 상태"
+st.subheader("📊 수집 진행상태")
+
+progress = collector.get_progress()
+
+p1, p2, p3, p4, p5 = st.columns(5)
+
+p1.metric(
+    "진행",
+    f"{progress['current']:,} / {progress['total']:,}",
 )
 
-progress = (
-    collector.get_progress()
+p2.metric(
+    "성공",
+    f"{progress['success']:,}",
 )
 
-current = progress[
-    "current"
-]
+p3.metric(
+    "중복",
+    f"{progress['exists']:,}",
+)
 
-total = progress[
-    "total"
-]
+p4.metric(
+    "실패",
+    f"{progress['failed']:,}",
+)
 
-percent = progress[
-    "percent"
-]
+p5.metric(
+    "저장 배당",
+    f"{progress['odds']:,}",
+)
 
-if progress["running"]:
+st.progress(
+    min(
+        max(
+            progress["percent"] / 100,
+            0.0,
+        ),
+        1.0,
+    )
+)
+
+if progress["last_completed_id"]:
 
     st.info(
-        "🟢 수집 중입니다."
+        f"마지막 정상 완료 ID: "
+        f"{progress['last_completed_id']:,}"
+    )
+
+
+# ============================================================
+# 실행 상태
+# ============================================================
+
+status = collector.get_job_status()
+
+if status["running"]:
+
+    st.success("🟢 수집 실행 중")
+
+elif status["finished"]:
+
+    st.info(
+        "🏁 수집 종료 · "
+        + str(status["result"])
     )
 
 else:
 
-    if progress["finished"]:
-
-        st.success(
-            "🔵 수집이 종료되었습니다."
-        )
-
-    else:
-
-        st.warning(
-            "🟡 대기 중입니다."
-        )
-
-
-if total > 0:
-
-    st.progress(
-        min(
-            max(
-                percent / 100,
-                0
-            ),
-            1
-        )
-    )
-
-    st.write(
-        f"진행: {current:,} / "
-        f"{total:,} "
-        f"({percent:.2f}%)"
-    )
+    st.info("⚪ 대기 중")
 
 
 # ============================================================
-# 진행 숫자
+# 자동 새로고침
 # ============================================================
 
-c1, c2, c3, c4, c5 = st.columns(5)
-
-
-with c1:
-
-    st.metric(
-        "성공",
-        f"{progress['success']:,}"
-    )
-
-
-with c2:
-
-    st.metric(
-        "중복",
-        f"{progress['exists']:,}"
-    )
-
-
-with c3:
-
-    st.metric(
-        "실패",
-        f"{progress['failed']:,}"
-    )
-
-
-with c4:
-
-    st.metric(
-        "저장 배당",
-        f"{progress['odds']:,}"
-    )
-
-
-with c5:
-
-    last_id = (
-        progress[
-            "last_completed_id"
-        ]
-    )
-
-    st.metric(
-        "마지막 완료 ID",
-        f"{last_id:,}"
-        if last_id
-        else "-"
-    )
-
-
-# ============================================================
-# 자동 갱신
-# ============================================================
-
-if progress["running"]:
+if status["running"]:
 
     time.sleep(1)
 
     st.rerun()
-
-
-# ============================================================
-# DB 상태
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "🗄️ 데이터베이스 상태"
-)
-
-status = (
-    database.get_database_status()
-)
-
-d1, d2, d3, d4, d5 = st.columns(5)
-
-
-with d1:
-
-    st.metric(
-        "저장 경기",
-        f"{status['matches']:,}"
-    )
-
-
-with d2:
-
-    st.metric(
-        "저장 최종배당",
-        f"{status['odds']:,}"
-    )
-
-
-with d3:
-
-    st.metric(
-        "실제 저장 업체",
-        f"{status['bookmakers']:,}"
-    )
-
-
-with d4:
-
-    st.metric(
-        "결과 확인 경기",
-        f"{status['results']:,}"
-    )
-
-
-with d5:
-
-    st.metric(
-        "결과 미확인",
-        f"{status['unresolved']:,}"
-    )
-
-
-# ============================================================
-# DB 모드
-# ============================================================
-
-size = (
-    database.get_database_size()
-)
-
-st.caption(
-    f"DB 모드: {size['mode']} · "
-    f"용량: {size['mb']:.2f} MB"
-)
 
 
 # ============================================================
@@ -414,15 +313,16 @@ st.caption(
 
 st.divider()
 
+st.subheader("📋 수집 로그")
+
 show_log = st.checkbox(
-    "📜 수집 로그 보기"
+    "로그 보기",
+    value=False,
 )
 
 if show_log:
 
-    logs = (
-        collector.get_logs()
-    )
+    logs = collector.get_logs()
 
     if logs:
 
@@ -433,9 +333,39 @@ if show_log:
 
     else:
 
-        st.info(
-            "표시할 로그가 없습니다."
-        )
+        st.info("로그가 없습니다.")
+
+
+# ============================================================
+# 결과 없는 경기
+# ============================================================
+
+st.divider()
+
+st.subheader("⚠️ 결과 미확인 경기")
+
+unresolved = database.get_unresolved_matches()
+
+st.write(
+    f"결과 미확인: **{len(unresolved):,}경기**"
+)
+
+if unresolved:
+
+    unresolved_df = pd.DataFrame(
+        unresolved
+    )
+
+    st.dataframe(
+        unresolved_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        "이 경기들은 완료 ID로 처리되지 않았기 때문에 "
+        "다시 수집할 수 있습니다."
+    )
 
 
 # ============================================================
@@ -444,106 +374,74 @@ if show_log:
 
 st.divider()
 
-st.header(
-    "📊 경기 분석"
-)
+st.header("📈 경기 분석")
 
-bookmakers = (
-    database.get_bookmakers()
-)
+bookmaker_options = ["전체"]
 
-bookmaker_names = [
-    x["bookmaker"]
-    for x in bookmakers
-]
+for item in database.get_bookmakers():
 
-analysis_option = st.selectbox(
+    name = item.get("bookmaker")
+
+    if name:
+        bookmaker_options.append(name)
+
+
+selected_bookmaker = st.selectbox(
     "분석 업체",
-    ["전체 업체"]
-    + bookmaker_names,
+    bookmaker_options,
 )
 
 
-if analysis_option == "전체 업체":
+if selected_bookmaker == "전체":
 
-    bookmaker_filter = None
+    rows = database.get_analysis_rows()
 
 else:
 
-    bookmaker_filter = (
-        analysis_option
+    rows = database.get_analysis_rows(
+        selected_bookmaker
     )
 
 
-summary = (
-    analysis.get_summary(
-        bookmaker_filter
-    )
-)
-
+stats = analysis.result_counts(rows)
 
 a1, a2, a3, a4 = st.columns(4)
 
+a1.metric(
+    "분석 경기",
+    f"{stats['total']:,}",
+)
 
-with a1:
+a2.metric(
+    "승",
+    f"{stats['승']:,} ({stats['승률']:.2f}%)",
+)
 
-    st.metric(
-        "전체 경기",
-        f"{summary['total']:,}"
-    )
+a3.metric(
+    "무",
+    f"{stats['무']:,} ({stats['무율']:.2f}%)",
+)
 
-
-with a2:
-
-    st.metric(
-        "승",
-        f"{summary['win']:,} "
-        f"({summary['win_pct']:.2f}%)"
-    )
-
-
-with a3:
-
-    st.metric(
-        "무",
-        f"{summary['draw']:,} "
-        f"({summary['draw_pct']:.2f}%)"
-    )
-
-
-with a4:
-
-    st.metric(
-        "패",
-        f"{summary['loss']:,} "
-        f"({summary['loss_pct']:.2f}%)"
-    )
+a4.metric(
+    "패",
+    f"{stats['패']:,} ({stats['패율']:.2f}%)",
+)
 
 
 # ============================================================
-# 업체별 분석
+# 업체별
 # ============================================================
 
-st.subheader(
-    "🏢 업체별 실제 결과"
-)
+st.subheader("🏢 업체별 결과")
 
-bookmaker_summary = (
-    analysis.get_bookmaker_summary()
-)
+company_stats = analysis.bookmaker_stats(rows)
 
-if bookmaker_summary:
+if company_stats:
 
     st.dataframe(
-        bookmaker_summary,
+        pd.DataFrame(company_stats),
         use_container_width=True,
         hide_index=True,
-    )
-
-else:
-
-    st.info(
-        "업체별 분석 데이터가 없습니다."
     )
 
 
@@ -551,251 +449,146 @@ else:
 # 동일배당 분석
 # ============================================================
 
-st.divider()
+st.subheader("🎯 동일배당 과거결과 분석")
 
-st.subheader(
-    "🎯 동일배당 과거 결과 분석"
-)
+x1, x2, x3, x4 = st.columns(4)
 
-o1, o2, o3, o4 = st.columns(4)
-
-
-with o1:
-
-    input_home = st.number_input(
-        "승 배당",
-        min_value=1.01,
+with x1:
+    target_home = st.number_input(
+        "홈 승",
         value=2.00,
         step=0.01,
+        format="%.2f",
     )
 
-
-with o2:
-
-    input_draw = st.number_input(
-        "무 배당",
-        min_value=1.01,
+with x2:
+    target_draw = st.number_input(
+        "무",
         value=3.20,
         step=0.01,
+        format="%.2f",
     )
 
-
-with o3:
-
-    input_away = st.number_input(
-        "패 배당",
-        min_value=1.01,
+with x3:
+    target_away = st.number_input(
+        "원정 승",
         value=3.50,
         step=0.01,
+        format="%.2f",
     )
 
-
-with o4:
-
+with x4:
     tolerance = st.number_input(
         "허용오차",
-        min_value=0.001,
-        max_value=0.5,
         value=0.01,
+        min_value=0.0,
         step=0.01,
+        format="%.2f",
     )
 
 
-if st.button(
-    "🔎 동일배당 분석",
-    use_container_width=True,
-):
+same_rows = analysis.same_odds_analysis(
+    rows,
+    target_home,
+    target_draw,
+    target_away,
+    tolerance,
+)
 
-    same = (
-        analysis.same_odds_summary(
-            input_home,
-            input_draw,
-            input_away,
-            tolerance,
-            bookmaker_filter,
-        )
+if same_rows:
+
+    same_stats = analysis.result_counts(
+        same_rows
     )
 
-    s1, s2, s3, s4 = st.columns(4)
+    st.success(
+        f"동일배당 경기 {same_stats['total']}경기"
+    )
 
-    with s1:
+    s1, s2, s3 = st.columns(3)
 
-        st.metric(
-            "동일배당 경기",
-            f"{same['total']:,}"
-        )
+    s1.metric(
+        "승",
+        f"{same_stats['승']} ({same_stats['승률']:.2f}%)",
+    )
 
-    with s2:
+    s2.metric(
+        "무",
+        f"{same_stats['무']} ({same_stats['무율']:.2f}%)",
+    )
 
-        st.metric(
-            "승",
-            f"{same['win']:,} "
-            f"({same['win_pct']:.2f}%)"
-        )
-
-    with s3:
-
-        st.metric(
-            "무",
-            f"{same['draw']:,} "
-            f"({same['draw_pct']:.2f}%)"
-        )
-
-    with s4:
-
-        st.metric(
-            "패",
-            f"{same['loss']:,} "
-            f"({same['loss_pct']:.2f}%)"
-        )
-
-    if same["rows"]:
-
-        st.dataframe(
-            same["rows"],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-
-# ============================================================
-# 결과 미확인 경기
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "⚠️ 결과 미확인 경기"
-)
-
-unresolved = (
-    database.get_unresolved_matches()
-)
-
-if unresolved:
-
-    st.warning(
-        f"결과 미확인 경기 "
-        f"{len(unresolved):,}건"
+    s3.metric(
+        "패",
+        f"{same_stats['패']} ({same_stats['패율']:.2f}%)",
     )
 
     st.dataframe(
-        unresolved,
+        pd.DataFrame(same_rows),
         use_container_width=True,
         hide_index=True,
     )
 
 else:
 
-    st.success(
-        "결과 미확인 경기가 없습니다."
+    st.info("동일배당 과거 경기가 없습니다.")
+
+
+# ============================================================
+# 예상확률 vs 실제확률
+# ============================================================
+
+st.subheader("📊 예상확률 대비 실제결과")
+
+ev = analysis.expected_vs_actual(rows)
+
+if ev:
+
+    st.dataframe(
+        pd.DataFrame(ev),
+        use_container_width=True,
+        hide_index=True,
     )
 
+else:
+
+    st.info("분석 가능한 결과 데이터가 없습니다.")
+
 
 # ============================================================
-# 최근 분석 데이터
+# 최근 경기
 # ============================================================
 
-st.divider()
-
-st.subheader(
-    "📋 최근 저장 경기"
-)
-
-rows = database.get_analysis_rows(
-    bookmaker_filter
-)
+st.subheader("📝 최근 저장 경기")
 
 if rows:
 
-    display_rows = []
+    recent = pd.DataFrame(rows)
 
-    for row in rows[:200]:
+    columns = [
+        "schedule_id",
+        "match_date",
+        "home_team",
+        "away_team",
+        "home_score",
+        "away_score",
+        "result",
+        "bookmaker",
+        "final_home",
+        "final_draw",
+        "final_away",
+    ]
 
-        item = {
-
-            "ID":
-                row.get(
-                    "schedule_id"
-                ),
-
-            "날짜":
-                row.get(
-                    "match_date"
-                ),
-
-            "홈":
-                row.get(
-                    "home_team"
-                ),
-
-            "스코어":
-                (
-                    f"{row.get('home_score')}"
-                    f" - "
-                    f"{row.get('away_score')}"
-                ),
-
-            "원정":
-                row.get(
-                    "away_team"
-                ),
-
-            "결과":
-                row.get(
-                    "result"
-                ),
-
-            "업체":
-                row.get(
-                    "bookmaker"
-                ),
-
-            "승배당":
-                row.get(
-                    "final_home"
-                ),
-
-            "무배당":
-                row.get(
-                    "final_draw"
-                ),
-
-            "패배당":
-                row.get(
-                    "final_away"
-                ),
-        }
-
-        display_rows.append(
-            item
-        )
+    available = [
+        c for c in columns
+        if c in recent.columns
+    ]
 
     st.dataframe(
-        display_rows,
+        recent[available].head(100),
         use_container_width=True,
         hide_index=True,
     )
 
 else:
 
-    st.info(
-        "분석할 저장 데이터가 없습니다."
-    )
-
-
-# ============================================================
-# 완료 상태
-# ============================================================
-
-if progress["finished"]:
-
-    st.success(
-        "🏁 "
-        + str(
-            collector.get_job_status().get(
-                "result",
-                ""
-            )
-        )
-    )
+    st.info("저장된 분석 데이터가 없습니다.")
