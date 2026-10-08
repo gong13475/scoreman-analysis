@@ -1,19 +1,6 @@
 # ============================================================
 # analysis.py
-# ⚽ Scoreman 해외배당 분석 엔진 - 최종 교체본
-#
-# 기능
-# - 저장된 경기 분석
-# - 업체별 분석
-# - 수동 최종배당 입력
-# - 동일배당 과거 결과 검색
-# - 승 / 무 / 패 실제 확률
-# - 배당 자체의 암시확률
-# - 실제확률 - 암시확률
-# - 부족확률
-# - 표본수
-# - 소수점 2자리 배당 지원
-# - 최근 5년 / 전체 기간 분석
+# ⚽ Scoreman 해외배당 분석 엔진
 # ============================================================
 
 from datetime import datetime, timedelta
@@ -21,15 +8,11 @@ from datetime import datetime, timedelta
 import database
 
 
-# ============================================================
-# 기본값
-# ============================================================
-
-DEFAULT_TOLERANCE = 0.0001
+DEFAULT_TOLERANCE = 0.01
 
 
 # ============================================================
-# 숫자 변환
+# 숫자
 # ============================================================
 
 def to_float(value, default=None):
@@ -51,10 +34,6 @@ def to_float(value, default=None):
         return default
 
 
-# ============================================================
-# 배당 표시
-# ============================================================
-
 def format_odds(value):
 
     number = to_float(value)
@@ -66,7 +45,7 @@ def format_odds(value):
 
 
 # ============================================================
-# 배당 → 암시확률
+# 배당 암시확률
 # ============================================================
 
 def odds_to_probability(odds):
@@ -76,19 +55,19 @@ def odds_to_probability(odds):
     if odds is None or odds <= 0:
         return 0.0
 
-    return 1.0 / odds * 100.0
+    return (
+        1.0 / odds * 100.0
+    )
 
 
 # ============================================================
-# 3개 배당 암시확률
-#
-# 정규화 전 확률도 별도로 제공
+# 정규화 암시확률
 # ============================================================
 
 def calculate_implied_probabilities(
     home_odds,
     draw_odds,
-    away_odds,
+    away_odds
 ):
 
     home_odds = to_float(home_odds)
@@ -114,20 +93,20 @@ def calculate_implied_probabilities(
             "draw_raw": 0.0,
             "away_raw": 0.0,
 
-            "total_raw": 0.0,
+            "total_raw": 0.0
 
         }
 
     home_raw = (
-        1.0 / home_odds * 100.0
+        1.0 / home_odds * 100
     )
 
     draw_raw = (
-        1.0 / draw_odds * 100.0
+        1.0 / draw_odds * 100
     )
 
     away_raw = (
-        1.0 / away_odds * 100.0
+        1.0 / away_odds * 100
     )
 
     total_raw = (
@@ -136,46 +115,34 @@ def calculate_implied_probabilities(
         + away_raw
     )
 
-    if total_raw <= 0:
-
-        return {
-
-            "home": 0.0,
-            "draw": 0.0,
-            "away": 0.0,
-
-            "home_raw": home_raw,
-            "draw_raw": draw_raw,
-            "away_raw": away_raw,
-
-            "total_raw": total_raw,
-
-        }
-
     return {
 
         "home":
-            home_raw / total_raw * 100.0,
+            home_raw / total_raw * 100,
 
         "draw":
-            draw_raw / total_raw * 100.0,
+            draw_raw / total_raw * 100,
 
         "away":
-            away_raw / total_raw * 100.0,
+            away_raw / total_raw * 100,
 
-        "home_raw": home_raw,
+        "home_raw":
+            home_raw,
 
-        "draw_raw": draw_raw,
+        "draw_raw":
+            draw_raw,
 
-        "away_raw": away_raw,
+        "away_raw":
+            away_raw,
 
-        "total_raw": total_raw,
+        "total_raw":
+            total_raw
 
     }
 
 
 # ============================================================
-# 실제 결과 개수
+# 실제 결과
 # ============================================================
 
 def count_results(rows):
@@ -195,15 +162,12 @@ def count_results(rows):
         ).strip()
 
         if result == "승":
-
             home += 1
 
         elif result == "무":
-
             draw += 1
 
         elif result == "패":
-
             away += 1
 
     return {
@@ -213,22 +177,19 @@ def count_results(rows):
         "away": away,
 
         "win": home,
-
         "loss": away,
 
         "total":
-            home + draw + away,
+            home + draw + away
 
     }
 
 
-# ============================================================
-# 실제 확률
-# ============================================================
-
 def calculate_result_probabilities(rows):
 
-    counts = count_results(rows)
+    counts = count_results(
+        rows
+    )
 
     total = counts["total"]
 
@@ -243,7 +204,7 @@ def calculate_result_probabilities(rows):
             "win": 0.0,
             "loss": 0.0,
 
-            "total": 0,
+            "total": 0
 
         }
 
@@ -252,104 +213,68 @@ def calculate_result_probabilities(rows):
         "home":
             counts["home"]
             / total
-            * 100.0,
+            * 100,
 
         "draw":
             counts["draw"]
             / total
-            * 100.0,
+            * 100,
 
         "away":
             counts["away"]
             / total
-            * 100.0,
+            * 100,
 
         "win":
-            counts["home"]
+            counts["win"]
             / total
-            * 100.0,
+            * 100,
 
         "loss":
-            counts["away"]
+            counts["loss"]
             / total
-            * 100.0,
+            * 100,
 
-        "total": total,
+        "total":
+            total
 
     }
 
 
 # ============================================================
-# 실제확률 - 배당암시확률
-#
-# 양수:
-# 실제 결과 빈도가 배당이 암시하는 확률보다 높음
-#
-# 음수:
-# 실제 결과 빈도가 배당이 암시하는 확률보다 낮음
+# 확률 차이
 # ============================================================
 
 def calculate_probability_gap(
     actual_probability,
-    implied_probability,
+    implied_probability
 ):
 
     return (
         float(actual_probability or 0)
-        - float(implied_probability or 0)
+        -
+        float(implied_probability or 0)
     )
 
-
-# ============================================================
-# 부족확률
-#
-# 실제확률이 암시확률보다 낮을 경우
-# 그 차이를 부족확률로 표시
-#
-# 실제확률 >= 암시확률이면 0
-# ============================================================
 
 def calculate_shortage_probability(
     actual_probability,
-    implied_probability,
+    implied_probability
 ):
 
-    gap = (
-        float(actual_probability or 0)
-        - float(implied_probability or 0)
+    gap = calculate_probability_gap(
+        actual_probability,
+        implied_probability
     )
 
     if gap >= 0:
-
         return 0.0
 
     return abs(gap)
 
 
 # ============================================================
-# 결과 문자열
-# ============================================================
-
-def result_name(result):
-
-    result = str(
-        result or ""
-    ).strip()
-
-    if result == "승":
-        return "승"
-
-    if result == "무":
-        return "무"
-
-    if result == "패":
-        return "패"
-
-    return "-"
-
-
-# ============================================================
-# 날짜 파싱
+# 날짜
 # ============================================================
 
 def parse_date(value):
@@ -362,16 +287,13 @@ def parse_date(value):
     formats = [
 
         "%Y-%m-%d %H:%M",
-
         "%Y-%m-%d",
 
         "%Y/%m/%d %H:%M",
-
         "%Y/%m/%d",
 
         "%Y.%m.%d %H:%M",
-
-        "%Y.%m.%d",
+        "%Y.%m.%d"
 
     ]
 
@@ -390,19 +312,16 @@ def parse_date(value):
     return None
 
 
-# ============================================================
-# 최근 5년 필터
-# ============================================================
-
 def filter_recent_years(
     rows,
-    years=5,
+    years=5
 ):
 
     cutoff = (
         datetime.now()
-        - timedelta(
-            days=365 * years
+        -
+        timedelta(
+            days=365 * int(years)
         )
     )
 
@@ -418,13 +337,9 @@ def filter_recent_years(
 
         if date_value is None:
 
-            # 날짜가 없으면 분석에서 제외하지 않고
-            # 데이터 자체는 유지
             result.append(row)
 
-            continue
-
-        if date_value >= cutoff:
+        elif date_value >= cutoff:
 
             result.append(row)
 
@@ -432,7 +347,7 @@ def filter_recent_years(
 
 
 # ============================================================
-# 같은 배당 검색
+# 동일배당
 # ============================================================
 
 def search_same_odds(
@@ -440,20 +355,8 @@ def search_same_odds(
     home_odds,
     draw_odds,
     away_odds,
-    tolerance=DEFAULT_TOLERANCE,
+    tolerance=DEFAULT_TOLERANCE
 ):
-
-    home_odds = to_float(home_odds)
-    draw_odds = to_float(draw_odds)
-    away_odds = to_float(away_odds)
-
-    if (
-        home_odds is None
-        or draw_odds is None
-        or away_odds is None
-    ):
-
-        return []
 
     try:
 
@@ -467,7 +370,7 @@ def search_same_odds(
 
             away_odds,
 
-            tolerance,
+            tolerance
 
         )
 
@@ -476,57 +379,40 @@ def search_same_odds(
         return []
 
 
-# ============================================================
-# 같은 배당 분석
-# ============================================================
-
 def analyze_same_odds(
     rows,
     home_odds,
     draw_odds,
-    away_odds,
+    away_odds
 ):
 
-    actual = (
-        calculate_result_probabilities(
-            rows
-        )
+    counts = count_results(
+        rows
     )
 
-    implied = (
-        calculate_implied_probabilities(
+    actual = calculate_result_probabilities(
+        rows
+    )
 
-            home_odds,
-
-            draw_odds,
-
-            away_odds,
-
-        )
+    implied = calculate_implied_probabilities(
+        home_odds,
+        draw_odds,
+        away_odds
     )
 
     home_gap = calculate_probability_gap(
-
         actual["home"],
-
-        implied["home"],
-
+        implied["home"]
     )
 
     draw_gap = calculate_probability_gap(
-
         actual["draw"],
-
-        implied["draw"],
-
+        implied["draw"]
     )
 
     away_gap = calculate_probability_gap(
-
         actual["away"],
-
-        implied["away"],
-
+        implied["away"]
     )
 
     return {
@@ -535,19 +421,19 @@ def analyze_same_odds(
             actual["total"],
 
         "home_count":
-            count_results(rows)["home"],
+            counts["home"],
 
         "draw_count":
-            count_results(rows)["draw"],
+            counts["draw"],
 
         "away_count":
-            count_results(rows)["away"],
+            counts["away"],
 
         "win_count":
-            count_results(rows)["win"],
+            counts["win"],
 
         "loss_count":
-            count_results(rows)["loss"],
+            counts["loss"],
 
         "actual_home":
             actual["home"],
@@ -578,29 +464,20 @@ def analyze_same_odds(
 
         "home_shortage":
             calculate_shortage_probability(
-
                 actual["home"],
-
-                implied["home"],
-
+                implied["home"]
             ),
 
         "draw_shortage":
             calculate_shortage_probability(
-
                 actual["draw"],
-
-                implied["draw"],
-
+                implied["draw"]
             ),
 
         "away_shortage":
             calculate_shortage_probability(
-
                 actual["away"],
-
-                implied["away"],
-
+                implied["away"]
             ),
 
         "home_odds":
@@ -610,25 +487,22 @@ def analyze_same_odds(
             float(draw_odds),
 
         "away_odds":
-            float(away_odds),
+            float(away_odds)
 
     }
 
 
 # ============================================================
-# 업체별 전체 경기 분석
+# 업체 전체
 # ============================================================
 
 def analyze_company(
-    company_name,
+    company_name
 ):
 
     try:
-
         matches = database.get_all_matches()
-
     except Exception:
-
         matches = []
 
     rows = []
@@ -656,10 +530,7 @@ def analyze_company(
             name = str(
                 odds.get(
                     "company_name",
-                    odds.get(
-                        "bookmaker",
-                        ""
-                    )
+                    ""
                 )
                 or ""
             ).strip()
@@ -682,27 +553,18 @@ def analyze_company(
 
                 "home_odds":
                     odds.get(
-                        "home_odds",
-                        odds.get(
-                            "final_home"
-                        )
+                        "final_home"
                     ),
 
                 "draw_odds":
                     odds.get(
-                        "draw_odds",
-                        odds.get(
-                            "final_draw"
-                        )
+                        "final_draw"
                     ),
 
                 "away_odds":
                     odds.get(
-                        "away_odds",
-                        odds.get(
-                            "final_away"
-                        )
-                    ),
+                        "final_away"
+                    )
 
             })
 
@@ -711,12 +573,8 @@ def analyze_company(
     return rows
 
 
-# ============================================================
-# 업체 전체 승무패 통계
-# ============================================================
-
 def get_company_statistics(
-    company_name,
+    company_name
 ):
 
     rows = analyze_company(
@@ -760,14 +618,10 @@ def get_company_statistics(
             probabilities["loss"],
 
         "rows":
-            rows,
+            rows
 
     }
 
-
-# ============================================================
-# 모든 업체 통계
-# ============================================================
 
 def get_all_company_statistics():
 
@@ -781,21 +635,19 @@ def get_all_company_statistics():
 
         companies = []
 
-    result = []
+    return [
 
-    for company in companies:
-
-        result.append(
-            get_company_statistics(
-                company
-            )
+        get_company_statistics(
+            company
         )
 
-    return result
+        for company in companies
+
+    ]
 
 
 # ============================================================
-# 특정 배당과 가장 가까운 과거 경기
+# 가까운 배당
 # ============================================================
 
 def find_near_odds(
@@ -803,37 +655,29 @@ def find_near_odds(
     home_odds,
     draw_odds,
     away_odds,
-    tolerance=0.01,
+    tolerance=0.01
 ):
 
-    try:
+    rows = analyze_company(
+        company_name
+    )
 
-        rows = (
-            analyze_company(
-                company_name
-            )
-        )
-
-    except Exception:
-
-        return []
-
-    home_odds = to_float(
+    h0 = to_float(
         home_odds
     )
 
-    draw_odds = to_float(
+    d0 = to_float(
         draw_odds
     )
 
-    away_odds = to_float(
+    a0 = to_float(
         away_odds
     )
 
     if (
-        home_odds is None
-        or draw_odds is None
-        or away_odds is None
+        h0 is None
+        or d0 is None
+        or a0 is None
     ):
 
         return []
@@ -843,21 +687,15 @@ def find_near_odds(
     for row in rows:
 
         h = to_float(
-            row.get(
-                "home_odds"
-            )
+            row.get("home_odds")
         )
 
         d = to_float(
-            row.get(
-                "draw_odds"
-            )
+            row.get("draw_odds")
         )
 
         a = to_float(
-            row.get(
-                "away_odds"
-            )
+            row.get("away_odds")
         )
 
         if (
@@ -865,18 +703,14 @@ def find_near_odds(
             or d is None
             or a is None
         ):
-
             continue
 
         if (
-            abs(h - home_odds)
-            <= tolerance
+            abs(h - h0) <= tolerance
             and
-            abs(d - draw_odds)
-            <= tolerance
+            abs(d - d0) <= tolerance
             and
-            abs(a - away_odds)
-            <= tolerance
+            abs(a - a0) <= tolerance
         ):
 
             result.append(row)
@@ -885,11 +719,7 @@ def find_near_odds(
 
 
 # ============================================================
-# 수동 배당 분석
-#
-# 사용자가
-# 회사 + 최종 승/무/패 배당을 입력하면
-# 과거 동일배당 결과와 비교
+# 수동 분석
 # ============================================================
 
 def analyze_manual_odds(
@@ -898,7 +728,7 @@ def analyze_manual_odds(
     draw_odds,
     away_odds,
     tolerance=DEFAULT_TOLERANCE,
-    recent_years=None,
+    recent_years=None
 ):
 
     home_odds = to_float(
@@ -929,7 +759,7 @@ def analyze_manual_odds(
             "error":
                 "배당값을 정확히 입력하세요.",
 
-            "rows": [],
+            "rows": []
 
         }
 
@@ -943,7 +773,7 @@ def analyze_manual_odds(
 
         away_odds,
 
-        tolerance,
+        tolerance
 
     )
 
@@ -954,7 +784,7 @@ def analyze_manual_odds(
             int(recent_years)
         )
 
-    analysis = analyze_same_odds(
+    result = analyze_same_odds(
 
         rows,
 
@@ -962,14 +792,13 @@ def analyze_manual_odds(
 
         draw_odds,
 
-        away_odds,
+        away_odds
 
     )
 
-    analysis.update({
+    result.update({
 
-        "success":
-            True,
+        "success": True,
 
         "company_name":
             company_name,
@@ -987,17 +816,15 @@ def analyze_manual_odds(
             format_odds(draw_odds),
 
         "away_odds_display":
-            format_odds(away_odds),
+            format_odds(away_odds)
 
     })
 
-    return analysis
+    return result
 
 
 # ============================================================
-# 추천 결과
-#
-# 실제확률이 가장 높은 결과
+# 추천
 # ============================================================
 
 def get_best_result(
@@ -1031,22 +858,15 @@ def get_best_result(
                     0
                 )
                 or 0
-            ),
+            )
 
     }
-
-    if not values:
-        return ""
 
     return max(
         values,
         key=values.get
     )
 
-
-# ============================================================
-# 부족확률이 가장 큰 결과
-# ============================================================
 
 def get_shortage_result(
     analysis
@@ -1079,22 +899,15 @@ def get_shortage_result(
                     0
                 )
                 or 0
-            ),
+            )
 
     }
-
-    if not values:
-        return ""
 
     return max(
         values,
         key=values.get
     )
 
-
-# ============================================================
-# 분석 요약 문자열
-# ============================================================
 
 def make_summary(
     analysis
@@ -1146,7 +959,7 @@ def make_summary(
 
 
 # ============================================================
-# 결과별 상세 데이터
+# 상세
 # ============================================================
 
 def get_result_detail(
@@ -1202,7 +1015,7 @@ def get_result_detail(
                         0
                     )
                     or 0
-                ),
+                )
 
         },
 
@@ -1253,7 +1066,7 @@ def get_result_detail(
                         0
                     )
                     or 0
-                ),
+                )
 
         },
 
@@ -1304,26 +1117,34 @@ def get_result_detail(
                         0
                     )
                     or 0
-                ),
+                )
 
-        },
+        }
 
     ]
 
 
 # ============================================================
-# 배당값 검증
+# 배당 검증
 # ============================================================
 
 def validate_odds(
     home_odds,
     draw_odds,
-    away_odds,
+    away_odds
 ):
 
-    home = to_float(home_odds)
-    draw = to_float(draw_odds)
-    away = to_float(away_odds)
+    home = to_float(
+        home_odds
+    )
+
+    draw = to_float(
+        draw_odds
+    )
+
+    away = to_float(
+        away_odds
+    )
 
     errors = []
 
@@ -1351,21 +1172,17 @@ def validate_odds(
             draw,
 
         "away":
-            away,
+            away
 
     }
 
 
-# ============================================================
-# 모듈 테스트용
-# ============================================================
-
 if __name__ == "__main__":
 
-    test = calculate_implied_probabilities(
-        1.83,
-        3.20,
-        4.10,
+    print(
+        calculate_implied_probabilities(
+            1.83,
+            3.20,
+            4.10
+        )
     )
-
-    print(test)
