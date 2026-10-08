@@ -4,9 +4,9 @@
 #
 # 기능
 # - 배당 -> 시장확률
-# - 전체 경기 확률
+# - 전체 경기 승/무/패
+# - 배당대비 실제 결과
 # - 부족확률
-# - 업체별 분석
 # - 동일배당 정확 일치
 # ============================================================
 
@@ -23,15 +23,7 @@ def safe_float(value):
 
     try:
 
-        if value is None:
-            return None
-
-        value = float(value)
-
-        if value <= 0:
-            return None
-
-        return value
+        return float(value)
 
     except Exception:
 
@@ -59,6 +51,13 @@ def odds_probability(
     ):
         return None
 
+    if (
+        h <= 0
+        or d <= 0
+        or a <= 0
+    ):
+        return None
+
     raw_h = 1 / h
     raw_d = 1 / d
     raw_a = 1 / a
@@ -73,6 +72,7 @@ def odds_probability(
         return None
 
     return {
+
         "home":
             raw_h / total * 100,
 
@@ -85,10 +85,12 @@ def odds_probability(
 
 
 # ============================================================
-# 기본 결과 통계
+# 전체 결과 통계
 # ============================================================
 
-def analyze_rows(rows):
+def analyze_rows(
+    rows,
+):
 
     total = len(rows)
 
@@ -123,6 +125,7 @@ def analyze_rows(rows):
         )
 
     return {
+
         "total": total,
 
         "win": win,
@@ -144,7 +147,9 @@ def analyze_rows(rows):
 # 업체별
 # ============================================================
 
-def analyze_by_bookmaker(rows):
+def analyze_by_bookmaker(
+    rows,
+):
 
     groups = defaultdict(list)
 
@@ -162,7 +167,9 @@ def analyze_by_bookmaker(rows):
 
     result = []
 
-    for bookmaker, items in groups.items():
+    for bookmaker, items in (
+        groups.items()
+    ):
 
         stat = analyze_rows(
             items
@@ -175,7 +182,8 @@ def analyze_by_bookmaker(rows):
         result.append(stat)
 
     result.sort(
-        key=lambda x: x["total"],
+        key=lambda x:
+            x["total"],
         reverse=True,
     )
 
@@ -183,173 +191,22 @@ def analyze_by_bookmaker(rows):
 
 
 # ============================================================
-# 전체 경기
-# 배당대비 확률 / 실제비율 / 부족확률
+# 배당에서 기대확률
 # ============================================================
 
-def overall_probability_analysis(
-    rows,
+def probability_from_row(
+    row,
 ):
 
-    total = len(rows)
-
-    output = {
-
-        "total":
-            total,
-
-        "승": {
-            "count": 0,
-            "actual_pct": 0.0,
-            "expected_pct": 0.0,
-            "shortfall": 0.0,
-            "excess": 0.0,
-        },
-
-        "무": {
-            "count": 0,
-            "actual_pct": 0.0,
-            "expected_pct": 0.0,
-            "shortfall": 0.0,
-            "excess": 0.0,
-        },
-
-        "패": {
-            "count": 0,
-            "actual_pct": 0.0,
-            "expected_pct": 0.0,
-            "shortfall": 0.0,
-            "excess": 0.0,
-        },
-    }
-
-    if total == 0:
-        return output
-
-    expected = {
-        "승": 0.0,
-        "무": 0.0,
-        "패": 0.0,
-    }
-
-    probability_count = 0
-
-    # --------------------------------------------------------
-    # 실제 결과
-    # --------------------------------------------------------
-
-    for row in rows:
-
-        result = row.get(
-            "result"
-        )
-
-        if result in output:
-
-            output[result][
-                "count"
-            ] += 1
-
-        probability = (
-            odds_probability(
-                row.get("final_home"),
-                row.get("final_draw"),
-                row.get("final_away"),
-            )
-        )
-
-        if probability is None:
-            continue
-
-        expected["승"] += (
-            probability["home"]
-        )
-
-        expected["무"] += (
-            probability["draw"]
-        )
-
-        expected["패"] += (
-            probability["away"]
-        )
-
-        probability_count += 1
-
-    # --------------------------------------------------------
-    # 실제비율
-    # --------------------------------------------------------
-
-    for outcome in [
-        "승",
-        "무",
-        "패",
-    ]:
-
-        count = output[outcome][
-            "count"
-        ]
-
-        output[outcome][
-            "actual_pct"
-        ] = (
-            count
-            / total
-            * 100
-        )
-
-    # --------------------------------------------------------
-    # 평균 배당확률
-    # --------------------------------------------------------
-
-    if probability_count > 0:
-
-        for outcome in [
-            "승",
-            "무",
-            "패",
-        ]:
-
-            expected_pct = (
-                expected[outcome]
-                / probability_count
-            )
-
-            actual_pct = output[
-                outcome
-            ]["actual_pct"]
-
-            output[outcome][
-                "expected_pct"
-            ] = expected_pct
-
-            # 배당확률보다 실제가 낮은 정도
-
-            output[outcome][
-                "shortfall"
-            ] = max(
-                expected_pct
-                - actual_pct,
-                0,
-            )
-
-            # 실제가 배당확률보다 높은 정도
-
-            output[outcome][
-                "excess"
-            ] = max(
-                actual_pct
-                - expected_pct,
-                0,
-            )
-
-    return output
+    return odds_probability(
+        row.get("final_home"),
+        row.get("final_draw"),
+        row.get("final_away"),
+    )
 
 
 # ============================================================
 # 동일배당
-#
-# 허용오차 없음
-# 정확히 동일한 숫자만 검색
 # ============================================================
 
 def same_odds_analysis(
@@ -359,34 +216,19 @@ def same_odds_analysis(
     away_odds,
 ):
 
-    target_h = safe_float(
+    target_h = float(
         home_odds
     )
 
-    target_d = safe_float(
+    target_d = float(
         draw_odds
     )
 
-    target_a = safe_float(
+    target_a = float(
         away_odds
     )
 
     matched = []
-
-    if (
-        target_h is None
-        or target_d is None
-        or target_a is None
-    ):
-
-        return {
-            "rows": [],
-            "stats":
-                analyze_rows([]),
-            "probability":
-                None,
-            "summary": {},
-        }
 
     for row in rows:
 
@@ -417,20 +259,25 @@ def same_odds_analysis(
 
         # ----------------------------------------------------
         # 허용오차 없음
-        # 정확히 같은 배당만
+        # 소수 둘째자리 기준 정확 일치
         # ----------------------------------------------------
 
         if (
-            h == target_h
-            and d == target_d
-            and a == target_a
+            round(h, 2)
+            == round(target_h, 2)
+
+            and
+            round(d, 2)
+            == round(target_d, 2)
+
+            and
+            round(a, 2)
+            == round(target_a, 2)
         ):
 
-            matched.append(
-                row
-            )
+            matched.append(row)
 
-    stats = analyze_rows(
+    stat = analyze_rows(
         matched
     )
 
@@ -440,84 +287,123 @@ def same_odds_analysis(
         target_a,
     )
 
-    summary = {}
+    # --------------------------------------------------------
+    # 실제 비율 - 기대확률
+    #
+    # 양수 = 실제가 기대보다 높음
+    # 음수 = 실제가 기대보다 낮음
+    #
+    # 부족확률 = 기대확률 - 실제비율
+    # --------------------------------------------------------
 
     if probability:
 
-        expected = {
-            "승":
-                probability["home"],
+        expected_win = (
+            probability["home"]
+        )
 
-            "무":
-                probability["draw"],
+        expected_draw = (
+            probability["draw"]
+        )
 
-            "패":
-                probability["away"],
-        }
+        expected_lose = (
+            probability["away"]
+        )
 
-        actual = {
-            "승":
-                stats["win_pct"],
+    else:
 
-            "무":
-                stats["draw_pct"],
+        expected_win = 0.0
+        expected_draw = 0.0
+        expected_lose = 0.0
 
-            "패":
-                stats["lose_pct"],
-        }
+    actual_win = stat[
+        "win_pct"
+    ]
 
-        counts = {
-            "승":
-                stats["win"],
+    actual_draw = stat[
+        "draw_pct"
+    ]
 
-            "무":
-                stats["draw"],
+    actual_lose = stat[
+        "lose_pct"
+    ]
 
-            "패":
-                stats["lose"],
-        }
+    summary = {
 
-        for outcome in [
-            "승",
-            "무",
-            "패",
-        ]:
+        "승": {
+            "수":
+                stat["win"],
 
-            shortfall = max(
-                expected[outcome]
-                - actual[outcome],
-                0,
-            )
+            "실제비율":
+                actual_win,
 
-            excess = max(
-                actual[outcome]
-                - expected[outcome],
-                0,
-            )
+            "배당확률":
+                expected_win,
 
-            summary[outcome] = {
-                "count":
-                    counts[outcome],
+            "부족확률":
+                max(
+                    expected_win
+                    - actual_win,
+                    0,
+                ),
 
-                "actual_pct":
-                    actual[outcome],
+            "차이":
+                actual_win
+                - expected_win,
+        },
 
-                "expected_pct":
-                    expected[outcome],
+        "무": {
+            "수":
+                stat["draw"],
 
-                "shortfall":
-                    shortfall,
+            "실제비율":
+                actual_draw,
 
-                "excess":
-                    excess,
-            }
+            "배당확률":
+                expected_draw,
+
+            "부족확률":
+                max(
+                    expected_draw
+                    - actual_draw,
+                    0,
+                ),
+
+            "차이":
+                actual_draw
+                - expected_draw,
+        },
+
+        "패": {
+            "수":
+                stat["lose"],
+
+            "실제비율":
+                actual_lose,
+
+            "배당확률":
+                expected_lose,
+
+            "부족확률":
+                max(
+                    expected_lose
+                    - actual_lose,
+                    0,
+                ),
+
+            "차이":
+                actual_lose
+                - expected_lose,
+        },
+    }
 
     return {
+
         "rows":
             matched,
 
         "stats":
-            stats,
+            stat,
 
         "probability":
             probability,
@@ -525,6 +411,152 @@ def same_odds_analysis(
         "summary":
             summary,
     }
+
+
+# ============================================================
+# 전체 경기 배당 대비 확률
+# ============================================================
+
+def overall_probability_analysis(
+    rows,
+):
+
+    total = len(rows)
+
+    valid = 0
+
+    actual = {
+        "승": 0,
+        "무": 0,
+        "패": 0,
+    }
+
+    expected_sum = {
+        "승": 0.0,
+        "무": 0.0,
+        "패": 0.0,
+    }
+
+    for row in rows:
+
+        result = row.get(
+            "result"
+        )
+
+        if result in actual:
+
+            actual[result] += 1
+
+        probability = (
+            probability_from_row(
+                row
+            )
+        )
+
+        if probability is None:
+            continue
+
+        valid += 1
+
+        expected_sum["승"] += (
+            probability["home"]
+        )
+
+        expected_sum["무"] += (
+            probability["draw"]
+        )
+
+        expected_sum["패"] += (
+            probability["away"]
+        )
+
+    if valid <= 0:
+
+        return []
+
+    output = []
+
+    mapping = {
+
+        "승": (
+            "승",
+            "home",
+        ),
+
+        "무": (
+            "무",
+            "draw",
+        ),
+
+        "패": (
+            "패",
+            "away",
+        ),
+    }
+
+    for result, key in [
+        ("승", "home"),
+        ("무", "draw"),
+        ("패", "away"),
+    ]:
+
+        actual_count = actual[
+            result
+        ]
+
+        actual_pct = (
+            actual_count
+            / total
+            * 100
+            if total
+            else 0
+        )
+
+        expected_pct = (
+            expected_sum[result]
+            / valid
+        )
+
+        shortfall = max(
+            expected_pct
+            - actual_pct,
+            0,
+        )
+
+        difference = (
+            actual_pct
+            - expected_pct
+        )
+
+        output.append(
+            {
+                "결과":
+                    result,
+
+                "전체경기":
+                    total,
+
+                "확률계산가능":
+                    valid,
+
+                "실제수":
+                    actual_count,
+
+                "실제비율":
+                    actual_pct,
+
+                "배당대비확률":
+                    expected_pct,
+
+                "부족확률":
+                    shortfall,
+
+                "실제-확률차이":
+                    difference,
+            }
+        )
+
+    return output
 
 
 # ============================================================
@@ -537,7 +569,7 @@ def result_probability_summary(
 
     total = len(rows)
 
-    if total == 0:
+    if total <= 0:
         return []
 
     counts = {
@@ -558,13 +590,15 @@ def result_probability_summary(
 
     output = []
 
-    for result in [
+    for result in (
         "승",
         "무",
         "패",
-    ]:
+    ):
 
-        count = counts[result]
+        count = counts[
+            result
+        ]
 
         actual_pct = (
             count
@@ -608,6 +642,7 @@ def analyze_manual_odds(
         return None
 
     return {
+
         "승":
             probability["home"],
 
@@ -620,7 +655,7 @@ def analyze_manual_odds(
 
 
 # ============================================================
-# 최근
+# 최근 데이터
 # ============================================================
 
 def latest_rows(
@@ -632,7 +667,7 @@ def latest_rows(
 
 
 # ============================================================
-# 전체 분석
+# DB 전체
 # ============================================================
 
 def get_all_analysis(
@@ -644,6 +679,10 @@ def get_all_analysis(
     )
 
 
+# ============================================================
+# 종합
+# ============================================================
+
 def full_analysis(
     bookmaker=None,
 ):
@@ -653,11 +692,14 @@ def full_analysis(
     )
 
     return {
+
         "rows":
             rows,
 
         "overall":
-            analyze_rows(rows),
+            analyze_rows(
+                rows
+            ),
 
         "bookmakers":
             analyze_by_bookmaker(
@@ -669,7 +711,7 @@ def full_analysis(
                 rows
             ),
 
-        "probability":
+        "probability_analysis":
             overall_probability_analysis(
                 rows
             ),
