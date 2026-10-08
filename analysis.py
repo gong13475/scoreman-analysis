@@ -3,25 +3,36 @@
 # Scoreman 배당 분석
 # ============================================================
 
-from collections import defaultdict
+from collections import Counter
 
 import database
 
 
 # ============================================================
-# 숫자
+# 안전한 숫자
 # ============================================================
 
 def safe_float(value):
 
     try:
-        return float(value)
+
+        if value is None:
+            return None
+
+        value = float(value)
+
+        if value <= 0:
+            return None
+
+        return value
+
     except Exception:
+
         return None
 
 
 # ============================================================
-# 배당 → 확률
+# 배당 → 암시확률
 # ============================================================
 
 def odds_probability(
@@ -39,456 +50,531 @@ def odds_probability(
         or d is None
         or a is None
     ):
+
         return None
 
-    if h <= 0 or d <= 0 or a <= 0:
-        return None
+    ih = 1 / h
+    idraw = 1 / d
+    ia = 1 / a
 
-    raw_h = 1 / h
-    raw_d = 1 / d
-    raw_a = 1 / a
-
-    total = raw_h + raw_d + raw_a
+    total = (
+        ih
+        + idraw
+        + ia
+    )
 
     if total <= 0:
         return None
 
     return {
-        "home": raw_h / total * 100,
-        "draw": raw_d / total * 100,
-        "away": raw_a / total * 100,
+
+        "home":
+            ih / total * 100,
+
+        "draw":
+            idraw / total * 100,
+
+        "away":
+            ia / total * 100,
     }
 
 
 # ============================================================
-# 전체 결과
+# 전체 분석
 # ============================================================
 
-def analyze_rows(rows):
+def get_summary(
+    bookmaker=None
+):
 
-    valid = [
-        row for row in rows
-        if row.get("result") in ("승", "무", "패")
-    ]
-
-    total = len(valid)
-
-    win = sum(
-        1 for row in valid
-        if row.get("result") == "승"
+    rows = database.get_analysis_rows(
+        bookmaker
     )
 
-    draw = sum(
-        1 for row in valid
-        if row.get("result") == "무"
+    total = len(rows)
+
+    wins = sum(
+        1
+        for r in rows
+        if r.get("result") == "승"
     )
 
-    lose = sum(
-        1 for row in valid
-        if row.get("result") == "패"
+    draws = sum(
+        1
+        for r in rows
+        if r.get("result") == "무"
+    )
+
+    losses = sum(
+        1
+        for r in rows
+        if r.get("result") == "패"
     )
 
     def pct(value):
 
-        if total == 0:
-            return 0.0
+        if total <= 0:
+            return 0
 
-        return value / total * 100
+        return (
+            value
+            / total
+            * 100
+        )
 
     return {
+
         "total": total,
 
-        "win": win,
-        "draw": draw,
-        "lose": lose,
+        "win": wins,
 
-        "win_pct": pct(win),
-        "draw_pct": pct(draw),
-        "lose_pct": pct(lose),
+        "draw": draws,
+
+        "loss": losses,
+
+        "win_pct":
+            pct(wins),
+
+        "draw_pct":
+            pct(draws),
+
+        "loss_pct":
+            pct(losses),
     }
 
 
 # ============================================================
-# 배당별 예상확률 + 실제확률 + 부족확률
+# 결과 분류
 # ============================================================
 
-def probability_result_analysis(rows):
+def result_from_odds(
+    row
+):
 
-    total = 0
+    probs = odds_probability(
+        row.get("final_home"),
+        row.get("final_draw"),
+        row.get("final_away"),
+    )
 
-    expected = {
-        "승": 0.0,
-        "무": 0.0,
-        "패": 0.0,
+    if not probs:
+        return None
+
+    values = {
+
+        "승": probs["home"],
+
+        "무": probs["draw"],
+
+        "패": probs["away"],
     }
 
-    actual_count = {
-        "승": 0,
-        "무": 0,
-        "패": 0,
-    }
+    return max(
+        values,
+        key=values.get
+    )
+
+
+# ============================================================
+# 배당별 결과
+# ============================================================
+
+def analyze_rows(
+    rows
+):
+
+    result = []
 
     for row in rows:
 
-        result = row.get("result")
-
-        if result not in ("승", "무", "패"):
-            continue
-
-        probability = odds_probability(
+        probs = odds_probability(
             row.get("final_home"),
             row.get("final_draw"),
             row.get("final_away"),
         )
 
-        if probability is None:
-            continue
+        item = dict(row)
 
-        total += 1
+        if probs:
 
-        expected["승"] += probability["home"]
-        expected["무"] += probability["draw"]
-        expected["패"] += probability["away"]
+            item["home_probability"] = (
+                probs["home"]
+            )
 
-        actual_count[result] += 1
+            item["draw_probability"] = (
+                probs["draw"]
+            )
 
-    if total == 0:
-        return []
+            item["away_probability"] = (
+                probs["away"]
+            )
 
-    output = []
+            item["predicted_result"] = (
+                result_from_odds(
+                    row
+                )
+            )
 
-    mapping = {
-        "승": "home",
-        "무": "draw",
-        "패": "away",
-    }
+        else:
 
-    for result in ("승", "무", "패"):
+            item["home_probability"] = None
+            item["draw_probability"] = None
+            item["away_probability"] = None
+            item["predicted_result"] = None
 
-        expected_pct = (
-            expected[result] / total
+        item["correct"] = (
+            item["predicted_result"]
+            == item.get("result")
+            if item["predicted_result"]
+            else False
         )
 
-        actual_pct = (
-            actual_count[result]
+        result.append(item)
+
+    return result
+
+
+# ============================================================
+# 예측 적중률
+# ============================================================
+
+def get_prediction_summary(
+    bookmaker=None
+):
+
+    rows = database.get_analysis_rows(
+        bookmaker
+    )
+
+    analyzed = analyze_rows(
+        rows
+    )
+
+    valid = [
+        r
+        for r in analyzed
+        if r.get(
+            "predicted_result"
+        )
+    ]
+
+    correct = sum(
+        1
+        for r in valid
+        if r.get("correct")
+    )
+
+    total = len(valid)
+
+    accuracy = (
+        correct / total * 100
+        if total
+        else 0
+    )
+
+    return {
+
+        "total":
+            len(rows),
+
+        "analyzed":
+            total,
+
+        "correct":
+            correct,
+
+        "accuracy":
+            accuracy,
+    }
+
+
+# ============================================================
+# 결과별 확률
+# ============================================================
+
+def get_result_probability_stats(
+    bookmaker=None
+):
+
+    rows = database.get_analysis_rows(
+        bookmaker
+    )
+
+    stats = {
+
+        "승": {
+            "count": 0,
+            "probability_sum": 0,
+        },
+
+        "무": {
+            "count": 0,
+            "probability_sum": 0,
+        },
+
+        "패": {
+            "count": 0,
+            "probability_sum": 0,
+        },
+    }
+
+    for row in rows:
+
+        result = row.get(
+            "result"
+        )
+
+        if result not in stats:
+            continue
+
+        probs = odds_probability(
+            row.get("final_home"),
+            row.get("final_draw"),
+            row.get("final_away"),
+        )
+
+        if not probs:
+            continue
+
+        stats[result]["count"] += 1
+
+        if result == "승":
+
+            stats[result][
+                "probability_sum"
+            ] += probs["home"]
+
+        elif result == "무":
+
+            stats[result][
+                "probability_sum"
+            ] += probs["draw"]
+
+        elif result == "패":
+
+            stats[result][
+                "probability_sum"
+            ] += probs["away"]
+
+    for key in stats:
+
+        count = stats[key]["count"]
+
+        if count:
+
+            stats[key][
+                "average_probability"
+            ] = (
+                stats[key]["probability_sum"]
+                / count
+            )
+
+        else:
+
+            stats[key][
+                "average_probability"
+            ] = 0
+
+    return stats
+
+
+# ============================================================
+# 업체별 통계
+# ============================================================
+
+def get_bookmaker_summary():
+
+    bookmakers = (
+        database.get_bookmakers()
+    )
+
+    result = []
+
+    for item in bookmakers:
+
+        name = item[
+            "bookmaker"
+        ]
+
+        summary = get_summary(
+            name
+        )
+
+        prediction = (
+            get_prediction_summary(
+                name
+            )
+        )
+
+        result.append({
+
+            "bookmaker":
+                name,
+
+            "games":
+                summary["total"],
+
+            "win":
+                summary["win"],
+
+            "draw":
+                summary["draw"],
+
+            "loss":
+                summary["loss"],
+
+            "win_pct":
+                summary["win_pct"],
+
+            "draw_pct":
+                summary["draw_pct"],
+
+            "loss_pct":
+                summary["loss_pct"],
+
+            "accuracy":
+                prediction["accuracy"],
+        })
+
+    return result
+
+
+# ============================================================
+# 특정 배당 검색
+# ============================================================
+
+def find_same_odds(
+    home,
+    draw,
+    away,
+    tolerance=0.01,
+    bookmaker=None,
+):
+
+    rows = database.get_analysis_rows(
+        bookmaker
+    )
+
+    result = []
+
+    for row in rows:
+
+        h = safe_float(
+            row.get("final_home")
+        )
+
+        d = safe_float(
+            row.get("final_draw")
+        )
+
+        a = safe_float(
+            row.get("final_away")
+        )
+
+        if (
+            h is None
+            or d is None
+            or a is None
+        ):
+            continue
+
+        if (
+            abs(h - home)
+            <= tolerance
+            and
+            abs(d - draw)
+            <= tolerance
+            and
+            abs(a - away)
+            <= tolerance
+        ):
+
+            result.append(
+                row
+            )
+
+    return result
+
+
+# ============================================================
+# 같은 배당 통계
+# ============================================================
+
+def same_odds_summary(
+    home,
+    draw,
+    away,
+    tolerance=0.01,
+    bookmaker=None,
+):
+
+    rows = find_same_odds(
+        home,
+        draw,
+        away,
+        tolerance,
+        bookmaker,
+    )
+
+    counter = Counter(
+        r.get("result")
+        for r in rows
+        if r.get("result")
+    )
+
+    total = sum(
+        counter.values()
+    )
+
+    def percentage(value):
+
+        if total == 0:
+            return 0
+
+        return (
+            value
             / total
             * 100
         )
 
-        shortfall = (
-            actual_pct - expected_pct
-        )
-
-        output.append({
-            "결과": result,
-            "경기수": actual_count[result],
-            "배당예상확률": round(
-                expected_pct,
-                2,
-            ),
-            "실제확률": round(
-                actual_pct,
-                2,
-            ),
-            "부족확률": round(
-                shortfall,
-                2,
-            ),
-        })
-
-    return output
-
-
-# ============================================================
-# 업체별
-# ============================================================
-
-def analyze_by_bookmaker(rows):
-
-    groups = defaultdict(list)
-
-    for row in rows:
-
-        name = (
-            row.get("bookmaker")
-            or row.get("company_name")
-            or "미상"
-        )
-
-        groups[name].append(row)
-
-    result = []
-
-    for bookmaker, items in groups.items():
-
-        stat = analyze_rows(items)
-
-        stat["bookmaker"] = bookmaker
-
-        result.append(stat)
-
-    result.sort(
-        key=lambda x: x["total"],
-        reverse=True,
-    )
-
-    return result
-
-
-# ============================================================
-# 동일배당
-# ============================================================
-
-def same_odds_analysis(
-    rows,
-    home_odds,
-    draw_odds,
-    away_odds,
-):
-
-    target_h = float(home_odds)
-    target_d = float(draw_odds)
-    target_a = float(away_odds)
-
-    matched = []
-
-    for row in rows:
-
-        h = safe_float(
-            row.get("final_home")
-        )
-
-        d = safe_float(
-            row.get("final_draw")
-        )
-
-        a = safe_float(
-            row.get("final_away")
-        )
-
-        if (
-            h is None
-            or d is None
-            or a is None
-        ):
-            continue
-
-        # ================================================
-        # 허용오차 없음
-        # 완전히 같은 배당만
-        # ================================================
-
-        if (
-            h == target_h
-            and d == target_d
-            and a == target_a
-        ):
-
-            matched.append(row)
-
-    stats = analyze_rows(matched)
-
-    probability = odds_probability(
-        target_h,
-        target_d,
-        target_a,
-    )
-
-    actual = {
-        "승": stats["win_pct"],
-        "무": stats["draw_pct"],
-        "패": stats["lose_pct"],
-    }
-
-    probability_rows = []
-
-    if probability:
-
-        expected = {
-            "승": probability["home"],
-            "무": probability["draw"],
-            "패": probability["away"],
-        }
-
-        for result in ("승", "무", "패"):
-
-            probability_rows.append({
-                "결과": result,
-
-                "경기수": (
-                    stats["win"]
-                    if result == "승"
-                    else stats["draw"]
-                    if result == "무"
-                    else stats["lose"]
-                ),
-
-                "배당예상확률": round(
-                    expected[result],
-                    2,
-                ),
-
-                "실제확률": round(
-                    actual[result],
-                    2,
-                ),
-
-                "부족확률": round(
-                    actual[result]
-                    - expected[result],
-                    2,
-                ),
-            })
-
     return {
-        "rows": matched,
-        "stats": stats,
-        "probability": probability,
-        "probability_rows":
-            probability_rows,
+
+        "total":
+            total,
+
+        "win":
+            counter.get("승", 0),
+
+        "draw":
+            counter.get("무", 0),
+
+        "loss":
+            counter.get("패", 0),
+
+        "win_pct":
+            percentage(
+                counter.get("승", 0)
+            ),
+
+        "draw_pct":
+            percentage(
+                counter.get("무", 0)
+            ),
+
+        "loss_pct":
+            percentage(
+                counter.get("패", 0)
+            ),
+
+        "rows":
+            rows,
     }
 
 
 # ============================================================
-# 전체 결과확률
+# 미해결 경기
 # ============================================================
 
-def result_probability_summary(rows):
+def get_unresolved():
 
-    stats = analyze_rows(rows)
-
-    if stats["total"] == 0:
-        return []
-
-    return [
-        {
-            "결과": "승",
-            "경기수": stats["win"],
-            "실제확률": round(
-                stats["win_pct"],
-                2,
-            ),
-        },
-        {
-            "결과": "무",
-            "경기수": stats["draw"],
-            "실제확률": round(
-                stats["draw_pct"],
-                2,
-            ),
-        },
-        {
-            "결과": "패",
-            "경기수": stats["lose"],
-            "실제확률": round(
-                stats["lose_pct"],
-                2,
-            ),
-        },
-    ]
-
-
-# ============================================================
-# 수동 배당
-# ============================================================
-
-def analyze_manual_odds(
-    home,
-    draw,
-    away,
-):
-
-    probability = odds_probability(
-        home,
-        draw,
-        away,
-    )
-
-    if probability is None:
-        return None
-
-    return {
-        "승": probability["home"],
-        "무": probability["draw"],
-        "패": probability["away"],
-    }
-
-
-# ============================================================
-# 전체
-# ============================================================
-
-def get_all_analysis(bookmaker=None):
-
-    return database.get_analysis_rows(
-        bookmaker
-    )
-
-
-def full_analysis(bookmaker=None):
-
-    rows = get_all_analysis(bookmaker)
-
-    return {
-        "rows": rows,
-
-        "overall":
-            analyze_rows(rows),
-
-        "bookmakers":
-            analyze_by_bookmaker(rows),
-
-        "result_summary":
-            result_probability_summary(rows),
-
-        "probability_summary":
-            probability_result_analysis(rows),
-    }
-
-
-# ============================================================
-# 배당 범위
-# ============================================================
-
-def find_odds_range(
-    rows,
-    home_min,
-    home_max,
-    draw_min,
-    draw_max,
-    away_min,
-    away_max,
-):
-
-    result = []
-
-    for row in rows:
-
-        h = safe_float(
-            row.get("final_home")
-        )
-
-        d = safe_float(
-            row.get("final_draw")
-        )
-
-        a = safe_float(
-            row.get("final_away")
-        )
-
-        if (
-            h is None
-            or d is None
-            or a is None
-        ):
-            continue
-
-        if (
-            home_min <= h <= home_max
-            and draw_min <= d <= draw_max
-            and away_min <= a <= away_max
-        ):
-
-            result.append(row)
-
-    return result
+    return database.get_unresolved_matches()
