@@ -1,19 +1,10 @@
 # ============================================================
 # app.py
 # ⚽ 전종목 해외배당 분석
-#
-# Scoreman 자동수집
-# 최종배당
-# 실제결과
-# 확률
-# 부족확률
-# 동일배당
-# DB 용량
-# 이어받기
-# 음성
 # ============================================================
 
-import html
+import time
+
 import streamlit as st
 
 import database
@@ -37,59 +28,53 @@ st.set_page_config(
 # CSS
 # ============================================================
 
-st.markdown(
-    """
-    <style>
+st.markdown("""
+<style>
 
-    .block-container {
-        padding-top: 1rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
+.block-container {
+    padding-top: 1rem;
+    padding-left: 0.7rem;
+    padding-right: 0.7rem;
+}
+
+button {
+    min-height: 44px !important;
+}
+
+.big-number {
+    font-size: 28px;
+    font-weight: 700;
+}
+
+@media (max-width:768px) {
+
+    h1 {
+        font-size: 24px !important;
     }
 
-    button {
-        min-height: 42px !important;
+    h2 {
+        font-size: 20px !important;
     }
 
-    @media (max-width: 768px) {
-
-        .block-container {
-            padding-left: 0.55rem;
-            padding-right: 0.55rem;
-        }
-
-        h1 {
-            font-size: 24px !important;
-        }
-
-        h2 {
-            font-size: 20px !important;
-        }
-
-        h3 {
-            font-size: 17px !important;
-        }
-
+    h3 {
+        font-size: 18px !important;
     }
 
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 
 # ============================================================
 # 제목
 # ============================================================
 
-st.title(
-    "⚽ 전종목 해외배당 분석"
-)
+st.title("⚽ 전종목 해외배당 분석")
 
 st.caption(
-    "Scoreman 자동수집 · "
-    "해외업체 최종배당 · "
-    "실제결과 · 확률 · 부족확률"
+    "스코어맨 자동수집 · 최종배당 · 실제결과 · "
+    "배당확률 · 부족확률"
 )
 
 
@@ -98,48 +83,46 @@ st.caption(
 # ============================================================
 
 status = database.get_database_status()
-
-db_size = (
-    database.get_database_size_bytes()
-)
-
-db_size_text = (
-    database.format_bytes(
-        db_size
-    )
-)
-
+db_size = database.get_database_size()
 
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-
     st.metric(
         "저장 경기",
         f"{status['matches']:,}",
     )
 
 with c2:
-
     st.metric(
         "저장 최종배당",
         f"{status['odds']:,}",
     )
 
 with c3:
-
     st.metric(
         "실제 저장 업체",
         f"{status['bookmakers']:,}",
     )
 
 with c4:
-
     st.metric(
-        "DB 저장용량",
-        db_size_text,
+        "실제 결과",
+        f"{status['results']:,}",
     )
 
+st.caption(
+    f"🗄️ DB 용량: "
+    f"{db_size['mb']:.2f} MB "
+    f"({db_size['mode']})"
+)
+
+if status["unresolved"]:
+
+    st.warning(
+        f"⚠️ 결과 미확인 경기 "
+        f"{status['unresolved']:,}건"
+    )
 
 st.divider()
 
@@ -148,113 +131,12 @@ st.divider()
 # 탭
 # ============================================================
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    [
-        "⚽ 수집",
-        "📊 전체 분석",
-        "🎯 동일배당",
-        "🔊 배당 분석",
-    ]
-)
-
-
-# ============================================================
-# 수집 상태 표시
-# ============================================================
-
-@st.fragment(
-    run_every=1
-)
-def collection_status():
-
-    progress = (
-        collector.get_progress()
-    )
-
-    if progress["running"]:
-
-        st.success(
-            "🟢 현재 수집중입니다."
-        )
-
-    elif progress["finished"]:
-
-        st.info(
-            "⚪ 수집이 종료되었습니다."
-        )
-
-    else:
-
-        st.caption(
-            "현재 수집 대기 상태"
-        )
-
-    p1, p2, p3, p4 = (
-        st.columns(4)
-    )
-
-    with p1:
-
-        st.metric(
-            "현재 ID",
-            (
-                f"{progress['current_id']:,}"
-                if progress[
-                    "current_id"
-                ]
-                else "-"
-            ),
-        )
-
-    with p2:
-
-        st.metric(
-            "성공",
-            f"{progress['success']:,}",
-        )
-
-    with p3:
-
-        st.metric(
-            "중복",
-            f"{progress['exists']:,}",
-        )
-
-    with p4:
-
-        st.metric(
-            "실패",
-            f"{progress['failed']:,}",
-        )
-
-    percent = min(
-        max(
-            progress["percent"]
-            / 100,
-            0,
-        ),
-        1,
-    )
-
-    st.progress(
-        percent
-    )
-
-    st.caption(
-        f"진행률 "
-        f"{progress['percent']:.1f}% · "
-        f"{progress['current']:,} / "
-        f"{progress['total']:,}"
-    )
-
-    st.caption(
-        f"저장 배당 "
-        f"{progress['odds']:,} · "
-        f"결과 보정 "
-        f"{progress['fixed']:,} · "
-        f"마지막 완료 ID "
-        f"{progress['last_completed_id'] or '-'}"
-    )
+tab1, tab2, tab3, tab4 = st.tabs([
+    "⚽ 수집",
+    "📊 전체 분석",
+    "🎯 동일배당",
+    "🔊 배당 분석",
+])
 
 
 # ============================================================
@@ -263,35 +145,40 @@ def collection_status():
 
 with tab1:
 
-    st.subheader(
-        "⚽ Scoreman 경기 수집"
-    )
+    st.subheader("⚽ Scoreman 경기 수집")
 
-    st.info(
-        "실패/배당 없음은 완료처리하지 않습니다. "
-        "중지 후 이어받기를 누르면 저장된 마지막 완료 위치부터 시작합니다."
-    )
+    progress = collector.get_progress()
 
-    col1, col2 = st.columns(2)
+    if progress["running"]:
 
-    with col1:
+        st.success(
+            "🟢 현재 수집 중입니다."
+        )
+
+    else:
+
+        st.info(
+            "현재 수집 대기 상태입니다."
+        )
+
+    c1, c2 = st.columns(2)
+
+    with c1:
 
         start_id = st.number_input(
             "시작 ID",
             min_value=1,
             value=2005000,
             step=1,
-            key="start_id",
         )
 
-    with col2:
+    with c2:
 
         end_id = st.number_input(
             "종료 ID",
             min_value=1,
             value=2005000,
             step=1,
-            key="end_id",
         )
 
     delay = st.number_input(
@@ -300,12 +187,6 @@ with tab1:
         max_value=60.0,
         value=0.50,
         step=0.10,
-        format="%.2f",
-        key="delay",
-    )
-
-    st.markdown(
-        "### 🏢 수집 업체"
     )
 
     company_mode = st.radio(
@@ -319,44 +200,26 @@ with tab1:
 
     selected_companies = []
 
-    if (
-        company_mode
-        == "선택 업체만 수집"
-    ):
+    if company_mode == "선택 업체만 수집":
 
-        available = (
-            database.get_bookmakers()
-        )
-
-        company_names = [
+        company_list = [
             x["bookmaker"]
-            for x in available
+            for x in database.get_bookmakers()
         ]
 
-        selected_companies = (
-            st.multiselect(
-                "업체 선택",
-                company_names,
-                default=[],
-            )
+        selected_companies = st.multiselect(
+            "업체",
+            company_list,
         )
 
-    st.markdown(
-        "### 🚦 수집 제어"
-    )
+    c1, c2, c3 = st.columns(3)
 
-    b1, b2, b3 = st.columns(3)
-
-    # --------------------------------------------------------
-    # 수집 시작
-    # --------------------------------------------------------
-
-    with b1:
+    with c1:
 
         if st.button(
             "🚀 수집시작",
             type="primary",
-            width="stretch",
+            use_container_width=True,
         ):
 
             if (
@@ -366,12 +229,12 @@ with tab1:
             ):
 
                 st.warning(
-                    "수집할 업체를 선택하세요."
+                    "업체를 선택하세요."
                 )
 
             else:
 
-                ok, message = (
+                ok, msg = (
                     collector.start_background_collection(
                         start_id,
                         end_id,
@@ -381,90 +244,118 @@ with tab1:
                 )
 
                 if ok:
-                    st.success(message)
+                    st.success(msg)
                 else:
-                    st.error(message)
+                    st.error(msg)
 
-    # --------------------------------------------------------
-    # 이어받기
-    # --------------------------------------------------------
-
-    with b2:
-
-        if st.button(
-            "▶️ 이어받기",
-            width="stretch",
-        ):
-
-            if (
-                company_mode
-                == "선택 업체만 수집"
-                and not selected_companies
-            ):
-
-                st.warning(
-                    "수집할 업체를 선택하세요."
-                )
-
-            else:
-
-                ok, message = (
-                    collector.resume_collection(
-                        start_id,
-                        end_id,
-                        selected_companies,
-                        delay,
-                    )
-                )
-
-                if ok:
-                    st.success(message)
-                else:
-                    st.warning(message)
-
-    # --------------------------------------------------------
-    # 중지
-    # --------------------------------------------------------
-
-    with b3:
+    with c2:
 
         if st.button(
             "🛑 수집중지",
-            width="stretch",
+            use_container_width=True,
         ):
 
             if collector.stop_collection():
-
                 st.warning(
                     "수집 중지 요청을 보냈습니다."
                 )
-
             else:
-
                 st.info(
-                    "현재 실행 중인 수집이 없습니다."
+                    "현재 수집 중이 아닙니다."
                 )
 
-    st.markdown(
-        "### 📈 수집 상태"
+    with c3:
+
+        if st.button(
+            "▶️ 이어받기",
+            use_container_width=True,
+        ):
+
+            ok, msg = (
+                collector.resume_collection(
+                    end_id,
+                    selected_companies,
+                    delay,
+                )
+            )
+
+            if ok:
+                st.success(msg)
+            else:
+                st.warning(msg)
+
+    st.markdown("### 📈 수집 상태")
+
+    progress = collector.get_progress()
+
+    p1, p2, p3, p4, p5 = st.columns(5)
+
+    with p1:
+        st.metric(
+            "진행",
+            f"{progress['current']:,}/"
+            f"{progress['total']:,}",
+        )
+
+    with p2:
+        st.metric(
+            "성공",
+            f"{progress['success']:,}",
+        )
+
+    with p3:
+        st.metric(
+            "중복",
+            f"{progress['exists']:,}",
+        )
+
+    with p4:
+        st.metric(
+            "실패",
+            f"{progress['failed']:,}",
+        )
+
+    with p5:
+        st.metric(
+            "배당",
+            f"{progress['odds']:,}",
+        )
+
+    st.progress(
+        min(
+            max(
+                progress["percent"] / 100,
+                0,
+            ),
+            1,
+        )
     )
 
-    collection_status()
+    st.write(
+        f"진행률: "
+        f"{progress['percent']:.1f}%"
+    )
 
-    # --------------------------------------------------------
-    # 로그
-    # --------------------------------------------------------
+    if progress["last_completed_id"]:
+
+        st.success(
+            f"마지막 완료 ID: "
+            f"{progress['last_completed_id']:,}"
+        )
+
+    # 자동 새로고침
+    if progress["running"]:
+
+        time.sleep(1)
+        st.rerun()
 
     show_log = st.checkbox(
-        "📜 수집 로그 보기",
-        value=False,
+        "📜 수집 로그 보기"
     )
 
     if show_log:
 
-        logs = (
-            collector.get_logs()
-        )
+        logs = collector.get_logs()
 
         if logs:
 
@@ -479,26 +370,9 @@ with tab1:
                 "로그가 없습니다."
             )
 
-    # --------------------------------------------------------
-    # 화면 꺼짐 안내
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### 📱 화면을 꺼도 수집되나요?"
-    )
-
-    st.caption(
-        "수집 작업은 브라우저 화면이 아니라 "
-        "서버의 백그라운드 작업으로 실행됩니다. "
-        "따라서 휴대폰에서 다른 앱을 사용하는 동안에도 "
-        "서버 프로세스가 살아 있으면 계속 진행됩니다. "
-        "다만 Streamlit Cloud가 앱 자체를 절전/재시작하면 "
-        "작업이 멈출 수 있으므로 이어받기 기능을 함께 사용합니다."
-    )
-
 
 # ============================================================
-# TAB 2 전체 분석
+# TAB 2
 # ============================================================
 
 with tab2:
@@ -507,9 +381,7 @@ with tab2:
         "📊 전체 경기 분석"
     )
 
-    bookmakers = (
-        database.get_bookmakers()
-    )
+    bookmakers = database.get_bookmakers()
 
     bookmaker_options = (
         ["전체 업체"]
@@ -519,50 +391,33 @@ with tab2:
         ]
     )
 
-    selected_bookmaker = (
-        st.selectbox(
-            "업체",
-            bookmaker_options,
-            key="analysis_bookmaker",
-        )
+    selected_bookmaker = st.selectbox(
+        "업체",
+        bookmaker_options,
+        key="analysis_bookmaker",
     )
 
-    if (
-        selected_bookmaker
-        == "전체 업체"
-    ):
+    if selected_bookmaker == "전체 업체":
 
-        rows = (
-            database.get_analysis_rows()
-        )
+        rows = database.get_analysis_rows()
 
     else:
 
-        rows = (
-            database.get_analysis_rows(
-                selected_bookmaker
-            )
+        rows = database.get_analysis_rows(
+            selected_bookmaker
         )
 
-    stats = (
-        analysis.analyze_rows(
-            rows
-        )
-    )
+    stats = analysis.analyze_rows(rows)
 
-    c1, c2, c3, c4 = (
-        st.columns(4)
-    )
+    c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-
         st.metric(
-            "전체 경기",
+            "실제 결과 경기",
             f"{stats['total']:,}",
         )
 
     with c2:
-
         st.metric(
             "승",
             f"{stats['win']:,} "
@@ -570,7 +425,6 @@ with tab2:
         )
 
     with c3:
-
         st.metric(
             "무",
             f"{stats['draw']:,} "
@@ -578,116 +432,39 @@ with tab2:
         )
 
     with c4:
-
         st.metric(
             "패",
             f"{stats['lose']:,} "
             f"({stats['lose_pct']:.2f}%)",
         )
 
-    # --------------------------------------------------------
-    # 전체 배당 대비 확률
-    # --------------------------------------------------------
-
     st.markdown(
-        "### 📈 전체 경기 배당대비 확률 / 부족확률"
+        "### 📊 전체 경기 "
+        "배당 대비 확률 / 부족확률"
     )
 
     probability_rows = (
-        analysis.overall_probability_analysis(
+        analysis.probability_result_analysis(
             rows
         )
     )
 
     if probability_rows:
 
-        display = []
-
-        for row in probability_rows:
-
-            display.append(
-                {
-                    "결과":
-                        row["결과"],
-
-                    "전체경기":
-                        row["전체경기"],
-
-                    "실제수":
-                        row["실제수"],
-
-                    "실제비율":
-                        f"{row['실제비율']:.2f}%",
-
-                    "배당대비확률":
-                        f"{row['배당대비확률']:.2f}%",
-
-                    "부족확률":
-                        f"{row['부족확률']:.2f}%",
-
-                    "실제-확률":
-                        f"{row['실제-확률차이']:+.2f}%",
-                }
-            )
-
         st.dataframe(
-            display,
-            width="stretch",
+            probability_rows,
+            use_container_width=True,
             hide_index=True,
         )
 
     else:
 
         st.info(
-            "배당 확률을 계산할 데이터가 없습니다."
+            "실제 결과와 최종배당이 모두 있는 "
+            "데이터가 없습니다."
         )
 
-    # --------------------------------------------------------
-    # 결과별 실제비율
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### 📌 결과별 실제 비율"
-    )
-
-    result_summary = (
-        analysis.result_probability_summary(
-            rows
-        )
-    )
-
-    if result_summary:
-
-        display = []
-
-        for row in result_summary:
-
-            display.append(
-                {
-                    "결과":
-                        row["결과"],
-
-                    "수":
-                        row["수"],
-
-                    "실제비율":
-                        f"{row['실제비율']:.2f}%",
-                }
-            )
-
-        st.dataframe(
-            display,
-            width="stretch",
-            hide_index=True,
-        )
-
-    # --------------------------------------------------------
-    # 업체별
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### 🏢 업체별 통계"
-    )
+    st.markdown("### 🏢 업체별 통계")
 
     bookmaker_stats = (
         analysis.analyze_by_bookmaker(
@@ -697,129 +474,57 @@ with tab2:
 
     if bookmaker_stats:
 
-        display = []
-
-        for row in bookmaker_stats:
-
-            display.append(
-                {
-                    "업체":
-                        row["bookmaker"],
-
-                    "전체":
-                        row["total"],
-
-                    "승":
-                        row["win"],
-
-                    "승률":
-                        f"{row['win_pct']:.2f}%",
-
-                    "무":
-                        row["draw"],
-
-                    "무승부율":
-                        f"{row['draw_pct']:.2f}%",
-
-                    "패":
-                        row["lose"],
-
-                    "패율":
-                        f"{row['lose_pct']:.2f}%",
-                }
-            )
-
         st.dataframe(
-            display,
-            width="stretch",
+            bookmaker_stats,
+            use_container_width=True,
             hide_index=True,
         )
 
-    # --------------------------------------------------------
-    # 최근 저장 경기
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### ⚽ 최근 저장 경기"
-    )
+    st.markdown("### ⚽ 최근 저장 경기")
 
     if rows:
 
-        display_rows = []
+        display = []
 
         for row in rows[:300]:
 
-            display_rows.append(
-                {
-                    "경기ID":
-                        row.get(
-                            "schedule_id"
-                        ),
+            display.append({
+                "경기ID":
+                    row.get("schedule_id"),
 
-                    "날짜":
-                        row.get(
-                            "match_date"
-                        ),
+                "날짜":
+                    row.get("match_date"),
 
-                    "홈":
-                        row.get(
-                            "home_team"
-                        ),
+                "홈":
+                    row.get("home_team"),
 
-                    "원정":
-                        row.get(
-                            "away_team"
-                        ),
+                "스코어":
+                    f"{row.get('home_score')}"
+                    f" - "
+                    f"{row.get('away_score')}",
 
-                    "스코어":
-                        (
-                            f"{row.get('home_score')}"
-                            f"-"
-                            f"{row.get('away_score')}"
-                            if (
-                                row.get(
-                                    "home_score"
-                                )
-                                is not None
-                                and
-                                row.get(
-                                    "away_score"
-                                )
-                                is not None
-                            )
-                            else "-"
-                        ),
+                "원정":
+                    row.get("away_team"),
 
-                    "결과":
-                        row.get(
-                            "result"
-                        ),
+                "결과":
+                    row.get("result"),
 
-                    "업체":
-                        row.get(
-                            "bookmaker"
-                        ),
+                "업체":
+                    row.get("bookmaker"),
 
-                    "승배당":
-                        row.get(
-                            "final_home"
-                        ),
+                "승배당":
+                    row.get("final_home"),
 
-                    "무배당":
-                        row.get(
-                            "final_draw"
-                        ),
+                "무배당":
+                    row.get("final_draw"),
 
-                    "패배당":
-                        row.get(
-                            "final_away"
-                        ),
-                }
-            )
+                "패배당":
+                    row.get("final_away"),
+            })
 
         st.dataframe(
-            display_rows,
-            width="stretch",
+            display,
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -837,17 +542,15 @@ with tab2:
 with tab3:
 
     st.subheader(
-        "🎯 동일배당 과거 결과 분석"
+        "🎯 동일배당 전체 경기 분석"
     )
 
     st.caption(
-        "허용오차 0.00 · 입력한 승/무/패 배당과 "
-        "정확히 같은 배당만 검색합니다."
+        "허용오차 0 — 승/무/패 배당이 "
+        "완전히 동일한 경기만 검색합니다."
     )
 
-    c1, c2, c3 = (
-        st.columns(3)
-    )
+    c1, c2, c3 = st.columns(3)
 
     with c1:
 
@@ -884,9 +587,7 @@ with tab3:
 
     bookmaker = st.selectbox(
         "분석 업체",
-        [
-            "전체 업체"
-        ]
+        ["전체 업체"]
         + [
             x["bookmaker"]
             for x in database.get_bookmakers()
@@ -894,60 +595,40 @@ with tab3:
         key="same_bookmaker",
     )
 
-    if (
-        bookmaker
-        == "전체 업체"
-    ):
+    if bookmaker == "전체 업체":
 
-        same_rows = (
-            database.get_analysis_rows()
-        )
+        rows = database.get_analysis_rows()
 
     else:
 
-        same_rows = (
-            database.get_analysis_rows(
-                bookmaker
-            )
+        rows = database.get_analysis_rows(
+            bookmaker
         )
 
     if st.button(
         "🔎 동일배당 분석",
         type="primary",
-        width="stretch",
-        key="same_search",
+        use_container_width=True,
     ):
 
-        result = (
-            analysis.same_odds_analysis(
-                same_rows,
-                target_home,
-                target_draw,
-                target_away,
-            )
+        result = analysis.same_odds_analysis(
+            rows,
+            target_home,
+            target_draw,
+            target_away,
         )
 
-        stat = result[
-            "stats"
-        ]
+        stat = result["stats"]
 
-        # ----------------------------------------------------
-        # 상단 수치
-        # ----------------------------------------------------
-
-        c1, c2, c3, c4 = (
-            st.columns(4)
-        )
+        c1, c2, c3, c4 = st.columns(4)
 
         with c1:
-
             st.metric(
-                "동일배당 전체경기",
+                "동일배당 전체 경기",
                 f"{stat['total']:,}",
             )
 
         with c2:
-
             st.metric(
                 "승",
                 f"{stat['win']:,} "
@@ -955,7 +636,6 @@ with tab3:
             )
 
         with c3:
-
             st.metric(
                 "무",
                 f"{stat['draw']:,} "
@@ -963,197 +643,73 @@ with tab3:
             )
 
         with c4:
-
             st.metric(
                 "패",
                 f"{stat['lose']:,} "
                 f"({stat['lose_pct']:.2f}%)",
             )
 
-        # ----------------------------------------------------
-        # 확률
-        # ----------------------------------------------------
-
-        probability = (
-            result["probability"]
+        st.markdown(
+            "### 📊 배당 대비 결과확률"
         )
 
-        if probability:
-
-            st.markdown(
-                "### 📊 동일배당 "
-                "배당대비 확률 / 실제 / 부족확률"
-            )
-
-            summary = result[
-                "summary"
-            ]
-
-            table = []
-
-            for key in (
-                "승",
-                "무",
-                "패",
-            ):
-
-                item = summary[
-                    key
-                ]
-
-                table.append(
-                    {
-                        "결과":
-                            key,
-
-                        "실제 경기수":
-                            item["수"],
-
-                        "실제 비율":
-                            f"{item['실제비율']:.2f}%",
-
-                        "배당대비 확률":
-                            f"{item['배당확률']:.2f}%",
-
-                        "부족확률":
-                            f"{item['부족확률']:.2f}%",
-
-                        "실제-확률":
-                            f"{item['차이']:+.2f}%",
-                    }
-                )
+        if result["probability_rows"]:
 
             st.dataframe(
-                table,
-                width="stretch",
+                result["probability_rows"],
+                use_container_width=True,
                 hide_index=True,
             )
 
-            st.markdown(
-                "### 🎯 입력 배당의 시장확률"
-            )
-
-            pc1, pc2, pc3 = (
-                st.columns(3)
-            )
-
-            with pc1:
-
-                st.metric(
-                    "승",
-                    f"{probability['home']:.2f}%",
-                )
-
-            with pc2:
-
-                st.metric(
-                    "무",
-                    f"{probability['draw']:.2f}%",
-                )
-
-            with pc3:
-
-                st.metric(
-                    "패",
-                    f"{probability['away']:.2f}%",
-                )
-
-        # ----------------------------------------------------
-        # 경기 목록
-        # ----------------------------------------------------
-
-        matched = result[
-            "rows"
-        ]
+        matched = result["rows"]
 
         if matched:
-
-            st.markdown(
-                "### ⚽ 동일배당 경기 목록"
-            )
 
             display = []
 
             for row in matched[:1000]:
 
-                display.append(
-                    {
-                        "경기ID":
-                            row.get(
-                                "schedule_id"
-                            ),
+                display.append({
+                    "날짜":
+                        row.get("match_date"),
 
-                        "날짜":
-                            row.get(
-                                "match_date"
-                            ),
+                    "홈":
+                        row.get("home_team"),
 
-                        "홈":
-                            row.get(
-                                "home_team"
-                            ),
+                    "스코어":
+                        f"{row.get('home_score')}"
+                        f" - "
+                        f"{row.get('away_score')}",
 
-                        "원정":
-                            row.get(
-                                "away_team"
-                            ),
+                    "원정":
+                        row.get("away_team"),
 
-                        "스코어":
-                            (
-                                f"{row.get('home_score')}"
-                                f"-"
-                                f"{row.get('away_score')}"
-                                if (
-                                    row.get(
-                                        "home_score"
-                                    )
-                                    is not None
-                                    and
-                                    row.get(
-                                        "away_score"
-                                    )
-                                    is not None
-                                )
-                                else "-"
-                            ),
+                    "결과":
+                        row.get("result"),
 
-                        "결과":
-                            row.get(
-                                "result"
-                            ),
+                    "업체":
+                        row.get("bookmaker"),
 
-                        "업체":
-                            row.get(
-                                "bookmaker"
-                            ),
+                    "승":
+                        row.get("final_home"),
 
-                        "승":
-                            row.get(
-                                "final_home"
-                            ),
+                    "무":
+                        row.get("final_draw"),
 
-                        "무":
-                            row.get(
-                                "final_draw"
-                            ),
-
-                        "패":
-                            row.get(
-                                "final_away"
-                            ),
-                    }
-                )
+                    "패":
+                        row.get("final_away"),
+                })
 
             st.dataframe(
                 display,
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
         else:
 
             st.warning(
-                "정확히 같은 배당의 "
+                "완전히 동일한 배당의 "
                 "과거 경기가 없습니다."
             )
 
@@ -1169,17 +725,14 @@ with tab4:
     )
 
     st.caption(
-        "배당을 입력하면 "
-        "승/무/패 시장확률을 계산합니다."
+        "배당 입력 → 시장 확률 계산"
     )
 
-    c1, c2, c3 = (
-        st.columns(3)
-    )
+    c1, c2, c3 = st.columns(3)
 
     with c1:
 
-        manual_home = st.number_input(
+        home = st.number_input(
             "승 배당",
             min_value=1.01,
             value=2.00,
@@ -1190,7 +743,7 @@ with tab4:
 
     with c2:
 
-        manual_draw = st.number_input(
+        draw = st.number_input(
             "무 배당",
             min_value=1.01,
             value=3.20,
@@ -1201,7 +754,7 @@ with tab4:
 
     with c3:
 
-        manual_away = st.number_input(
+        away = st.number_input(
             "패 배당",
             min_value=1.01,
             value=3.50,
@@ -1210,73 +763,151 @@ with tab4:
             key="manual_away",
         )
 
-    probability = (
-        analysis.analyze_manual_odds(
-            manual_home,
-            manual_draw,
-            manual_away,
-        )
+    probability = analysis.analyze_manual_odds(
+        home,
+        draw,
+        away,
     )
 
     if probability:
 
-        c1, c2, c3 = (
-            st.columns(3)
-        )
+        c1, c2, c3 = st.columns(3)
 
         with c1:
-
             st.metric(
                 "승 확률",
                 f"{probability['승']:.2f}%",
             )
 
         with c2:
-
             st.metric(
                 "무 확률",
                 f"{probability['무']:.2f}%",
             )
 
         with c3:
-
             st.metric(
                 "패 확률",
                 f"{probability['패']:.2f}%",
             )
 
-        st.markdown(
-            "### 📊 확률"
-        )
-
         st.bar_chart(
             probability
         )
 
-        # ----------------------------------------------------
-        # 음성 듣기
-        # ----------------------------------------------------
+        st.markdown(
+            "### 🎤 음성 입력"
+        )
+
+        st.components.v1.html(
+            """
+            <div style="
+                padding:10px;
+                border:1px solid #ddd;
+                border-radius:10px;
+                text-align:center;
+            ">
+
+            <button
+                id="mic"
+                style="
+                    width:100%;
+                    height:48px;
+                    font-size:18px;
+                    border-radius:8px;
+                    border:1px solid #aaa;
+                    background:#f5f5f5;
+                "
+            >
+            🎤 마이크 음성입력
+            </button>
+
+            <div id="text"
+                 style="
+                    margin-top:10px;
+                    font-size:16px;
+                    color:#333;
+                 ">
+            버튼을 누르고 말하세요.
+            </div>
+
+            <script>
+
+            const SpeechRecognition =
+                window.SpeechRecognition ||
+                window.webkitSpeechRecognition;
+
+            const button =
+                document.getElementById("mic");
+
+            const output =
+                document.getElementById("text");
+
+            if (!SpeechRecognition) {
+
+                button.disabled = true;
+
+                output.innerText =
+                    "이 브라우저에서는 음성입력을 지원하지 않습니다.";
+
+            } else {
+
+                const recognition =
+                    new SpeechRecognition();
+
+                recognition.lang = "ko-KR";
+
+                recognition.continuous = false;
+
+                recognition.interimResults = false;
+
+                button.onclick = function() {
+
+                    output.innerText =
+                        "🎤 듣는 중...";
+
+                    recognition.start();
+
+                };
+
+                recognition.onresult =
+                    function(event) {
+
+                    const text =
+                        event.results[0][0].transcript;
+
+                    output.innerText =
+                        "인식 결과: " + text;
+
+                };
+
+                recognition.onerror =
+                    function() {
+
+                    output.innerText =
+                        "음성 인식에 실패했습니다.";
+
+                };
+
+            }
+
+            </script>
+            </div>
+            """,
+            height=150,
+        )
 
         st.markdown(
-            "### 🔊 결과 음성듣기"
+            "### 🔊 결과 듣기"
         )
 
         speech_text = (
             f"승리 확률 "
-            f"{probability['승']:.1f} "
-            f"퍼센트. "
+            f"{probability['승']:.1f} 퍼센트. "
             f"무승부 확률 "
-            f"{probability['무']:.1f} "
-            f"퍼센트. "
+            f"{probability['무']:.1f} 퍼센트. "
             f"패배 확률 "
-            f"{probability['패']:.1f} "
-            f"퍼센트."
-        )
-
-        safe_text = (
-            html.escape(
-                speech_text
-            )
+            f"{probability['패']:.1f} 퍼센트."
         )
 
         st.components.v1.html(
@@ -1285,7 +916,7 @@ with tab4:
                 onclick="
                     const u =
                     new SpeechSynthesisUtterance(
-                        `{safe_text}`
+                        `{speech_text}`
                     );
 
                     u.lang='ko-KR';
@@ -1297,7 +928,7 @@ with tab4:
                 style="
                     width:100%;
                     height:48px;
-                    font-size:17px;
+                    font-size:18px;
                     border-radius:8px;
                     border:1px solid #ccc;
                     background:#f5f5f5;
@@ -1309,71 +940,14 @@ with tab4:
             height=60,
         )
 
-        # ----------------------------------------------------
-        # 마이크
-        # ----------------------------------------------------
-
-        st.markdown(
-            "### 🎤 마이크 음성입력"
-        )
-
-        st.caption(
-            "마이크 버튼을 눌러 음성을 녹음할 수 있습니다."
-        )
-
-        audio = st.audio_input(
-            "🎤 음성 녹음",
-            sample_rate=16000,
-            key="odds_voice",
-        )
-
-        if audio:
-
-            st.success(
-                "음성 녹음 완료"
-            )
-
-            st.audio(
-                audio
-            )
-
-            st.caption(
-                "위 재생 버튼으로 녹음된 음성을 들을 수 있습니다."
-            )
-
-    else:
-
-        st.warning(
-            "올바른 배당을 입력하세요."
-        )
-
 
 # ============================================================
-# 하단 DB 정보
+# 하단
 # ============================================================
 
 st.divider()
 
-final_status = (
-    database.get_database_status()
-)
-
-final_size = (
-    database.get_database_size_bytes()
-)
-
 st.caption(
     "⚽ Scoreman 데이터 분석 시스템 · "
-    "최종배당 기준"
-)
-
-st.caption(
-    f"DB: 경기 "
-    f"{final_status['matches']:,}개 · "
-    f"배당 "
-    f"{final_status['odds']:,}개 · "
-    f"업체 "
-    f"{final_status['bookmakers']:,}개 · "
-    f"용량 "
-    f"{database.format_bytes(final_size)}"
-    )
+    "최종배당 기준 · 실제 결과 기준"
+                )
