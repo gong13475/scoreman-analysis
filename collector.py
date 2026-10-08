@@ -1,17 +1,24 @@
 # ============================================================
 # collector.py
-# ⚽ Scoreman 자동 수집기 최종본
+# ⚽ Scoreman 자동 수집기 - 최종 보강본
 #
-# 기능
+# 기존 기능 유지
 # - Scoreman 경기 페이지 수집
-# - 실제 경기 결과
-# - 최종 해외배당
-# - 전체 업체
-# - 선택 업체
-# - 백그라운드
+# - 실제 경기 결과 수집
+# - 최종 해외배당 수집
+# - 전체 업체 자동수집
+# - 특정 업체 수집
+# - 백그라운드 실행
 # - 중지
-# - 이어받기
+# - 중지 지점 이어받기
 # - 실패 1회 재시도
+#
+# 추가 보강
+# - HTTP/배당 API 상세 로그
+# - 업체별 배당 저장 오류 표시
+# - 일부 업체 저장 실패 시 나머지 업체 계속 저장
+# - 최종배당 저장 실패 원인 상세 표시
+# - 저장된 업체 수 기준 성공 판정
 # ============================================================
 
 import json
@@ -26,21 +33,19 @@ import database
 
 
 # ============================================================
-# 기본
+# 기본 설정
 # ============================================================
 
-BASE_URL = (
-    "https://www.scoreman123.com"
-)
+BASE_URL = "https://www.scoreman123.com"
 
 MATCH_URL = (
-    BASE_URL
-    + "/match/data-{schedule_id}"
+    BASE_URL +
+    "/match/data-{schedule_id}"
 )
 
 ODDS_URL = (
-    BASE_URL
-    + "/ajax/soccerajax"
+    BASE_URL +
+    "/ajax/soccerajax"
     "?type=14&t=1&id={schedule_id}&h=0"
 )
 
@@ -50,25 +55,18 @@ ODDS_URL = (
 # ============================================================
 
 HEADERS = {
-
-    "User-Agent":
-        (
-            "Mozilla/5.0 "
-            "(Linux; Android 10) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/130.0 Mobile Safari/537.36"
-        ),
-
-    "Accept":
-        (
-            "text/html,application/xhtml+xml,"
-            "application/json,text/plain,*/*"
-        ),
-
-    "Referer":
-        BASE_URL + "/"
-
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Linux; Android 10) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/130.0 Mobile Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/json,text/plain,*/*"
+    ),
+    "Referer": BASE_URL + "/",
 }
 
 
@@ -79,50 +77,36 @@ HEADERS = {
 JOB_LOCK = threading.RLock()
 
 JOB = {
-
     "running": False,
-
     "finished": False,
-
     "current": 0,
-
     "total": 0,
 
     "success": 0,
-
     "exists": 0,
-
     "failed": 0,
-
     "no_odds": 0,
-
     "odds": 0,
 
     "start_id": 0,
-
     "end_id": 0,
-
     "last_completed_id": 0,
 
     "selected_companies": None,
 
     "result": {},
-
     "error": "",
-
     "stopped": False,
 
-    "log": ""
-
+    "log": "",
 }
 
 STOP_EVENT = threading.Event()
-
 WORKER = None
 
 
 # ============================================================
-# 숫자
+# 숫자 변환
 # ============================================================
 
 def to_float(value):
@@ -132,9 +116,7 @@ def to_float(value):
         if value is None:
             return None
 
-        text = str(
-            value
-        ).strip()
+        text = str(value).strip()
 
         if not text:
             return None
@@ -157,21 +139,14 @@ def _log(message):
     text = str(message)
 
     try:
-
-        database.save_collection_log(
-            text
-        )
-
+        database.save_collection_log(text)
     except Exception:
         pass
 
     with JOB_LOCK:
 
         old = str(
-            JOB.get(
-                "log",
-                ""
-            )
+            JOB.get("log", "")
             or ""
         )
 
@@ -181,22 +156,17 @@ def _log(message):
             + "\n"
         )
 
-        lines = (
-            JOB["log"]
-            .splitlines()
-        )
+        lines = JOB["log"].splitlines()
 
         if len(lines) > 500:
 
-            JOB["log"] = (
-                "\n".join(
-                    lines[-500:]
-                )
+            JOB["log"] = "\n".join(
+                lines[-500:]
             )
 
 
 # ============================================================
-# JSON
+# JSON 후보
 # ============================================================
 
 def _find_json_objects(text):
@@ -217,26 +187,35 @@ def _find_json_objects(text):
     except Exception:
         pass
 
-    # --------------------------------------------------------
-    # script 안 JSON 탐색
-    # --------------------------------------------------------
+    patterns = [
+        r'\{.*?"mixodds".*?\}',
+        r'\{.*?"Data".*?\}',
+        r'\[.*?"mixodds".*?\]',
+    ]
 
-    for script_text in re.findall(
-        r"<script[^>]*>(.*?)</script>",
-        text,
-        re.I | re.S
-    ):
+    for pattern in patterns:
 
         try:
 
-            obj = json.loads(
-                script_text.strip()
+            matches = re.findall(
+                pattern,
+                text,
+                re.S
             )
 
-            objects.append(obj)
+            for item in matches:
+
+                try:
+
+                    objects.append(
+                        json.loads(item)
+                    )
+
+                except Exception:
+                    continue
 
         except Exception:
-            pass
+            continue
 
     return objects
 
@@ -251,11 +230,8 @@ def _score_from_text(text):
         return None, None
 
     patterns = [
-
-        r"(\d+)\s*[-:]\s*(\d+)",
-
-        r"(\d+)\s*:\s*(\d+)"
-
+        r'(\d+)\s*[-:]\s*(\d+)',
+        r'(\d+)\s*:\s*(\d+)',
     ]
 
     for pattern in patterns:
@@ -270,12 +246,8 @@ def _score_from_text(text):
             try:
 
                 return (
-                    int(
-                        match.group(1)
-                    ),
-                    int(
-                        match.group(2)
-                    )
+                    int(match.group(1)),
+                    int(match.group(2))
                 )
 
             except Exception:
@@ -321,35 +293,25 @@ def _extract_teams(
     home = ""
     away = ""
 
-    candidates = []
-
     selectors = [
-
         ".team_name",
-
         ".teamname",
-
         ".team",
-
         ".home",
-
         ".away",
-
         ".homeTeam",
-
-        ".awayTeam"
-
+        ".awayTeam",
+        "[class*='home']",
+        "[class*='away']",
     ]
+
+    candidates = []
 
     for selector in selectors:
 
         try:
 
-            nodes = soup.select(
-                selector
-            )
-
-            for node in nodes:
+            for node in soup.select(selector):
 
                 value = node.get_text(
                     " ",
@@ -362,9 +324,7 @@ def _extract_teams(
                     and value not in candidates
                 ):
 
-                    candidates.append(
-                        value
-                    )
+                    candidates.append(value)
 
         except Exception:
             continue
@@ -372,12 +332,7 @@ def _extract_teams(
     if len(candidates) >= 2:
 
         home = candidates[0]
-
         away = candidates[1]
-
-    # --------------------------------------------------------
-    # title
-    # --------------------------------------------------------
 
     if not home or not away:
 
@@ -385,18 +340,18 @@ def _extract_teams(
 
         try:
 
-            title = soup.title.get_text(
-                " ",
-                strip=True
-            )
+            if soup.title:
+
+                title = soup.title.get_text(
+                    " ",
+                    strip=True
+                )
 
         except Exception:
             pass
 
         match = re.search(
-            r"(.{2,60}?)\s+"
-            r"(?:vs|VS|v\.|:)\s+"
-            r"(.{2,60})",
+            r'(.{2,50}?)\s+(?:vs|VS|v\.|:)\s+(.{2,50})',
             title
         )
 
@@ -412,23 +367,18 @@ def _extract_teams(
                 or match.group(2).strip()
             )
 
-    # --------------------------------------------------------
-    # text
-    # --------------------------------------------------------
-
     if not home or not away:
 
-        for line in text.splitlines():
+        lines = [
+            x.strip()
+            for x in text.splitlines()
+            if x.strip()
+        ]
 
-            line = line.strip()
-
-            if not line:
-                continue
+        for line in lines:
 
             match = re.search(
-                r"^(.{2,60})\s+"
-                r"(?:vs|VS|v\.)\s+"
-                r"(.{2,60})$",
+                r'^(.{2,50})\s+(?:vs|VS)\s+(.{2,50})$',
                 line
             )
 
@@ -460,14 +410,10 @@ def _extract_date(
 
     patterns = [
 
-        (
-            r"(20\d{2}[-/.]"
-            r"\d{1,2}[-/.]"
-            r"\d{1,2}"
-            r"(?:\s+\d{1,2}:\d{2})?)"
-        ),
+        r'(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}'
+        r'(?:\s+\d{1,2}:\d{2})?)',
 
-        r"(20\d{2}\d{2}\d{2})"
+        r'(20\d{2}\d{2}\d{2})',
 
     ]
 
@@ -480,9 +426,7 @@ def _extract_date(
 
         if match:
 
-            value = (
-                match.group(1)
-            )
+            value = match.group(1)
 
             if len(value) == 8:
 
@@ -539,11 +483,16 @@ def fetch_match(
             timeout=20
         )
 
+        _log(
+            f"[페이지] ID={schedule_id} "
+            f"HTTP={response.status_code} "
+            f"SIZE={len(response.text or ''):,}"
+        )
+
         if response.status_code != 200:
 
             _log(
-                f"[페이지 실패] "
-                f"ID={schedule_id} "
+                f"[페이지 실패] ID={schedule_id} "
                 f"HTTP={response.status_code}"
             )
 
@@ -551,13 +500,8 @@ def fetch_match(
 
         html_text = response.text
 
-        _log(
-            f"[페이지] ID={schedule_id} "
-            f"HTTP=200 "
-            f"SIZE={len(html_text):,}"
-        )
-
         if not html_text:
+
             return None
 
         soup = BeautifulSoup(
@@ -583,24 +527,16 @@ def fetch_match(
         score_candidates = []
 
         for selector in [
-
             ".score",
-
             ".scores",
-
             ".result",
-
             ".final_score",
-
-            "[class*='score']"
-
+            "[class*='score']",
         ]:
 
             try:
 
-                for node in soup.select(
-                    selector
-                ):
+                for node in soup.select(selector):
 
                     value = node.get_text(
                         " ",
@@ -647,6 +583,10 @@ def fetch_match(
 
         if not home_team and not away_team:
 
+            _log(
+                f"[경기정보 없음] ID={schedule_id}"
+            )
+
             return None
 
         return {
@@ -673,16 +613,15 @@ def fetch_match(
                 result,
 
             "source":
-                "Scoreman"
+                "Scoreman",
 
         }
 
     except Exception as e:
 
         _log(
-            f"[경기 오류] "
-            f"ID={schedule_id} "
-            f"{e}"
+            f"[경기 오류] ID={schedule_id} "
+            f"{type(e).__name__}: {e}"
         )
 
         return None
@@ -708,27 +647,30 @@ def fetch_odds(
             timeout=20
         )
 
+        _log(
+            f"[배당 API] ID={schedule_id} "
+            f"HTTP={response.status_code} "
+            f"SIZE={len(response.text or ''):,}"
+        )
+
         if response.status_code != 200:
 
             _log(
-                f"[배당 HTTP 실패] "
-                f"ID={schedule_id} "
-                f"HTTP={response.status_code}"
+                f"[배당 API 실패] "
+                f"ID={schedule_id}"
             )
 
             return []
 
         text = response.text
 
+        payload = None
+
         try:
 
             payload = response.json()
 
         except Exception:
-
-            payload = None
-
-        if payload is None:
 
             objects = _find_json_objects(
                 text
@@ -740,27 +682,22 @@ def fetch_odds(
 
         if payload is None:
 
+            _log(
+                f"[배당 JSON 없음] "
+                f"ID={schedule_id}"
+            )
+
             return []
 
         mixodds = None
 
-        # ----------------------------------------------------
-        # Data.mixodds
-        # ----------------------------------------------------
-
-        if isinstance(
-            payload,
-            dict
-        ):
+        if isinstance(payload, dict):
 
             data = payload.get(
                 "Data"
             )
 
-            if isinstance(
-                data,
-                dict
-            ):
+            if isinstance(data, dict):
 
                 mixodds = data.get(
                     "mixodds"
@@ -776,6 +713,11 @@ def fetch_odds(
             mixodds,
             list
         ):
+
+            _log(
+                f"[mixodds 없음] "
+                f"ID={schedule_id}"
+            )
 
             return []
 
@@ -813,12 +755,6 @@ def fetch_odds(
             ):
 
                 continue
-
-            # ------------------------------------------------
-            # 핵심:
-            # euro.l = 최종배당
-            # euro.f = 초기배당 → 사용하지 않음
-            # ------------------------------------------------
 
             final_data = euro.get(
                 "l"
@@ -871,9 +807,7 @@ def fetch_odds(
                     str(company_id),
 
                 "company_name":
-                    str(
-                        company_name
-                    ).strip(),
+                    str(company_name).strip(),
 
                 "final_home":
                     home,
@@ -882,18 +816,22 @@ def fetch_odds(
                     draw,
 
                 "final_away":
-                    away
+                    away,
 
             })
+
+        _log(
+            f"[배당 추출] ID={schedule_id} "
+            f"업체={len(result)}"
+        )
 
         return result
 
     except Exception as e:
 
         _log(
-            f"[배당 오류] "
-            f"ID={schedule_id} "
-            f"{e}"
+            f"[배당 오류] ID={schedule_id} "
+            f"{type(e).__name__}: {e}"
         )
 
         return []
@@ -916,7 +854,8 @@ def collect_one(
 
         return {
             "status": "failed",
-            "odds": 0
+            "odds": 0,
+            "error": "경기 페이지 수집 실패",
         }
 
     odds = fetch_odds(
@@ -927,50 +866,46 @@ def collect_one(
 
         return {
             "status": "no_odds",
-            "odds": 0
+            "odds": 0,
+            "error": "최종배당 없음",
         }
 
     # --------------------------------------------------------
-    # 업체 선택
+    # 업체 필터
     # --------------------------------------------------------
 
     if selected_companies:
 
         wanted = {
-
-            str(x)
-            .strip()
-            .lower()
-
-            for x
-            in selected_companies
-
+            str(x).strip().lower()
+            for x in selected_companies
         }
 
-        odds = [
+        filtered = []
 
-            item
+        for item in odds:
 
-            for item
-            in odds
-
-            if str(
+            name = str(
                 item.get(
                     "company_name",
                     ""
                 )
-            )
-            .strip()
-            .lower()
-            in wanted
+            ).strip().lower()
 
-        ]
+            if name in wanted:
+
+                filtered.append(
+                    item
+                )
+
+        odds = filtered
 
     if not odds:
 
         return {
             "status": "no_odds",
-            "odds": 0
+            "odds": 0,
+            "error": "선택 업체의 최종배당 없음",
         }
 
     # --------------------------------------------------------
@@ -982,58 +917,46 @@ def collect_one(
         database.save_match(
 
             schedule_id=
-                match[
-                    "schedule_id"
-                ],
+                match["schedule_id"],
 
             match_date=
-                match[
-                    "match_date"
-                ],
+                match["match_date"],
 
             home_team=
-                match[
-                    "home_team"
-                ],
+                match["home_team"],
 
             away_team=
-                match[
-                    "away_team"
-                ],
+                match["away_team"],
 
             home_score=
-                match[
-                    "home_score"
-                ],
+                match["home_score"],
 
             away_score=
-                match[
-                    "away_score"
-                ],
+                match["away_score"],
 
             result=
-                match[
-                    "result"
-                ],
+                match["result"],
 
             source=
-                match[
-                    "source"
-                ]
+                match["source"],
 
         )
 
     except Exception as e:
 
+        error_text = (
+            f"경기 저장 실패: "
+            f"{type(e).__name__}: {e}"
+        )
+
         _log(
-            f"[경기 저장 실패] "
-            f"ID={schedule_id} "
-            f"{e}"
+            f"[{error_text}] ID={schedule_id}"
         )
 
         return {
             "status": "failed",
-            "odds": 0
+            "odds": 0,
+            "error": error_text,
         }
 
     # --------------------------------------------------------
@@ -1041,17 +964,23 @@ def collect_one(
     # --------------------------------------------------------
 
     saved_odds = 0
+    failed_odds = 0
 
     for item in odds:
+
+        company_name = str(
+            item.get(
+                "company_name",
+                ""
+            )
+        ).strip()
 
         try:
 
             database.save_odds(
 
                 schedule_id=
-                    match[
-                        "schedule_id"
-                    ],
+                    match["schedule_id"],
 
                 company_id=
                     item.get(
@@ -1060,10 +989,7 @@ def collect_one(
                     ),
 
                 company_name=
-                    item.get(
-                        "company_name",
-                        ""
-                    ),
+                    company_name,
 
                 final_home=
                     item.get(
@@ -1078,37 +1004,62 @@ def collect_one(
                 final_away=
                     item.get(
                         "final_away"
-                    )
+                    ),
 
             )
 
             saved_odds += 1
 
-        except Exception as e:
-
             _log(
-                "[배당 저장 실패] "
+                f"[배당 저장 성공] "
                 f"ID={schedule_id} "
-                f"업체="
-                f"{item.get('company_name', '')} "
-                f"오류={e}"
+                f"업체={company_name}"
             )
 
-    if saved_odds <= 0:
+        except Exception as e:
+
+            failed_odds += 1
+
+            _log(
+                f"[배당 저장 실패] "
+                f"ID={schedule_id} "
+                f"업체={company_name} "
+                f"CID={item.get('company_id', '')} "
+                f"승={item.get('final_home')} "
+                f"무={item.get('final_draw')} "
+                f"패={item.get('final_away')} "
+                f"오류={type(e).__name__}: {e}"
+            )
+
+    # --------------------------------------------------------
+    # 하나라도 저장되면 성공
+    # --------------------------------------------------------
+
+    if saved_odds > 0:
+
+        if failed_odds > 0:
+
+            _log(
+                f"[부분 저장] ID={schedule_id} "
+                f"성공={saved_odds} "
+                f"실패={failed_odds}"
+            )
 
         return {
-            "status": "failed",
-            "odds": 0
+            "status": "success",
+            "odds": saved_odds,
+            "failed_odds": failed_odds,
         }
 
+    # --------------------------------------------------------
+    # 하나도 저장되지 않은 경우
+    # --------------------------------------------------------
+
     return {
-
-        "status":
-            "success",
-
-        "odds":
-            saved_odds
-
+        "status": "failed",
+        "odds": 0,
+        "failed_odds": failed_odds,
+        "error": "최종배당 저장 실패",
     }
 
 
@@ -1136,6 +1087,7 @@ def _worker(
 
         JOB["running"] = True
         JOB["finished"] = False
+
         JOB["current"] = 0
         JOB["total"] = max(
             total,
@@ -1148,13 +1100,8 @@ def _worker(
         JOB["no_odds"] = 0
         JOB["odds"] = 0
 
-        JOB["start_id"] = int(
-            start_id
-        )
-
-        JOB["end_id"] = int(
-            end_id
-        )
+        JOB["start_id"] = int(start_id)
+        JOB["end_id"] = int(end_id)
 
         JOB["last_completed_id"] = 0
 
@@ -1169,21 +1116,22 @@ def _worker(
 
     STOP_EVENT.clear()
 
-    database.save_collection_state(
+    try:
 
-        start_id,
+        database.save_collection_state(
+            start_id,
+            end_id,
+            start_id,
+            0,
+            True,
+            False
+        )
 
-        end_id,
+    except Exception as e:
 
-        start_id,
-
-        0,
-
-        True,
-
-        False
-
-    )
+        _log(
+            f"[상태 저장 오류] {e}"
+        )
 
     _log(
         "========================================"
@@ -1194,9 +1142,7 @@ def _worker(
     )
 
     _log(
-        f"범위: "
-        f"{start_id:,} ~ "
-        f"{end_id:,}"
+        f"범위: {start_id:,} ~ {end_id:,}"
     )
 
     _log(
@@ -1206,6 +1152,10 @@ def _worker(
 
     _log(
         "실패는 1회 자동 재시도"
+    )
+
+    _log(
+        f"요청 간격: {float(delay):.2f}초"
     )
 
     if selected_companies:
@@ -1224,10 +1174,6 @@ def _worker(
         )
 
     _log(
-        f"요청 간격: {float(delay):.2f}초"
-    )
-
-    _log(
         "========================================"
     )
 
@@ -1236,14 +1182,11 @@ def _worker(
     try:
 
         for index, schedule_id in enumerate(
-
             range(
                 int(start_id),
                 int(end_id) + 1
             ),
-
             start=1
-
         ):
 
             if STOP_EVENT.is_set():
@@ -1258,29 +1201,26 @@ def _worker(
 
                 JOB["current"] = index
 
-            database.save_collection_state(
+            try:
 
-                start_id,
+                database.save_collection_state(
+                    start_id,
+                    end_id,
+                    schedule_id,
+                    last_completed,
+                    True,
+                    False
+                )
 
-                end_id,
-
-                schedule_id,
-
-                last_completed,
-
-                True,
-
-                False
-
-            )
+            except Exception:
+                pass
 
             _log(
-                f"[수집 시작] "
-                f"ID={schedule_id}"
+                f"[수집 시작] ID={schedule_id}"
             )
 
             # ------------------------------------------------
-            # 기존 데이터
+            # 기존 경기 확인
             # ------------------------------------------------
 
             already_exists = False
@@ -1299,50 +1239,15 @@ def _worker(
 
                     if old_odds:
 
-                        # 특정 업체 수집일 경우
-                        # 해당 업체가 실제 있는지 확인
-                        if selected_companies:
+                        already_exists = True
 
-                            wanted = {
+            except Exception as e:
 
-                                str(x)
-                                .strip()
-                                .lower()
-
-                                for x
-                                in selected_companies
-
-                            }
-
-                            existing_names = {
-
-                                str(
-                                    x.get(
-                                        "company_name",
-                                        ""
-                                    )
-                                )
-                                .strip()
-                                .lower()
-
-                                for x
-                                in old_odds
-
-                            }
-
-                            if wanted.intersection(
-                                existing_names
-                            ):
-
-                                already_exists = True
-
-                        else:
-
-                            already_exists = True
-
-            except Exception:
-
-                already_exists = False
+                _log(
+                    f"[중복 확인 오류] "
+                    f"ID={schedule_id} "
+                    f"{e}"
+                )
 
             if already_exists:
 
@@ -1350,9 +1255,7 @@ def _worker(
 
                     JOB["exists"] += 1
 
-                last_completed = (
-                    schedule_id
-                )
+                last_completed = schedule_id
 
                 with JOB_LOCK:
 
@@ -1360,25 +1263,22 @@ def _worker(
                         "last_completed_id"
                     ] = last_completed
 
-                database.save_collection_state(
+                try:
 
-                    start_id,
+                    database.save_collection_state(
+                        start_id,
+                        end_id,
+                        schedule_id,
+                        last_completed,
+                        True,
+                        False
+                    )
 
-                    end_id,
-
-                    schedule_id,
-
-                    last_completed,
-
-                    True,
-
-                    False
-
-                )
+                except Exception:
+                    pass
 
                 _log(
-                    f"[중복] "
-                    f"ID={schedule_id}"
+                    f"[중복] ID={schedule_id}"
                 )
 
                 if delay > 0:
@@ -1390,19 +1290,16 @@ def _worker(
                 continue
 
             # ------------------------------------------------
-            # 1차 수집
+            # 1차
             # ------------------------------------------------
 
             result = collect_one(
-
                 schedule_id,
-
                 selected_companies
-
             )
 
             # ------------------------------------------------
-            # 실패 1회 재시도
+            # 실패 재시도
             # ------------------------------------------------
 
             if result.get(
@@ -1410,8 +1307,8 @@ def _worker(
             ) == "failed":
 
                 _log(
-                    f"[재시도] "
-                    f"ID={schedule_id}"
+                    f"[재시도] ID={schedule_id} "
+                    f"오류={result.get('error', '')}"
                 )
 
                 time.sleep(
@@ -1422,11 +1319,8 @@ def _worker(
                 )
 
                 result = collect_one(
-
                     schedule_id,
-
                     selected_companies
-
                 )
 
             status = result.get(
@@ -1441,23 +1335,14 @@ def _worker(
                 or 0
             )
 
-            # ------------------------------------------------
-            # 성공
-            # ------------------------------------------------
-
             if status == "success":
 
                 with JOB_LOCK:
 
                     JOB["success"] += 1
+                    JOB["odds"] += odds_count
 
-                    JOB["odds"] += (
-                        odds_count
-                    )
-
-                last_completed = (
-                    schedule_id
-                )
+                last_completed = schedule_id
 
                 with JOB_LOCK:
 
@@ -1465,31 +1350,24 @@ def _worker(
                         "last_completed_id"
                     ] = last_completed
 
-                database.save_collection_state(
+                try:
 
-                    start_id,
+                    database.save_collection_state(
+                        start_id,
+                        end_id,
+                        schedule_id,
+                        last_completed,
+                        True,
+                        False
+                    )
 
-                    end_id,
-
-                    schedule_id,
-
-                    last_completed,
-
-                    True,
-
-                    False
-
-                )
+                except Exception:
+                    pass
 
                 _log(
-                    f"[완료] "
-                    f"ID={schedule_id} "
+                    f"[완료] ID={schedule_id} "
                     f"배당={odds_count}"
                 )
-
-            # ------------------------------------------------
-            # 배당 없음
-            # ------------------------------------------------
 
             elif status == "no_odds":
 
@@ -1498,13 +1376,8 @@ def _worker(
                     JOB["no_odds"] += 1
 
                 _log(
-                    f"[배당 없음] "
-                    f"ID={schedule_id}"
+                    f"[배당 없음] ID={schedule_id}"
                 )
-
-            # ------------------------------------------------
-            # 실패
-            # ------------------------------------------------
 
             else:
 
@@ -1513,8 +1386,8 @@ def _worker(
                     JOB["failed"] += 1
 
                 _log(
-                    f"[실패] "
-                    f"ID={schedule_id}"
+                    f"[실패] ID={schedule_id} "
+                    f"오류={result.get('error', '')}"
                 )
 
             if delay > 0:
@@ -1528,18 +1401,16 @@ def _worker(
         with JOB_LOCK:
 
             JOB["error"] = str(e)
-
             JOB["failed"] += 1
 
         _log(
-            f"[치명적 오류] {e}"
+            f"[치명적 오류] "
+            f"{type(e).__name__}: {e}"
         )
 
     finally:
 
-        stopped = (
-            STOP_EVENT.is_set()
-        )
+        stopped = STOP_EVENT.is_set()
 
         with JOB_LOCK:
 
@@ -1569,29 +1440,30 @@ def _worker(
                     JOB["odds"],
 
                 "stopped":
-                    stopped
+                    stopped,
 
             }
 
-        database.save_collection_state(
+        try:
 
-            start_id,
+            database.save_collection_state(
+                start_id,
+                end_id,
+                (
+                    last_completed
+                    if last_completed > 0
+                    else start_id
+                ),
+                last_completed,
+                False,
+                stopped
+            )
 
-            end_id,
+        except Exception as e:
 
-            (
-                last_completed
-                if last_completed > 0
-                else start_id
-            ),
-
-            last_completed,
-
-            False,
-
-            stopped
-
-        )
+            _log(
+                f"[종료 상태 저장 오류] {e}"
+            )
 
         _log(
             "========================================"
@@ -1606,8 +1478,16 @@ def _worker(
         else:
 
             _log(
-                "✅ 수집 작업 완료"
+                "✅ 수집 작업 종료"
             )
+
+        _log(
+            f"신규={JOB['success']} "
+            f"기존={JOB['exists']} "
+            f"실패={JOB['failed']} "
+            f"배당없음={JOB['no_odds']} "
+            f"최종배당={JOB['odds']}"
+        )
 
         _log(
             "========================================"
@@ -1630,9 +1510,7 @@ def start_background_collection(
 
     with JOB_LOCK:
 
-        if JOB.get(
-            "running"
-        ):
+        if JOB.get("running"):
 
             return False
 
@@ -1647,21 +1525,14 @@ def start_background_collection(
         target=_worker,
 
         args=(
-
             int(start_id),
-
             int(end_id),
-
             selected_companies,
-
             float(delay),
-
-            bool(resume)
-
+            bool(resume),
         ),
 
         daemon=True
-
     )
 
     WORKER.start()
@@ -1677,9 +1548,7 @@ def stop_background_collection():
 
     with JOB_LOCK:
 
-        if not JOB.get(
-            "running"
-        ):
+        if not JOB.get("running"):
 
             return False
 
@@ -1701,9 +1570,7 @@ def is_running():
     with JOB_LOCK:
 
         return bool(
-            JOB.get(
-                "running"
-            )
+            JOB.get("running")
         )
 
 
@@ -1732,4 +1599,4 @@ if __name__ == "__main__":
         collect_one(
             2716488
         )
-    )
+                )
