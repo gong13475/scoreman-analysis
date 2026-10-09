@@ -1343,4 +1343,4 @@ def get_database_size():
         "mode": mode,
 
         "estimated": True,
-    }
+        }
