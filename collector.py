@@ -2,15 +2,17 @@
 # collector.py
 # Scoreman 해외 최종배당 수집기
 #
+# 기능
 # 1. 경기 페이지 수집
 # 2. 홈팀 / 원정팀 추출
-# 3. 실제 점수 및 승무패 계산
-# 4. 해외업체 최종배당 추출
+# 3. 실제 점수 및 승무패 검증
+# 4. 해외업체 최종배당 euro.l만 추출
 # 5. 경기 및 배당 저장
 # 6. 수집 상태 저장
 # 7. 중지 / 이어받기
 # 8. 진행률 / 로그
 # 9. 자동 재시도 없음
+# 10. 점수 추출 진단 강화
 # ============================================================
 
 import re
@@ -27,15 +29,12 @@ import database
 
 
 # ============================================================
-# 설정
+# 기본 설정
 # ============================================================
 
 BASE_URL = "https://www.scoreman123.com"
 
-MATCH_URL = (
-    BASE_URL
-    + "/match/data-{schedule_id}"
-)
+MATCH_URL = BASE_URL + "/match/data-{schedule_id}"
 
 ODDS_URL = (
     BASE_URL
@@ -43,9 +42,7 @@ ODDS_URL = (
 )
 
 REQUEST_TIMEOUT = 25
-
 DEFAULT_DELAY = 0.5
-
 MAX_LOGS = 1500
 
 
@@ -56,20 +53,14 @@ MAX_LOGS = 1500
 session = requests.Session()
 
 session.headers.update({
-
     "User-Agent": (
         "Mozilla/5.0 (Linux; Android 10; K) "
         "AppleWebKit/537.36 "
         "(KHTML, like Gecko) "
         "Chrome/130.0.0.0 Mobile Safari/537.36"
     ),
-
     "Accept": "*/*",
-
-    "Accept-Language": (
-        "ko-KR,ko;q=0.9,en-US;q=0.8"
-    ),
-
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
     "Referer": BASE_URL + "/",
 })
 
@@ -79,7 +70,6 @@ session.headers.update({
 # ============================================================
 
 job = {
-
     "running": False,
     "finished": False,
 
@@ -97,14 +87,12 @@ job = {
     "last_completed_id": None,
 
     "selected_companies": [],
-
     "delay": DEFAULT_DELAY,
 
     "start_time": None,
     "end_time": None,
 
     "log": [],
-
     "result": "",
     "error": "",
 }
@@ -117,34 +105,23 @@ lock = threading.RLock()
 # ============================================================
 
 def add_log(message):
-
-    timestamp = datetime.now().strftime(
-        "%H:%M:%S"
-    )
-
+    timestamp = datetime.now().strftime("%H:%M:%S")
     line = f"[{timestamp}] {message}"
 
     with lock:
-
         job["log"].append(line)
 
         if len(job["log"]) > MAX_LOGS:
-
             job["log"] = job["log"][-MAX_LOGS:]
 
     print(line, flush=True)
 
 
 def get_job_status():
-
     with lock:
-
         return {
-
             **job,
-
             "log": list(job["log"]),
-
             "selected_companies": list(
                 job["selected_companies"]
             ),
@@ -152,19 +129,16 @@ def get_job_status():
 
 
 def get_logs():
-
     with lock:
         return list(job["log"])
 
 
 def clear_logs():
-
     with lock:
         job["log"] = []
 
 
 def is_running():
-
     with lock:
         return bool(job["running"])
 
@@ -174,16 +148,13 @@ def is_running():
 # ============================================================
 
 def stop_collection():
-
     with lock:
-
         if not job["running"]:
             return False
 
         job["running"] = False
 
     add_log("🛑 수집 중지 요청")
-
     return True
 
 
@@ -192,50 +163,30 @@ def stop_collection():
 # ============================================================
 
 def clean_text(value):
-
     if value is None:
         return ""
 
-    value = html_lib.unescape(
-        str(value)
-    )
-
+    value = html_lib.unescape(str(value))
     value = value.replace("\\/", "/")
 
-    value = re.sub(
-        r"<[^>]+>",
-        " ",
-        value,
-    )
-
-    value = re.sub(
-        r"[\r\n\t]+",
-        " ",
-        value,
-    )
-
-    value = re.sub(
-        r"\s+",
-        " ",
-        value,
-    )
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"[\r\n\t]+", " ", value)
+    value = re.sub(r"\s+", " ", value)
 
     return value.strip()
 
 
 # ============================================================
-# JSON 키 조회
+# 대소문자 구분 없는 JSON 키 조회
 # ============================================================
 
 def get_ci(data, key, default=None):
-
     if not isinstance(data, dict):
         return default
 
     wanted = str(key).lower()
 
     for current_key, value in data.items():
-
         if str(current_key).lower() == wanted:
             return value
 
@@ -247,7 +198,6 @@ def get_ci(data, key, default=None):
 # ============================================================
 
 def parse_json(text):
-
     if not isinstance(text, str):
         return None
 
@@ -258,22 +208,17 @@ def parse_json(text):
 
     try:
         return json.loads(text)
-
     except Exception:
         pass
 
     decoder = json.JSONDecoder()
 
     for index, char in enumerate(text):
-
         if char not in "{[":
             continue
 
         try:
-
-            data, _ = decoder.raw_decode(
-                text[index:]
-            )
+            data, _ = decoder.raw_decode(text[index:])
 
             if isinstance(data, (dict, list)):
                 return data
@@ -289,24 +234,16 @@ def parse_json(text):
 # ============================================================
 
 def extract_json_scripts(page_html):
-
     results = []
 
-    pattern = (
-        r"<script\b([^>]*)>(.*?)</script\s*>"
-    )
+    pattern = r"<script\b([^>]*)>(.*?)</script\s*>"
 
-    matches = re.findall(
+    for attrs, body in re.findall(
         pattern,
         page_html,
         re.I | re.S,
-    )
-
-    for attrs, body in matches:
-
-        body = html_lib.unescape(
-            body or ""
-        ).strip()
+    ):
+        body = html_lib.unescape(body or "").strip()
 
         if not body:
             continue
@@ -319,8 +256,15 @@ def extract_json_scripts(page_html):
             )
         )
 
-        if is_json or body.startswith(("{", "[")):
-
+        if (
+            is_json
+            or body.startswith(("{", "["))
+            or re.search(
+                r"\b(?:homeScore|home_score|hscore|matchscore)\b",
+                body,
+                re.I,
+            )
+        ):
             data = parse_json(body)
 
             if data is not None:
@@ -334,21 +278,14 @@ def extract_json_scripts(page_html):
 # ============================================================
 
 def to_float(value):
-
     try:
-
-        if value is None:
-            return None
-
-        if isinstance(value, bool):
+        if value is None or isinstance(value, bool):
             return None
 
         if isinstance(value, (dict, list, tuple)):
             return None
 
-        value = str(value).strip()
-
-        value = value.replace(",", "")
+        value = str(value).strip().replace(",", "")
 
         if not value:
             return None
@@ -365,37 +302,29 @@ def to_float(value):
 
 
 # ============================================================
-# 점수 변환
+# 점수 정수 변환
 # ============================================================
 
 def score_int(value):
-
     try:
-
         if value is None or isinstance(value, bool):
             return None
 
         if isinstance(value, float):
-
             if not value.is_integer():
                 return None
 
             value = int(value)
 
         elif isinstance(value, str):
-
             value = value.strip()
 
-            if not re.fullmatch(
-                r"\d{1,2}",
-                value,
-            ):
+            if not re.fullmatch(r"\d{1,2}", value):
                 return None
 
             value = int(value)
 
         else:
-
             value = int(value)
 
         if 0 <= value <= 30:
@@ -412,9 +341,7 @@ def score_int(value):
 # ============================================================
 
 def calculate_result(home_score, away_score):
-
     home = score_int(home_score)
-
     away = score_int(away_score)
 
     if home is None or away is None:
@@ -434,7 +361,6 @@ def calculate_result(home_score, away_score):
 # ============================================================
 
 def valid_team_name(value):
-
     value = clean_text(value)
 
     if not value:
@@ -443,38 +369,17 @@ def valid_team_name(value):
     if len(value) < 2 or len(value) > 100:
         return False
 
-    if re.fullmatch(
-        r"[\d\s:./-]+",
-        value,
-    ):
+    if re.fullmatch(r"[\d\s:./-]+", value):
         return False
 
     lowered = value.lower()
 
     invalid = {
-
-        "홈",
-        "원정",
-
-        "홈팀",
-        "원정팀",
-
-        "home",
-        "away",
-
-        "host",
-        "guest",
-
-        "home team",
-        "away team",
-
-        "unknown",
-        "undefined",
-        "null",
-        "none",
-
-        "loading",
-        "scoreman",
+        "홈", "원정", "홈팀", "원정팀",
+        "home", "away", "host", "guest",
+        "home team", "away team",
+        "unknown", "undefined", "null", "none",
+        "loading", "scoreman",
     }
 
     if lowered in invalid:
@@ -482,11 +387,7 @@ def valid_team_name(value):
 
     if any(
         item in lowered
-        for item in (
-            "javascript",
-            "function",
-            "undefined",
-        )
+        for item in ("javascript", "function", "undefined")
     ):
         return False
 
@@ -498,34 +399,24 @@ def valid_team_name(value):
 # ============================================================
 
 def name_from_value(value):
-
     if isinstance(value, str):
-
         value = clean_text(value)
 
         return value if valid_team_name(value) else ""
 
     if isinstance(value, dict):
-
         for key in (
-
             "name",
             "teamName",
             "team_name",
             "teamname",
-
             "cn",
             "en",
-
             "shortName",
             "short_name",
-
             "value",
         ):
-
-            result = name_from_value(
-                get_ci(value, key)
-            )
+            result = name_from_value(get_ci(value, key))
 
             if result:
                 return result
@@ -534,52 +425,31 @@ def name_from_value(value):
 
 
 def recursive_team_search(obj):
-
     if isinstance(obj, dict):
-
         lower = {
             str(key).lower(): value
             for key, value in obj.items()
         }
 
         pairs = [
-
             ("hometeam", "awayteam"),
-
             ("home_team", "away_team"),
-
             ("home_team_name", "away_team_name"),
-
             ("hometeamname", "awayteamname"),
-
             ("home_name", "away_name"),
-
             ("hteam", "ateam"),
-
             ("home", "away"),
-
             ("hostname", "guestname"),
-
             ("host", "guest"),
-
             ("team1", "team2"),
         ]
 
         for home_key, away_key in pairs:
-
-            if (
-                home_key not in lower
-                or away_key not in lower
-            ):
+            if home_key not in lower or away_key not in lower:
                 continue
 
-            home = name_from_value(
-                lower[home_key]
-            )
-
-            away = name_from_value(
-                lower[away_key]
-            )
+            home = name_from_value(lower[home_key])
+            away = name_from_value(lower[away_key])
 
             if (
                 valid_team_name(home)
@@ -589,16 +459,13 @@ def recursive_team_search(obj):
                 return home, away
 
         for value in obj.values():
-
             found = recursive_team_search(value)
 
             if found:
                 return found
 
     elif isinstance(obj, list):
-
         for value in obj:
-
             found = recursive_team_search(value)
 
             if found:
@@ -608,83 +475,79 @@ def recursive_team_search(obj):
 
 
 # ============================================================
-# HTML 팀명 추출
+# HTML 팀명 / 점수 파서
 # ============================================================
 
 def classify_side(value):
-
     value = str(value or "").lower()
 
     away_markers = (
-
-        "away-team",
-        "awayteam",
-        "team-away",
-
-        "guest-team",
-        "guestteam",
-
-        "team-right",
-
-        "away",
-        "guest",
-        "team2",
+        "away-team", "awayteam", "team-away",
+        "guest-team", "guestteam",
+        "team-right", "away", "guest", "team2",
     )
 
     home_markers = (
-
-        "home-team",
-        "hometeam",
-        "team-home",
-
-        "host-team",
-        "hostteam",
-
-        "team-left",
-
-        "home",
-        "host",
-        "team1",
+        "home-team", "hometeam", "team-home",
+        "host-team", "hostteam",
+        "team-left", "home", "host", "team1",
     )
 
     for marker in away_markers:
-
         if marker in value:
             return "away"
 
     for marker in home_markers:
-
         if marker in value:
             return "home"
 
     return None
 
 
+def score_priority(class_text):
+    value = str(class_text or "").lower()
+
+    if any(
+        marker in value
+        for marker in (
+            "half-time",
+            "halftime",
+            "half_time",
+            "first-half",
+            "firsthalf",
+            "1st-half",
+            "ht-score",
+        )
+    ):
+        return -10
+
+    if any(
+        marker in value
+        for marker in (
+            "full-time",
+            "fulltime",
+            "full_time",
+            "final-score",
+            "finalscore",
+            "ft-score",
+            "result-score",
+        )
+    ):
+        return 10
+
+    return 0
+
+
 class MatchHTMLParser(HTMLParser):
 
     VOID_TAGS = {
-
-        "area",
-        "base",
-        "br",
-        "col",
-        "embed",
-        "hr",
-        "img",
-        "input",
-        "link",
-        "meta",
-        "param",
-        "source",
-        "track",
-        "wbr",
+        "area", "base", "br", "col", "embed",
+        "hr", "img", "input", "link", "meta",
+        "param", "source", "track", "wbr",
     }
 
     def __init__(self):
-
-        super().__init__(
-            convert_charrefs=True
-        )
+        super().__init__(convert_charrefs=True)
 
         self.stack = []
 
@@ -695,35 +558,32 @@ class MatchHTMLParser(HTMLParser):
 
         self.scores = []
 
+        self.score_sides = {
+            "home": [],
+            "away": [],
+        }
+
     def handle_starttag(self, tag, attrs):
-
         tag = tag.lower()
-
         attrs = dict(attrs)
 
         class_text = (
-
             str(attrs.get("class", ""))
-
             + " "
-
             + str(attrs.get("id", ""))
-
+            + " "
+            + str(attrs.get("data-testid", ""))
         ).lower()
 
         node = {
-
             "tag": tag,
-
-            "side": classify_side(
-                class_text
-            ),
-
+            "class_text": class_text,
+            "side": classify_side(class_text),
             "score": (
                 "score" in class_text
                 or "result-score" in class_text
             ),
-
+            "priority": score_priority(class_text),
             "parts": [],
         }
 
@@ -731,66 +591,55 @@ class MatchHTMLParser(HTMLParser):
             self.stack.append(node)
 
     def handle_startendtag(self, tag, attrs):
-
         self.handle_starttag(tag, attrs)
 
         if tag.lower() not in self.VOID_TAGS:
             self.handle_endtag(tag)
 
     def handle_data(self, data):
-
         if not data:
             return
 
         for node in self.stack:
-
             if node["side"] or node["score"]:
                 node["parts"].append(data)
 
     def handle_endtag(self, tag):
-
         tag = tag.lower()
 
         index = None
 
-        for i in range(
-            len(self.stack) - 1,
-            -1,
-            -1,
-        ):
-
+        for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i]["tag"] == tag:
-
                 index = i
-
                 break
 
         if index is None:
             return
 
         popped = self.stack[index:]
-
         self.stack = self.stack[:index]
 
         for node in reversed(popped):
-
-            value = clean_text(
-                " ".join(node["parts"])
-            )
+            value = clean_text(" ".join(node["parts"]))
 
             if not value:
                 continue
 
-            if node["side"]:
-
+            if node["side"] and not node["score"]:
                 if valid_team_name(value):
-
-                    self.teams[
-                        node["side"]
-                    ].append(value)
+                    self.teams[node["side"]].append(value)
 
             if node["score"]:
                 self.scores.append(value)
+
+                if node["side"]:
+                    number = score_int(value)
+
+                    if number is not None:
+                        self.score_sides[node["side"]].append(
+                            (node["priority"], number)
+                        )
 
 
 # ============================================================
@@ -798,18 +647,14 @@ class MatchHTMLParser(HTMLParser):
 # ============================================================
 
 def extract_title_candidates(page_html):
-
     values = []
 
     patterns = [
-
         r"<title[^>]*>(.*?)</title>",
-
         (
             r'<meta[^>]+property=["\']og:title["\']'
             r'[^>]+content=["\']([^"\']+)["\']'
         ),
-
         (
             r'<meta[^>]+content=["\']([^"\']+)["\']'
             r'[^>]+property=["\']og:title["\']'
@@ -817,7 +662,6 @@ def extract_title_candidates(page_html):
     ]
 
     for pattern in patterns:
-
         found = re.findall(
             pattern,
             page_html,
@@ -825,7 +669,6 @@ def extract_title_candidates(page_html):
         )
 
         for value in found:
-
             value = clean_text(value)
 
             if value:
@@ -835,11 +678,7 @@ def extract_title_candidates(page_html):
 
 
 def teams_from_title(page_html):
-
-    for title in extract_title_candidates(
-        page_html
-    ):
-
+    for title in extract_title_candidates(page_html):
         title = re.split(
             r"\s+[|｜]\s+",
             title,
@@ -857,7 +696,6 @@ def teams_from_title(page_html):
             continue
 
         home = clean_text(parts[0])
-
         away = clean_text(parts[1])
 
         away = re.split(
@@ -877,43 +715,25 @@ def teams_from_title(page_html):
 
 
 def extract_team_names(page_html):
-
-    # 1. JSON 데이터
-    for data in extract_json_scripts(
-        page_html
-    ):
-
+    for data in extract_json_scripts(page_html):
         found = recursive_team_search(data)
 
         if found:
             return found
 
-    # 2. HTML 클래스
     parser = MatchHTMLParser()
 
     try:
-
         parser.feed(page_html)
-
         parser.close()
-
     except Exception:
         pass
 
-    homes = sorted(
-        set(parser.teams["home"]),
-        key=len,
-    )
-
-    aways = sorted(
-        set(parser.teams["away"]),
-        key=len,
-    )
+    homes = sorted(set(parser.teams["home"]), key=len)
+    aways = sorted(set(parser.teams["away"]), key=len)
 
     for home in homes:
-
         for away in aways:
-
             if (
                 valid_team_name(home)
                 and valid_team_name(away)
@@ -921,7 +741,6 @@ def extract_team_names(page_html):
             ):
                 return home, away
 
-    # 3. 제목
     found = teams_from_title(page_html)
 
     if found:
@@ -935,7 +754,6 @@ def extract_team_names(page_html):
 # ============================================================
 
 def score_pair_from_string(value):
-
     if not isinstance(value, str):
         return None
 
@@ -950,7 +768,6 @@ def score_pair_from_string(value):
         return None
 
     home = score_int(match.group(1))
-
     away = score_int(match.group(2))
 
     if home is None or away is None:
@@ -964,98 +781,60 @@ def score_pair_from_string(value):
 # ============================================================
 
 def recursive_score_search(obj):
-
     if isinstance(obj, dict):
-
         lower = {
             str(key).lower(): value
             for key, value in obj.items()
         }
 
         pairs = [
-
             ("homescore", "awayscore"),
-
             ("home_score", "away_score"),
-
             ("home_score1", "away_score1"),
-
             ("hscore", "ascore"),
-
             ("h_score", "a_score"),
-
             ("homescore1", "awayscore1"),
-
             ("homegoals", "awaygoals"),
-
             ("home_goal", "away_goal"),
-
             ("hs", "as"),
         ]
 
         for home_key, away_key in pairs:
-
-            if (
-                home_key not in lower
-                or away_key not in lower
-            ):
+            if home_key not in lower or away_key not in lower:
                 continue
 
-            home = score_int(
-                lower[home_key]
-            )
+            home = score_int(lower[home_key])
+            away = score_int(lower[away_key])
 
-            away = score_int(
-                lower[away_key]
-            )
-
-            if (
-                home is not None
-                and away is not None
-            ):
+            if home is not None and away is not None:
                 return home, away
 
         for key in (
-
             "score",
             "matchscore",
             "match_score",
-
             "fullscore",
             "full_score",
-
             "finalscore",
             "final_score",
-
             "ftscore",
             "ft_score",
         ):
-
             if key in lower:
-
-                found = score_pair_from_string(
-                    lower[key]
-                )
+                found = score_pair_from_string(lower[key])
 
                 if found:
                     return found
 
         for value in obj.values():
-
-            found = recursive_score_search(
-                value
-            )
+            found = recursive_score_search(value)
 
             if found:
                 return found
 
     elif isinstance(obj, list):
-
         for value in obj:
-
-            found = recursive_score_search(
-                value
-            )
+            found = recursive_score_search(value)
 
             if found:
                 return found
@@ -1064,19 +843,104 @@ def recursive_score_search(obj):
 
 
 # ============================================================
+# HTML / JavaScript 점수 추출 보조
+# ============================================================
+
+def extract_score_from_named_fields(page_html):
+    home_keys = (
+        r"homeScore|home_score|home_score1|"
+        r"hscore|h_score|homeGoals|home_goal"
+    )
+
+    away_keys = (
+        r"awayScore|away_score|away_score1|"
+        r"ascore|a_score|awayGoals|away_goal"
+    )
+
+    # 홈 점수 키 다음에 원정 점수 키가 나오는 형식
+    patterns = [
+        rf"""["']?(?:{home_keys})["']?\s*[:=]\s*
+        ["']?(\d{{1,2}})["']?
+        [\s\S]{{0,250}}?
+        ["']?(?:{away_keys})["']?\s*[:=]\s*
+        ["']?(\d{{1,2}})["']?""",
+
+        # 원정 점수 키가 먼저 나오는 형식
+        rf"""["']?(?:{away_keys})["']?\s*[:=]\s*
+        ["']?(\d{{1,2}})["']?
+        [\s\S]{{0,250}}?
+        ["']?(?:{home_keys})["']?\s*[:=]\s*
+        ["']?(\d{{1,2}})["']?""",
+    ]
+
+    for index, pattern in enumerate(patterns):
+        for match in re.finditer(
+            pattern,
+            page_html,
+            re.I | re.X,
+        ):
+            first = score_int(match.group(1))
+            second = score_int(match.group(2))
+
+            if first is None or second is None:
+                continue
+
+            if index == 0:
+                return first, second
+
+            return second, first
+
+    return None
+
+
+def extract_score_from_data_attributes(page_html):
+    home_patterns = [
+        r'data-home-score\s*=\s*["\'](\d{1,2})["\']',
+        r'data-hscore\s*=\s*["\'](\d{1,2})["\']',
+    ]
+
+    away_patterns = [
+        r'data-away-score\s*=\s*["\'](\d{1,2})["\']',
+        r'data-ascore\s*=\s*["\'](\d{1,2})["\']',
+    ]
+
+    home_values = []
+
+    away_values = []
+
+    for pattern in home_patterns:
+        home_values.extend(
+            re.findall(pattern, page_html, re.I)
+        )
+
+    for pattern in away_patterns:
+        away_values.extend(
+            re.findall(pattern, page_html, re.I)
+        )
+
+    if not home_values or not away_values:
+        return None
+
+    home = score_int(home_values[0])
+    away = score_int(away_values[0])
+
+    if home is None or away is None:
+        return None
+
+    return home, away
+
+
+# ============================================================
 # 실제 점수 추출
 # ============================================================
 
 def extract_score(page_html):
 
-    for data in extract_json_scripts(
-        page_html
-    ):
-
+    # 1. JSON 데이터
+    for data in extract_json_scripts(page_html):
         found = recursive_score_search(data)
 
         if found:
-
             home, away = found
 
             return (
@@ -1085,23 +949,41 @@ def extract_score(page_html):
                 calculate_result(home, away),
             )
 
+    # 2. 홈팀 점수와 원정팀 점수가 분리된 HTML
     parser = MatchHTMLParser()
 
     try:
-
         parser.feed(page_html)
-
         parser.close()
-
     except Exception:
         pass
 
-    for value in reversed(parser.scores):
+    home_candidates = parser.score_sides["home"]
+    away_candidates = parser.score_sides["away"]
 
+    if home_candidates and away_candidates:
+        # 전반전보다 경기 종료 점수를 우선한다.
+        home = max(
+            enumerate(home_candidates),
+            key=lambda item: (item[1][0], item[0]),
+        )[1][1]
+
+        away = max(
+            enumerate(away_candidates),
+            key=lambda item: (item[1][0], item[0]),
+        )[1][1]
+
+        return (
+            home,
+            away,
+            calculate_result(home, away),
+        )
+
+    # 3. HTML에 하나의 문자열로 표시된 점수
+    for value in reversed(parser.scores):
         found = score_pair_from_string(value)
 
         if found:
-
             home, away = found
 
             return (
@@ -1110,16 +992,15 @@ def extract_score(page_html):
                 calculate_result(home, away),
             )
 
+    # 4. data-score="0-1" 형식
     for value in re.findall(
         r'data-score\s*=\s*["\']([^"\']+)["\']',
         page_html,
         re.I,
     ):
-
         found = score_pair_from_string(value)
 
         if found:
-
             home, away = found
 
             return (
@@ -1127,6 +1008,30 @@ def extract_score(page_html):
                 away,
                 calculate_result(home, away),
             )
+
+    # 5. data-home-score / data-away-score 형식
+    found = extract_score_from_data_attributes(page_html)
+
+    if found:
+        home, away = found
+
+        return (
+            home,
+            away,
+            calculate_result(home, away),
+        )
+
+    # 6. JavaScript의 홈/원정 점수 필드
+    found = extract_score_from_named_fields(page_html)
+
+    if found:
+        home, away = found
+
+        return (
+            home,
+            away,
+            calculate_result(home, away),
+        )
 
     return None, None, None
 
@@ -1136,28 +1041,17 @@ def extract_score(page_html):
 # ============================================================
 
 def extract_match_date(page_html):
-
     patterns = [
-
         r'"matchDate"\s*:\s*"([^"]+)"',
-
         r'"match_date"\s*:\s*"([^"]+)"',
-
         r'"matchTime"\s*:\s*"([^"]+)"',
-
         r'"match_time"\s*:\s*"([^"]+)"',
     ]
 
     for pattern in patterns:
-
-        found = re.findall(
-            pattern,
-            page_html,
-            re.I,
-        )
+        found = re.findall(pattern, page_html, re.I)
 
         for value in reversed(found):
-
             value = clean_text(value)
 
             if value:
@@ -1181,7 +1075,6 @@ def extract_match_date(page_html):
 # ============================================================
 
 def _fetch(url, schedule_id, label):
-
     response = session.get(
         url,
         timeout=REQUEST_TIMEOUT,
@@ -1194,13 +1087,11 @@ def _fetch(url, schedule_id, label):
     )
 
     if response.status_code != 200:
-
         raise RuntimeError(
             f"{label} HTTP={response.status_code}"
         )
 
     if not response.text.strip():
-
         raise RuntimeError(
             f"{label} 응답이 비어 있습니다."
         )
@@ -1209,22 +1100,16 @@ def _fetch(url, schedule_id, label):
 
 
 def fetch_match_page(schedule_id):
-
     return _fetch(
-        MATCH_URL.format(
-            schedule_id=schedule_id
-        ),
+        MATCH_URL.format(schedule_id=schedule_id),
         schedule_id,
         "경기 페이지",
     )
 
 
 def fetch_odds(schedule_id):
-
     return _fetch(
-        ODDS_URL.format(
-            schedule_id=schedule_id
-        ),
+        ODDS_URL.format(schedule_id=schedule_id),
         schedule_id,
         "배당 API",
     )
@@ -1235,47 +1120,26 @@ def fetch_odds(schedule_id):
 # ============================================================
 
 def read_final_prices(final_odds):
-
     if isinstance(final_odds, str):
-
-        final_odds = parse_json(
-            final_odds
-        )
+        final_odds = parse_json(final_odds)
 
     if isinstance(final_odds, dict):
-
-        home = to_float(
-            get_ci(final_odds, "u")
-        )
-
-        draw = to_float(
-            get_ci(final_odds, "g")
-        )
-
-        away = to_float(
-            get_ci(final_odds, "d")
-        )
+        home = to_float(get_ci(final_odds, "u"))
+        draw = to_float(get_ci(final_odds, "g"))
+        away = to_float(get_ci(final_odds, "d"))
 
     elif isinstance(final_odds, (list, tuple)):
-
         if len(final_odds) < 3:
             return None
 
         home = to_float(final_odds[0])
-
         draw = to_float(final_odds[1])
-
         away = to_float(final_odds[2])
 
     else:
-
         return None
 
-    if (
-        home is None
-        or draw is None
-        or away is None
-    ):
+    if home is None or draw is None or away is None:
         return None
 
     return home, draw, away
@@ -1286,33 +1150,19 @@ def read_final_prices(final_odds):
 # ============================================================
 
 def get_mixodds_container(data):
-
     if not isinstance(data, dict):
         return None
 
-    container = get_ci(
-        data,
-        "Data",
-    )
+    container = get_ci(data, "Data")
 
     if isinstance(container, str):
-
-        container = parse_json(
-            container
-        )
+        container = parse_json(container)
 
     if isinstance(container, dict):
-
-        mixodds = get_ci(
-            container,
-            "mixodds",
-        )
+        mixodds = get_ci(container, "mixodds")
 
         if isinstance(mixodds, str):
-
-            mixodds = parse_json(
-                mixodds
-            )
+            mixodds = parse_json(mixodds)
 
         if mixodds is not None:
             return mixodds
@@ -1320,57 +1170,37 @@ def get_mixodds_container(data):
     if isinstance(container, list):
         return container
 
-    mixodds = get_ci(
-        data,
-        "mixodds",
-    )
+    mixodds = get_ci(data, "mixodds")
 
     if isinstance(mixodds, str):
-
-        mixodds = parse_json(
-            mixodds
-        )
+        mixodds = parse_json(mixodds)
 
     return mixodds
 
 
 def extract_bookmakers(data):
-
-    mixodds = get_mixodds_container(
-        data
-    )
+    mixodds = get_mixodds_container(data)
 
     if isinstance(mixodds, dict):
-
-        items = list(
-            mixodds.values()
-        )
+        items = list(mixodds.values())
 
     elif isinstance(mixodds, list):
-
         items = mixodds
 
     else:
-
         return []
 
     result = []
-
     seen = set()
 
     for item in items:
-
         if not isinstance(item, dict):
             continue
 
         cid = (
-
             get_ci(item, "cid")
-
             or get_ci(item, "company_id")
-
             or get_ci(item, "companyId")
-
             or get_ci(item, "id")
         )
 
@@ -1378,27 +1208,18 @@ def extract_bookmakers(data):
             continue
 
         name = (
-
             get_ci(item, "cn")
-
             or get_ci(item, "company_name")
-
             or get_ci(item, "companyName")
-
             or get_ci(item, "name")
-
             or ""
         )
 
         name = clean_text(name)
 
-        euro = get_ci(
-            item,
-            "euro",
-        )
+        euro = get_ci(item, "euro")
 
         if isinstance(euro, str):
-
             euro = parse_json(euro)
 
         if not isinstance(euro, dict):
@@ -1406,15 +1227,9 @@ def extract_bookmakers(data):
 
         # 초기배당 euro.f는 사용하지 않는다.
         # 최종배당 euro.l만 사용한다.
+        final_odds = get_ci(euro, "l")
 
-        final_odds = get_ci(
-            euro,
-            "l",
-        )
-
-        prices = read_final_prices(
-            final_odds
-        )
+        prices = read_final_prices(final_odds)
 
         if prices is None:
             continue
@@ -1429,11 +1244,8 @@ def extract_bookmakers(data):
         seen.add(unique_key)
 
         result.append({
-
             "cid": str(cid),
-
             "name": name or str(cid),
-
             "home": home,
             "draw": draw,
             "away": away,
@@ -1450,33 +1262,22 @@ def filter_bookmakers(
     bookmakers,
     selected_companies=None,
 ):
-
     if not selected_companies:
         return bookmakers
 
     selected = {
-
         str(value).strip().lower()
-
         for value in selected_companies
-
         if str(value).strip()
     }
 
     result = []
 
     for item in bookmakers:
-
-        cid = str(
-            item["cid"]
-        ).strip().lower()
-
-        name = str(
-            item["name"]
-        ).strip().lower()
+        cid = str(item["cid"]).strip().lower()
+        name = str(item["name"]).strip().lower()
 
         if cid in selected or name in selected:
-
             result.append(item)
 
     return result
@@ -1486,63 +1287,54 @@ def filter_bookmakers(
 # 배당 진단
 # ============================================================
 
-def diagnose_odds_response(
-    schedule_id,
-    data,
-):
-
+def diagnose_odds_response(schedule_id, data):
     add_log(
         f"[배당 진단] ID={schedule_id} "
         f"ErrCode={get_ci(data, 'ErrCode')!r}"
     )
 
     if not isinstance(data, dict):
-
-        add_log(
-            "[배당 진단] JSON 객체가 아닙니다."
-        )
-
+        add_log("[배당 진단] JSON 객체가 아닙니다.")
         return
 
-    add_log(
-        f"[배당 진단] 최상위 키="
-        f"{list(data.keys())[:20]}"
-    )
-
-    mixodds = get_mixodds_container(
-        data
-    )
+    mixodds = get_mixodds_container(data)
 
     if isinstance(mixodds, dict):
-
-        items = list(
-            mixodds.values()
-        )
+        items = list(mixodds.values())
 
     elif isinstance(mixodds, list):
-
         items = mixodds
 
     else:
-
-        add_log(
-            "[배당 진단] 업체 목록을 찾지 못했습니다."
-        )
-
+        add_log("[배당 진단] 업체 목록을 찾지 못했습니다.")
         return
 
-    add_log(
-        f"[배당 진단] 업체 항목={len(items)}"
-    )
+    add_log(f"[배당 진단] 업체 항목={len(items)}")
 
-    for index, item in enumerate(
-        items[:5],
-        start=1,
-    ):
+    for item in items[:5]:
+        if not isinstance(item, dict):
+            continue
+
+        name = (
+            get_ci(item, "cn")
+            or get_ci(item, "name")
+            or "이름 없음"
+        )
+
+        euro = get_ci(item, "euro")
+
+        if isinstance(euro, str):
+            euro = parse_json(euro)
+
+        final_odds = (
+            get_ci(euro, "l")
+            if isinstance(euro, dict)
+            else None
+        )
 
         add_log(
-            f"[배당 진단] 업체 {index}: "
-            f"{repr(item)[:500]}"
+            f"[배당 진단] 업체={clean_text(name)} "
+            f"최종배당={final_odds!r}"
         )
 
 
@@ -1554,27 +1346,17 @@ def collect_one_match(
     schedule_id,
     selected_companies=None,
 ):
-
     schedule_id = int(schedule_id)
 
-    # 이미 정상 완료된 경기는 건너뛴다.
-    if database.is_collection_completed(
-        schedule_id
-    ):
-
-        add_log(
-            f"[중복] ID={schedule_id}"
-        )
-
+    if database.is_collection_completed(schedule_id):
+        add_log(f"[중복] ID={schedule_id}")
         return "exists"
 
     # --------------------------------------------------------
     # 1. 경기 페이지
     # --------------------------------------------------------
 
-    page_html = fetch_match_page(
-        schedule_id
-    )
+    page_html = fetch_match_page(schedule_id)
 
     if not is_running():
         return "stopped"
@@ -1583,16 +1365,13 @@ def collect_one_match(
     # 2. 팀명
     # --------------------------------------------------------
 
-    home_team, away_team = extract_team_names(
-        page_html
-    )
+    home_team, away_team = extract_team_names(page_html)
 
     if (
         not valid_team_name(home_team)
         or not valid_team_name(away_team)
         or home_team == away_team
     ):
-
         raise RuntimeError(
             f"홈팀/원정팀 추출 실패: "
             f"{home_team!r} vs {away_team!r}"
@@ -1602,16 +1381,13 @@ def collect_one_match(
     # 3. 실제 점수
     # --------------------------------------------------------
 
-    home_score, away_score, result = extract_score(
-        page_html
-    )
+    home_score, away_score, result = extract_score(page_html)
 
     if (
         home_score is None
         or away_score is None
         or result not in ("승", "무", "패")
     ):
-
         raise RuntimeError(
             "실제 경기 점수 확인 실패"
         )
@@ -1622,14 +1398,11 @@ def collect_one_match(
     )
 
     if verified_result != result:
-
         raise RuntimeError(
             "점수와 승무패 검증 실패"
         )
 
-    match_date = extract_match_date(
-        page_html
-    )
+    match_date = extract_match_date(page_html)
 
     add_log(
         f"[경기결과] ID={schedule_id} "
@@ -1646,23 +1419,13 @@ def collect_one_match(
     if not is_running():
         return "stopped"
 
-    odds_text = fetch_odds(
-        schedule_id
-    )
-
-    odds_data = parse_json(
-        odds_text
-    )
+    odds_text = fetch_odds(schedule_id)
+    odds_data = parse_json(odds_text)
 
     if odds_data is None:
+        raise RuntimeError("배당 API JSON 파싱 실패")
 
-        raise RuntimeError(
-            "배당 API JSON 파싱 실패"
-        )
-
-    bookmakers = extract_bookmakers(
-        odds_data
-    )
+    bookmakers = extract_bookmakers(odds_data)
 
     bookmakers = filter_bookmakers(
         bookmakers,
@@ -1675,14 +1438,10 @@ def collect_one_match(
     )
 
     if not bookmakers:
-
-        diagnose_odds_response(
-            schedule_id,
-            odds_data,
-        )
+        diagnose_odds_response(schedule_id, odds_data)
 
         raise RuntimeError(
-            "최종배당 없음 또는 선택 업체 없음"
+            "최종배당 없음 또는 선택 업체의 유효 배당 없음"
         )
 
     if not is_running():
@@ -1693,60 +1452,41 @@ def collect_one_match(
     # --------------------------------------------------------
 
     saved_match = database.save_match(
-
         schedule_id,
-
         match_date,
-
         home_team,
         away_team,
-
         home_score,
         away_score,
-
         result,
-
         "scoreman",
     )
 
     if not saved_match:
-
-        raise RuntimeError(
-            "경기 저장 실패"
-        )
+        raise RuntimeError("경기 저장 실패")
 
     # --------------------------------------------------------
     # 6. 최종배당 저장
+    #
+    # 중요:
+    # 실제 저장을 시작한 뒤에는 중지 요청이 들어와도
+    # 현재 경기의 배당 저장과 완료 상태 기록을 마친다.
+    # 다음 경기부터 수집을 중지한다.
     # --------------------------------------------------------
 
     saved_odds = 0
 
     for item in bookmakers:
-
-        if not is_running():
-
-            add_log(
-                f"[중지] ID={schedule_id} "
-                "배당 저장 도중 중지"
-            )
-
-            return "stopped"
-
         ok = database.save_odds(
-
             schedule_id,
-
             item["cid"],
-
             item["name"],
-
             item["home"],
             item["draw"],
             item["away"],
         )
 
         if not ok:
-
             raise RuntimeError(
                 f"배당 저장 실패: {item['name']}"
             )
@@ -1762,17 +1502,11 @@ def collect_one_match(
         )
 
     if saved_odds <= 0:
-
-        raise RuntimeError(
-            "저장된 최종배당 없음"
-        )
+        raise RuntimeError("저장된 최종배당 없음")
 
     # --------------------------------------------------------
     # 7. 완료 상태 저장
     # --------------------------------------------------------
-
-    if not is_running():
-        return "stopped"
 
     state_saved = database.save_collection_state(
         schedule_id,
@@ -1780,10 +1514,7 @@ def collect_one_match(
     )
 
     if not state_saved:
-
-        raise RuntimeError(
-            "완료 상태 저장 실패"
-        )
+        raise RuntimeError("완료 상태 저장 실패")
 
     add_log(
         f"[수집 성공] ID={schedule_id} "
@@ -1792,16 +1523,11 @@ def collect_one_match(
     )
 
     return {
-
         "status": "success",
-
         "odds": saved_odds,
-
         "result": result,
-
         "home_team": home_team,
         "away_team": away_team,
-
         "home_score": home_score,
         "away_score": away_score,
     }
@@ -1812,24 +1538,11 @@ def collect_one_match(
 # ============================================================
 
 def _worker():
-
     with lock:
-
-        start_id = int(
-            job["start_id"]
-        )
-
-        end_id = int(
-            job["end_id"]
-        )
-
-        delay = float(
-            job["delay"]
-        )
-
-        selected = list(
-            job["selected_companies"]
-        )
+        start_id = int(job["start_id"])
+        end_id = int(job["end_id"])
+        delay = float(job["delay"])
+        selected = list(job["selected_companies"])
 
         job["start_time"] = datetime.now().isoformat(
             timespec="seconds"
@@ -1838,49 +1551,25 @@ def _worker():
         job["total"] = end_id - start_id + 1
 
     add_log("=" * 50)
-
-    add_log(
-        "⚽ Scoreman 백그라운드 수집 시작"
-    )
-
-    add_log(
-        f"범위: {start_id:,} ~ {end_id:,}"
-    )
-
-    add_log(
-        "실제 점수 / 승무패 검증 후 저장"
-    )
-
-    add_log(
-        "실패 경기는 완료 상태로 처리하지 않음"
-    )
-
-    add_log(
-        "자동 재시도: 없음"
-    )
-
-    add_log(
-        f"요청 간격: {delay:.2f}초"
-    )
+    add_log("⚽ Scoreman 백그라운드 수집 시작")
+    add_log(f"범위: {start_id:,} ~ {end_id:,}")
+    add_log("실제 점수 / 승무패 검증 후 저장")
+    add_log("실패 경기는 완료 상태로 처리하지 않음")
+    add_log("자동 재시도: 없음")
+    add_log(f"요청 간격: {delay:.2f}초")
 
     add_log(
         "수집 업체: "
-        + (
-            ", ".join(selected)
-            if selected
-            else "전체 업체"
-        )
+        + (", ".join(selected) if selected else "전체 업체")
     )
 
     add_log("=" * 50)
 
     try:
-
         for index, schedule_id in enumerate(
             range(start_id, end_id + 1),
             start=1,
         ):
-
             if not is_running():
                 break
 
@@ -1888,19 +1577,13 @@ def _worker():
                 job["current"] = index
 
             try:
-
-                # 완료 경기에는 in_progress를 덮어쓰지 않는다.
-                if not database.is_collection_completed(
-                    schedule_id
-                ):
-
+                if not database.is_collection_completed(schedule_id):
                     state_ok = database.save_collection_state(
                         schedule_id,
                         "in_progress",
                     )
 
                     if not state_ok:
-
                         add_log(
                             f"[경고] ID={schedule_id} "
                             "진행 상태 저장 실패"
@@ -1912,37 +1595,21 @@ def _worker():
                 )
 
                 if isinstance(result, dict):
-
                     with lock:
-
                         job["success"] += 1
-
-                        job["odds"] += int(
-                            result.get("odds", 0)
-                        )
-
-                        job["last_completed_id"] = int(
-                            schedule_id
-                        )
+                        job["odds"] += int(result.get("odds", 0))
+                        job["last_completed_id"] = int(schedule_id)
 
                 elif result == "exists":
-
                     with lock:
-
                         job["exists"] += 1
-
-                        job["last_completed_id"] = int(
-                            schedule_id
-                        )
+                        job["last_completed_id"] = int(schedule_id)
 
                 elif result == "stopped":
-
                     break
 
             except Exception as error:
-
                 with lock:
-
                     job["failed"] += 1
 
                     job["error"] = (
@@ -1950,16 +1617,16 @@ def _worker():
                         f"{type(error).__name__}: {error}"
                     )
 
-                # 실패 상태는 저장하되 완료 상태로 만들지 않는다.
                 try:
-
                     database.save_collection_state(
                         schedule_id,
                         "failed",
                     )
-
-                except Exception:
-                    pass
+                except Exception as state_error:
+                    add_log(
+                        f"[상태 저장 오류] ID={schedule_id} "
+                        f"{state_error}"
+                    )
 
                 add_log(
                     f"[수집 실패] ID={schedule_id} "
@@ -1971,13 +1638,10 @@ def _worker():
                 and is_running()
                 and schedule_id < end_id
             ):
-
                 time.sleep(delay)
 
     except Exception as error:
-
         with lock:
-
             job["error"] = (
                 f"{type(error).__name__}: {error}"
             )
@@ -1988,47 +1652,34 @@ def _worker():
         )
 
     finally:
-
         with lock:
-
             job["running"] = False
-
             job["finished"] = True
 
             job["end_time"] = datetime.now().isoformat(
                 timespec="seconds"
             )
 
-            job["result"] = (
-
-                f"성공 {job['success']} / "
-
-                f"중복 {job['exists']} / "
-
-                f"실패 {job['failed']} / "
-
-                f"배당 {job['odds']}"
-            )
-
             success = job["success"]
-
             exists = job["exists"]
-
             failed = job["failed"]
-
             odds = job["odds"]
 
+            job["result"] = (
+                f"성공 {success} / "
+                f"중복 {exists} / "
+                f"실패 {failed} / "
+                f"배당 {odds}"
+            )
+
         add_log("=" * 50)
-
         add_log("🏁 Scoreman 수집 종료")
-
         add_log(
             f"성공={success} "
             f"중복={exists} "
             f"실패={failed} "
             f"배당={odds}"
         )
-
         add_log("=" * 50)
 
 
@@ -2042,15 +1693,10 @@ def start_background_collection(
     selected_companies=None,
     delay=DEFAULT_DELAY,
 ):
-
     try:
-
         start_id = int(start_id)
-
         end_id = int(end_id)
-
     except Exception:
-
         return False, "ID는 숫자로 입력하세요."
 
     if start_id <= 0:
@@ -2072,43 +1718,31 @@ def start_background_collection(
     )
 
     with lock:
-
         if job["running"]:
             return False, "이미 수집 중입니다."
 
         job.update({
-
             "running": True,
             "finished": False,
-
             "current": 0,
             "total": end_id - start_id + 1,
-
             "success": 0,
             "exists": 0,
             "failed": 0,
             "odds": 0,
-
             "start_id": start_id,
             "end_id": end_id,
-
             "last_completed_id": None,
-
             "selected_companies": selected_companies,
-
             "delay": delay,
-
             "start_time": None,
             "end_time": None,
-
             "log": [],
-
             "result": "",
             "error": "",
         })
 
         try:
-
             thread = threading.Thread(
                 target=_worker,
                 daemon=True,
@@ -2118,11 +1752,8 @@ def start_background_collection(
             thread.start()
 
         except Exception as error:
-
             job["running"] = False
-
             job["finished"] = True
-
             job["error"] = str(error)
 
             return False, str(error)
@@ -2140,7 +1771,6 @@ def resume_collection(
     delay=DEFAULT_DELAY,
     start_id=None,
 ):
-
     try:
         end_id = int(end_id)
     except Exception:
@@ -2157,39 +1787,27 @@ def resume_collection(
     if end_id < start_id:
         return False, "종료 ID 오류"
 
-    # 먼저 실패 또는 중단된 ID를 찾는다.
     pending_id = database.get_first_pending_id(
         start_id,
         end_id,
     )
 
     if pending_id is not None:
-
         next_id = pending_id
 
     else:
-
         last_id = database.get_last_completed_id()
 
         if last_id is None:
-
             next_id = start_id
-
         else:
-
-            next_id = max(
-                start_id,
-                last_id + 1,
-            )
+            next_id = max(start_id, last_id + 1)
 
     if next_id > end_id:
-
         return (
-
             False,
-
             "이어받을 ID가 없습니다. "
-            f"마지막 완료 ID={next_id - 1:,}"
+            f"마지막 완료 ID={next_id - 1:,}",
         )
 
     return start_background_collection(
@@ -2205,43 +1823,27 @@ def resume_collection(
 # ============================================================
 
 def get_progress():
-
     with lock:
-
-        total = int(
-            job["total"] or 0
-        )
-
-        current = int(
-            job["current"] or 0
-        )
+        total = int(job["total"] or 0)
+        current = int(job["current"] or 0)
 
         percent = (
-
             current / total * 100
-
             if total > 0
-
             else 0.0
         )
 
         return {
-
             "current": current,
             "total": total,
-
             "percent": percent,
-
             "success": job["success"],
             "exists": job["exists"],
             "failed": job["failed"],
             "odds": job["odds"],
-
             "running": job["running"],
             "finished": job["finished"],
-
-            "last_completed_id":
-                job["last_completed_id"],
+            "last_completed_id": job["last_completed_id"],
         }
 
 
@@ -2253,30 +1855,27 @@ def collect_single(
     schedule_id,
     selected_companies=None,
 ):
+    try:
+        sid = int(schedule_id)
+    except Exception:
+        return {
+            "status": "failed",
+            "error": "경기 ID가 올바르지 않습니다.",
+        }
 
     with lock:
-
         if job["running"]:
-
             return {
-
                 "status": "failed",
-
                 "error": "이미 수집 작업이 실행 중입니다.",
             }
 
         job["running"] = True
-
         job["finished"] = False
-
         job["error"] = ""
 
     try:
-
-        sid = int(schedule_id)
-
         if not database.is_collection_completed(sid):
-
             database.save_collection_state(
                 sid,
                 "in_progress",
@@ -2290,38 +1889,31 @@ def collect_single(
         return result
 
     except Exception as error:
-
         try:
-
             database.save_collection_state(
-                schedule_id,
+                sid,
                 "failed",
             )
-
-        except Exception:
-            pass
+        except Exception as state_error:
+            add_log(
+                f"[상태 저장 오류] ID={sid} "
+                f"{state_error}"
+            )
 
         add_log(
-            f"[단일 경기 실패] "
-            f"ID={schedule_id} "
+            f"[단일 경기 실패] ID={sid} "
             f"{type(error).__name__}: {error}"
         )
 
         return {
-
             "status": "failed",
-
             "error": str(error),
         }
 
     finally:
-
         with lock:
-
             job["running"] = False
-
             job["finished"] = True
-
             job["end_time"] = datetime.now().isoformat(
                 timespec="seconds"
-        )
+    )
