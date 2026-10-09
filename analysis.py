@@ -1,20 +1,82 @@
 # ============================================================
 # analysis.py
-# Scoreman 배당 분석
+# Scoreman 해외배당 분석
+#
+# 1. 승무패 통계
+# 2. 업체별 통계
+# 3. 배당별 시장 예상확률
+# 4. 배당 마진
+# 5. 동일 배당 분석
+# 6. 예상확률 대비 실제 결과
+# 7. 업체별 가상 베팅 ROI
 # ============================================================
+
+import math
 
 from collections import Counter, defaultdict
 
 
-def _safe_float(v):
+# ============================================================
+# 숫자 변환
+# ============================================================
+
+def _safe_float(value):
 
     try:
-        return float(v)
+
+        if value is None:
+            return None
+
+        number = float(value)
+
+        if not math.isfinite(number):
+            return None
+
+        return number
+
     except Exception:
         return None
 
 
+# ============================================================
+# 중복 경기 제거
+# ============================================================
+
+def _unique_matches(rows):
+
+    result = []
+
+    seen = set()
+
+    for index, row in enumerate(rows):
+
+        sid = row.get("schedule_id")
+
+        if sid is None:
+
+            key = ("row", index)
+
+        else:
+
+            key = ("match", str(sid))
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        result.append(row)
+
+    return result
+
+
+# ============================================================
+# 승무패 통계
+# ============================================================
+
 def result_counts(rows):
+
+    rows = _unique_matches(rows)
 
     counter = Counter()
 
@@ -23,29 +85,114 @@ def result_counts(rows):
         result = row.get("result")
 
         if result in ("승", "무", "패"):
+
             counter[result] += 1
 
     total = sum(counter.values())
 
     return {
+
         "total": total,
+
         "승": counter["승"],
+
         "무": counter["무"],
+
         "패": counter["패"],
+
         "승률": (
             counter["승"] / total * 100
             if total else 0
         ),
+
         "무율": (
             counter["무"] / total * 100
             if total else 0
         ),
+
         "패율": (
             counter["패"] / total * 100
             if total else 0
         ),
     }
 
+
+# ============================================================
+# 배당 마진
+# ============================================================
+
+def odds_overround(home, draw, away):
+
+    h = _safe_float(home)
+
+    d = _safe_float(draw)
+
+    a = _safe_float(away)
+
+    if (
+        h is None
+        or d is None
+        or a is None
+        or min(h, d, a) <= 0
+    ):
+        return None
+
+    return (
+        1 / h
+        + 1 / d
+        + 1 / a
+        - 1
+    ) * 100
+
+
+# ============================================================
+# 배당에서 시장 예상확률 계산
+# ============================================================
+
+def odds_probability(home, draw, away):
+
+    h = _safe_float(home)
+
+    d = _safe_float(draw)
+
+    a = _safe_float(away)
+
+    if (
+        h is None
+        or d is None
+        or a is None
+        or min(h, d, a) <= 0
+    ):
+        return None
+
+    implied = {
+
+        "승": 1 / h,
+
+        "무": 1 / d,
+
+        "패": 1 / a,
+    }
+
+    total = sum(
+        implied.values()
+    )
+
+    if total <= 0:
+        return None
+
+    # 배당 마진 제거 후 정규화
+    return {
+
+        key: value / total * 100
+
+        for key, value in implied.items()
+    }
+
+
+# ============================================================
+# 업체별 통계
+# ============================================================
 
 def bookmaker_stats(rows):
 
@@ -60,54 +207,121 @@ def bookmaker_stats(rows):
 
         grouped[bookmaker].append(row)
 
-    result = []
+    output = []
 
     for bookmaker, items in grouped.items():
 
+        items = _unique_matches(items)
+
         stat = result_counts(items)
 
-        result.append({
+        margins = []
+
+        profits = {
+
+            "승": 0.0,
+            "무": 0.0,
+            "패": 0.0,
+        }
+
+        valid_bets = 0
+
+        for row in items:
+
+            margin = odds_overround(
+
+                row.get("final_home"),
+
+                row.get("final_draw"),
+
+                row.get("final_away"),
+            )
+
+            if margin is not None:
+                margins.append(margin)
+
+            result = row.get("result")
+
+            if result not in profits:
+                continue
+
+            prices = {
+
+                "승": _safe_float(
+                    row.get("final_home")
+                ),
+
+                "무": _safe_float(
+                    row.get("final_draw")
+                ),
+
+                "패": _safe_float(
+                    row.get("final_away")
+                ),
+            }
+
+            if any(
+                value is None
+                for value in prices.values()
+            ):
+                continue
+
+            valid_bets += 1
+
+            # 각 결과에 1단위씩 베팅했다고 가정
+            for key in profits:
+
+                if result == key:
+
+                    profits[key] += (
+                        prices[key] - 1
+                    )
+
+                else:
+
+                    profits[key] -= 1
+
+        roi = {
+
+            key: (
+                profits[key] / valid_bets * 100
+                if valid_bets else 0
+            )
+
+            for key in profits
+        }
+
+        output.append({
+
             "bookmaker": bookmaker,
+
             **stat,
+
+            "평균마진": (
+                sum(margins) / len(margins)
+                if margins else 0
+            ),
+
+            "승 베팅 ROI": roi["승"],
+
+            "무 베팅 ROI": roi["무"],
+
+            "패 베팅 ROI": roi["패"],
         })
 
-    result.sort(
-        key=lambda x: x["total"],
+    output.sort(
+
+        key=lambda item: item["total"],
+
         reverse=True,
     )
 
-    return result
+    return output
 
 
-def odds_probability(home, draw, away):
-
-    h = _safe_float(home)
-    d = _safe_float(draw)
-    a = _safe_float(away)
-
-    if not h or not d or not a:
-        return None
-
-    try:
-
-        ih = 1 / h
-        id_ = 1 / d
-        ia = 1 / a
-
-        total = ih + id_ + ia
-
-        if total <= 0:
-            return None
-
-        return {
-            "승": ih / total * 100,
-            "무": id_ / total * 100,
-            "패": ia / total * 100,
-        }
-
-    except Exception:
-        return None
-
+# ============================================================
+# 동일 배당 분석
+# ============================================================
 
 def same_odds_analysis(
     rows,
@@ -117,72 +331,154 @@ def same_odds_analysis(
     tolerance=0.01,
 ):
 
-    result = []
-
     th = _safe_float(target_home)
+
     td = _safe_float(target_draw)
+
     ta = _safe_float(target_away)
 
-    if th is None or td is None or ta is None:
-        return result
+    tolerance = _safe_float(tolerance)
+
+    if (
+        th is None
+        or td is None
+        or ta is None
+        or tolerance is None
+        or tolerance < 0
+    ):
+        return []
+
+    matches = []
+
+    seen = set()
 
     for row in rows:
 
-        h = _safe_float(row.get("final_home"))
-        d = _safe_float(row.get("final_draw"))
-        a = _safe_float(row.get("final_away"))
+        h = _safe_float(
+            row.get("final_home")
+        )
+
+        d = _safe_float(
+            row.get("final_draw")
+        )
+
+        a = _safe_float(
+            row.get("final_away")
+        )
 
         if h is None or d is None or a is None:
             continue
 
-        if (
+        if not (
+
             abs(h - th) <= tolerance
+
             and abs(d - td) <= tolerance
+
             and abs(a - ta) <= tolerance
+
         ):
+            continue
 
-            result.append(row)
+        sid = row.get("schedule_id")
 
-    return result
+        key = (
+            str(sid)
+            if sid is not None
+            else id(row)
+        )
 
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        matches.append(row)
+
+    return matches
+
+
+# ============================================================
+# 시장 예상확률 대비 실제 결과
+# ============================================================
 
 def expected_vs_actual(rows):
 
-    total = 0
+    grouped = defaultdict(list)
+
+    for index, row in enumerate(rows):
+
+        sid = row.get("schedule_id")
+
+        if sid is None:
+            sid = f"row_{index}"
+
+        grouped[str(sid)].append(row)
+
     expected = {
-        "승": 0,
-        "무": 0,
-        "패": 0,
+
+        "승": 0.0,
+        "무": 0.0,
+        "패": 0.0,
     }
 
     actual = {
+
         "승": 0,
         "무": 0,
         "패": 0,
     }
 
-    for row in rows:
+    total = 0
 
-        result = row.get("result")
+    for _, items in grouped.items():
 
-        probs = odds_probability(
-            row.get("final_home"),
-            row.get("final_draw"),
-            row.get("final_away"),
-        )
+        valid = []
 
-        if not probs:
+        result = None
+
+        for row in items:
+
+            current_result = row.get("result")
+
+            if current_result in actual:
+                result = current_result
+
+            probs = odds_probability(
+
+                row.get("final_home"),
+
+                row.get("final_draw"),
+
+                row.get("final_away"),
+            )
+
+            if probs:
+
+                valid.append(probs)
+
+        if result not in actual or not valid:
             continue
 
-        if result not in actual:
-            continue
+        # 동일 경기에 업체가 여러 개여도
+        # 해당 경기의 시장 확률을 평균하여 한 번만 반영
+        avg_probs = {
+
+            key: sum(
+                item[key]
+                for item in valid
+            ) / len(valid)
+
+            for key in ("승", "무", "패")
+        }
 
         total += 1
 
-        for key in expected:
-            expected[key] += probs[key]
-
         actual[result] += 1
+
+        for key in expected:
+
+            expected[key] += avg_probs[key]
 
     if total == 0:
         return []
@@ -191,20 +487,80 @@ def expected_vs_actual(rows):
 
     for key in ("승", "무", "패"):
 
-        expected_rate = (
-            expected[key] / total
-        )
-
         actual_rate = (
             actual[key] / total * 100
         )
 
+        expected_rate = (
+            expected[key] / total
+        )
+
         output.append({
+
             "결과": key,
-            "실제": actual[key],
+
+            "경기수": total,
+
+            "실제횟수": actual[key],
+
             "실제확률": actual_rate,
+
             "예상확률": expected_rate,
-            "차이": actual_rate - expected_rate,
+
+            "차이(%p)": (
+                actual_rate - expected_rate
+            ),
         })
 
     return output
+
+
+# ============================================================
+# 시장 마진 요약
+# ============================================================
+
+def market_summary(rows):
+
+    matches = _unique_matches(rows)
+
+    margins = []
+
+    for row in matches:
+
+        value = odds_overround(
+
+            row.get("final_home"),
+
+            row.get("final_draw"),
+
+            row.get("final_away"),
+        )
+
+        if value is not None:
+            margins.append(value)
+
+    if not margins:
+
+        return {
+
+            "경기수": len(matches),
+
+            "평균마진": 0,
+
+            "최저마진": 0,
+
+            "최고마진": 0,
+        }
+
+    return {
+
+        "경기수": len(matches),
+
+        "평균마진": (
+            sum(margins) / len(margins)
+        ),
+
+        "최저마진": min(margins),
+
+        "최고마진": max(margins),
+}
