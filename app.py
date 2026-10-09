@@ -1,22 +1,21 @@
 # ============================================================
 # app.py
 # Scoreman 해외배당 분석
+# Python 3.12 / Streamlit
 #
-# 기능
-# 1. 해외배당 자료 수집
-# 2. Turso / SQLite 데이터베이스 상태
+# 주요 기능
+# 1. DB 상태 및 저장 현황
+# 2. Scoreman 자료 수집
 # 3. 업체별 저장 현황
 # 4. 수집 진행 상태 및 로그
-# 5. 실제 승무패 결과
-# 6. 업체별 통계
-# 7. 특정 업체 선택
+# 5. 결과 미확인 경기
+# 6. 실제 승무패 통계
+# 7. 업체별 통계
 # 8. 수동 배당 입력
-# 9. 배당 대비 예상확률
-# 10. 동일 배당 과거 실제확률
-# 11. 부족확률
-# 12. 과거 경기 목록
-# 13. 음성 입력 및 결과 읽기
-# 14. 모바일 최적화
+# 9. 업체별 동일 배당 분석
+# 10. 예상확률 / 실제확률 / 부족확률
+# 11. 음성 입력 및 분석 결과 듣기
+# 12. 최근 저장 경기
 #
 # 배당 마진 표시 제거
 # ============================================================
@@ -25,9 +24,9 @@ import json
 import re
 import time
 
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
 
 import database
 import collector
@@ -35,19 +34,16 @@ import analysis
 
 
 # ============================================================
-# 음성 입력
+# 음성 입력 라이브러리
 # ============================================================
 
 try:
-
     from streamlit_mic_recorder import speech_to_text
 
     VOICE_AVAILABLE = True
 
 except Exception:
-
     speech_to_text = None
-
     VOICE_AVAILABLE = False
 
 
@@ -56,19 +52,15 @@ except Exception:
 # ============================================================
 
 st.set_page_config(
-
     page_title="Scoreman 해외배당 분석",
-
     page_icon="⚽",
-
     layout="wide",
-
     initial_sidebar_state="collapsed",
 )
 
 
 # ============================================================
-# 모바일 스타일
+# 모바일 화면 스타일
 # ============================================================
 
 st.markdown(
@@ -146,19 +138,72 @@ st.markdown(
 
 
 # ============================================================
-# 데이터베이스 초기화
+# 공통 함수
+# ============================================================
+
+def safe_float(value, default=0.0):
+    """숫자 변환 실패 및 비정상 숫자 처리."""
+
+    try:
+        number = float(value)
+
+        if pd.isna(number):
+            return default
+
+        return number
+
+    except (TypeError, ValueError):
+        return default
+
+
+def display_dataframe(data, **kwargs):
+    """데이터프레임을 안전하게 표시."""
+
+    if data is None:
+        st.info("표시할 데이터가 없습니다.")
+        return
+
+    if isinstance(data, list):
+        data = pd.DataFrame(data)
+
+    if data.empty:
+        st.info("표시할 데이터가 없습니다.")
+        return
+
+    st.dataframe(
+        data,
+        use_container_width=True,
+        hide_index=True,
+        **kwargs,
+    )
+
+
+def get_bookmaker_names(bookmaker_rows):
+    """저장된 업체 이름을 반환."""
+
+    names = []
+
+    for item in bookmaker_rows:
+
+        name = item.get("bookmaker")
+
+        if name:
+            names.append(str(name))
+
+    return sorted(set(names))
+
+
+# ============================================================
+# DB 초기화
 # ============================================================
 
 @st.cache_resource
 def initialize_database():
-
     database.init_database()
-
     return True
 
 
 try:
-
     initialize_database()
 
 except Exception as error:
@@ -169,7 +214,7 @@ except Exception as error:
 
     st.warning(
         "Turso 사용 시 TURSO_DATABASE_URL과 "
-        "TURSO_AUTH_TOKEN을 확인하세요."
+        "TURSO_AUTH_TOKEN 환경변수를 확인하세요."
     )
 
     st.stop()
@@ -182,14 +227,16 @@ except Exception as error:
 st.title("⚽ Scoreman 해외배당 분석")
 
 st.caption(
-    "해외 최종배당 · 실제 결과 · 동일 배당 분석 · "
+    "해외업체별 배당 · 실제 승무패 · 동일 배당 경기 · "
     "예상확률 · 실제확률 · 부족확률"
 )
 
 
 # ============================================================
-# 데이터베이스 상태
+# DB 상태
 # ============================================================
+
+st.divider()
 
 st.subheader("🗄️ 저장 데이터")
 
@@ -214,7 +261,7 @@ c1.metric(
 )
 
 c2.metric(
-    "최종배당",
+    "저장 배당",
     f"{db['odds']:,}",
 )
 
@@ -248,15 +295,15 @@ if size["mode"] == "Turso":
     )
 
     st.caption(
-        "데이터 크기는 추정치이며 "
-        "계정의 실제 사용량과 다를 수 있습니다."
+        "표시되는 크기는 SQL 데이터 크기 추정치입니다. "
+        "Turso 계정의 실제 사용량과 다를 수 있습니다."
     )
 
 elif size["mode"] == "SQLite":
 
     st.warning(
         "현재 로컬 SQLite 모드입니다. "
-        "Streamlit Cloud에서는 재시작 시 "
+        "Streamlit Cloud에서는 재배포 또는 환경 초기화 시 "
         "로컬 파일이 유지되지 않을 수 있습니다."
     )
 
@@ -287,7 +334,9 @@ except Exception as error:
 
     bookmaker_rows = []
 
-    st.error(f"업체 목록 조회 실패: {error}")
+    st.error(
+        f"업체 목록 조회 실패: {error}"
+    )
 
 
 if bookmaker_rows:
@@ -296,24 +345,19 @@ if bookmaker_rows:
 
     company_df = company_df.rename(
         columns={
-
             "bookmaker": "해외업체",
-
             "games": "저장 경기 수",
-
             "odds_count": "저장 배당 수",
         }
     )
 
-    st.dataframe(
-        company_df,
-        use_container_width=True,
-        hide_index=True,
-    )
+    display_dataframe(company_df)
 
 else:
 
-    st.info("저장된 업체 데이터가 없습니다.")
+    st.info(
+        "저장된 업체 데이터가 없습니다."
+    )
 
 
 # ============================================================
@@ -321,7 +365,6 @@ else:
 # ============================================================
 
 known_names = [
-
     "18Bet",
     "Bet365",
     "Crown",
@@ -332,17 +375,19 @@ known_names = [
     "Interwetten",
 ]
 
-
 for item in bookmaker_rows:
 
     name = item.get("bookmaker")
 
     if name and name not in known_names:
-
         known_names.append(name)
 
 
 known_names = sorted(set(known_names))
+
+saved_bookmakers = get_bookmaker_names(
+    bookmaker_rows
+)
 
 
 # ============================================================
@@ -360,32 +405,24 @@ col1, col2 = st.columns(2)
 with col1:
 
     start_id = st.number_input(
-
         "시작 ID",
-
         min_value=1,
-
         value=2005000,
-
         step=1,
-
         format="%d",
+        key="collection_start_id",
     )
 
 
 with col2:
 
     end_id = st.number_input(
-
         "종료 ID",
-
         min_value=1,
-
         value=3001118,
-
         step=1,
-
         format="%d",
+        key="collection_end_id",
     )
 
 
@@ -396,9 +433,14 @@ if end_id < start_id:
     )
 
 
+target_count = max(
+    0,
+    int(end_id) - int(start_id) + 1,
+)
+
+
 st.caption(
-    f"수집 대상 ID: "
-    f"{max(0, int(end_id) - int(start_id) + 1):,}개"
+    f"수집 대상 ID: {target_count:,}개"
 )
 
 
@@ -407,15 +449,13 @@ st.caption(
 # ============================================================
 
 collection_mode = st.radio(
-
     "수집 방식",
-
     [
         "전체 업체 수집",
         "특정 업체 선택",
     ],
-
     horizontal=True,
+    key="collection_mode",
 )
 
 
@@ -425,14 +465,11 @@ selected_companies = []
 if collection_mode == "특정 업체 선택":
 
     selected_companies = st.multiselect(
-
         "수집할 해외업체",
-
         options=known_names,
-
         default=[],
-
         placeholder="수집할 업체를 선택하세요",
+        key="collection_companies",
     )
 
     if selected_companies:
@@ -454,21 +491,18 @@ if collection_mode == "특정 업체 선택":
 # ============================================================
 
 delay = st.number_input(
-
     "요청 간격(초)",
-
     min_value=0.1,
-
     max_value=10.0,
-
     value=0.5,
-
     step=0.1,
+    key="collection_delay",
 )
 
 
 st.caption(
-    "실제 점수 검증 · 최종배당 euro.l 저장"
+    "자동 재시도 없음 · 실제 점수 검증 · "
+    "최종배당 euro.l 저장"
 )
 
 
@@ -482,25 +516,25 @@ b1, b2 = st.columns(2)
 with b1:
 
     if st.button(
-
         "▶️ 수집 시작",
-
         type="primary",
-
         use_container_width=True,
-
     ):
 
         if end_id < start_id:
 
-            st.error("ID 범위를 확인하세요.")
+            st.error(
+                "ID 범위를 확인하세요."
+            )
 
         elif (
             collection_mode == "특정 업체 선택"
             and not selected_companies
         ):
 
-            st.error("수집할 업체를 선택하세요.")
+            st.error(
+                "수집할 업체를 선택하세요."
+            )
 
         else:
 
@@ -512,13 +546,9 @@ with b1:
 
             ok, message = (
                 collector.start_background_collection(
-
                     int(start_id),
-
                     int(end_id),
-
                     companies,
-
                     float(delay),
                 )
             )
@@ -535,11 +565,8 @@ with b1:
 with b2:
 
     if st.button(
-
         "⏹️ 수집 중지",
-
         use_container_width=True,
-
     ):
 
         if collector.stop_collection():
@@ -560,25 +587,25 @@ with b2:
 # ============================================================
 
 if st.button(
-
     "▶️ 마지막 지점부터 이어받기",
-
     type="secondary",
-
     use_container_width=True,
-
 ):
 
     if end_id < start_id:
 
-        st.error("ID 범위를 확인하세요.")
+        st.error(
+            "ID 범위를 확인하세요."
+        )
 
     elif (
         collection_mode == "특정 업체 선택"
         and not selected_companies
     ):
 
-        st.error("수집할 업체를 선택하세요.")
+        st.error(
+            "수집할 업체를 선택하세요."
+        )
 
     else:
 
@@ -589,13 +616,9 @@ if st.button(
         )
 
         ok, message = collector.resume_collection(
-
             int(end_id),
-
             companies,
-
             float(delay),
-
             int(start_id),
         )
 
@@ -615,6 +638,7 @@ if st.button(
 st.divider()
 
 st.subheader("📊 실시간 수집 상태")
+
 
 progress = collector.get_progress()
 
@@ -653,11 +677,11 @@ p5.metric(
 st.progress(
     min(
         max(
-            progress["percent"] / 100,
+            safe_float(progress.get("percent")),
             0.0,
         ),
-        1.0,
-    )
+        100.0,
+    ) / 100
 )
 
 
@@ -754,7 +778,17 @@ st.divider()
 st.subheader("⚠️ 결과 미확인 경기")
 
 
-unresolved = database.get_unresolved_matches()
+try:
+
+    unresolved = database.get_unresolved_matches()
+
+except Exception as error:
+
+    unresolved = []
+
+    st.error(
+        f"결과 미확인 경기 조회 실패: {error}"
+    )
 
 
 st.write(
@@ -764,18 +798,13 @@ st.write(
 
 if unresolved:
 
-    st.dataframe(
-
-        pd.DataFrame(unresolved),
-
-        use_container_width=True,
-
-        hide_index=True,
+    display_dataframe(
+        pd.DataFrame(unresolved)
     )
 
 
 # ============================================================
-# 분석할 업체 선택
+# 분석 업체 선택
 # ============================================================
 
 st.divider()
@@ -783,41 +812,41 @@ st.divider()
 st.header("📈 해외배당 분석")
 
 
-analysis_options = [
-    "전체 업체",
-] + sorted({
-
-    item["bookmaker"]
-
-    for item in bookmaker_rows
-
-    if item.get("bookmaker")
-})
+analysis_options = (
+    ["전체 업체"] + saved_bookmakers
+)
 
 
 selected_bookmaker = st.selectbox(
-
     "분석할 업체",
-
     analysis_options,
-
     key="analysis_bookmaker",
 )
 
 
-if selected_bookmaker == "전체 업체":
+try:
 
-    rows = database.get_analysis_rows()
+    if selected_bookmaker == "전체 업체":
 
-else:
+        rows = database.get_analysis_rows()
 
-    rows = database.get_analysis_rows(
-        selected_bookmaker
+    else:
+
+        rows = database.get_analysis_rows(
+            selected_bookmaker
+        )
+
+except Exception as error:
+
+    st.error(
+        f"분석 데이터 조회 실패: {error}"
     )
+
+    rows = []
 
 
 # ============================================================
-# 전체 승무패 통계
+# 실제 승무패 통계
 # ============================================================
 
 stats = analysis.result_counts(rows)
@@ -834,15 +863,18 @@ a1.metric(
     f"{stats['total']:,}",
 )
 
+
 a2.metric(
     "승",
     f"{stats['승']:,} ({stats['승률']:.2f}%)",
 )
 
+
 a3.metric(
     "무",
     f"{stats['무']:,} ({stats['무율']:.2f}%)",
 )
+
 
 a4.metric(
     "패",
@@ -852,33 +884,42 @@ a4.metric(
 
 # ============================================================
 # 업체별 통계
-# 배당 마진 컬럼은 표시하지 않음
+# 배당 마진 열 제거
 # ============================================================
 
 st.subheader("🏢 업체별 분석")
 
 
-company_stats = analysis.bookmaker_stats(rows)
+try:
+
+    company_stats = analysis.bookmaker_stats(rows)
+
+except Exception as error:
+
+    company_stats = []
+
+    st.error(
+        f"업체별 통계 계산 실패: {error}"
+    )
 
 
 if company_stats:
 
     company_df = pd.DataFrame(company_stats)
 
-    # 평균마진 표시 제거
+    # 배당 마진 관련 열은 화면에서 제거한다.
+    remove_columns = [
+        column
+        for column in company_df.columns
+        if "마진" in str(column)
+    ]
+
     company_df = company_df.drop(
-        columns=["평균마진"],
+        columns=remove_columns,
         errors="ignore",
     )
 
-    st.dataframe(
-
-        company_df,
-
-        use_container_width=True,
-
-        hide_index=True,
-    )
+    display_dataframe(company_df)
 
 else:
 
@@ -897,53 +938,55 @@ st.header("🧮 수동 배당 입력")
 
 
 st.caption(
-    "해외업체를 선택하고 승·무·패 배당을 입력하면 "
-    "예상확률, 과거 실제확률, 부족확률을 계산합니다."
+    "해외업체를 선택하고 승·무·패 배당을 입력하세요. "
+    "입력한 배당의 예상확률과 과거 실제 발생률을 비교합니다."
 )
 
 
 # ============================================================
-# 수동 분석 업체 선택
+# 수동 배당 분석 업체
 # ============================================================
 
-st.subheader("🏢 분석 대상 해외업체")
+manual_company_options = (
+    ["전체 업체"] + saved_bookmakers
+)
 
 
-manual_company_options = sorted({
-
-    item["bookmaker"]
-
-    for item in bookmaker_rows
-
-    if item.get("bookmaker")
-})
-
-
-if not manual_company_options:
-
-    manual_company_options = known_names
+# 업체가 있다면 첫 번째 업체를 기본 선택한다.
+default_manual_index = (
+    1
+    if len(manual_company_options) > 1
+    else 0
+)
 
 
 manual_company = st.selectbox(
-
-    "과거 경기와 비교할 업체",
-
-    manual_company_options,
-
+    "수동 배당 분석 업체",
+    options=manual_company_options,
+    index=default_manual_index,
     key="manual_company",
 )
 
 
-st.caption(
-    f"선택 업체: {manual_company}"
-)
+if manual_company == "전체 업체":
+
+    st.info(
+        "전체 업체를 선택하면 여러 업체의 과거 데이터를 "
+        "통합하여 동일 배당을 검색합니다."
+    )
+
+else:
+
+    st.info(
+        f"선택한 업체: **{manual_company}**"
+    )
 
 
 # ============================================================
 # 음성 입력
 # ============================================================
 
-st.subheader("🎙️ 음성으로 배당 입력")
+st.subheader("🎙️ 음성 배당 입력")
 
 
 if VOICE_AVAILABLE:
@@ -951,29 +994,27 @@ if VOICE_AVAILABLE:
     try:
 
         spoken = speech_to_text(
-
             language="ko",
-
             just_once=True,
-
             key="scoreman_voice_input",
         )
-
 
         if isinstance(spoken, dict):
 
             spoken = spoken.get("text", "")
 
-
-        spoken = str(spoken or "").strip()
+        spoken = str(
+            spoken or ""
+        ).strip()
 
 
         if spoken:
 
+            st.session_state["voice_text"] = spoken
+
             st.write(
                 f"음성 인식 결과: **{spoken}**"
             )
-
 
             if (
                 st.session_state.get(
@@ -982,29 +1023,20 @@ if VOICE_AVAILABLE:
             ):
 
                 numbers = re.findall(
-
                     r"\d+(?:\.\d+)?",
-
                     spoken,
                 )
-
 
                 if len(numbers) >= 3:
 
                     values = [
-
                         float(number)
-
                         for number in numbers[:3]
                     ]
 
-
                     if all(
-
                         1.01 <= value <= 1000
-
                         for value in values
-
                     ):
 
                         st.session_state["manual_home"] = (
@@ -1019,30 +1051,13 @@ if VOICE_AVAILABLE:
                             values[2]
                         )
 
-
                         st.success(
-                            "배당 숫자 3개를 인식했습니다."
+                            "음성에서 배당 숫자 3개를 인식했습니다."
                         )
-
-                    else:
-
-                        st.warning(
-                            "배당은 1.01 이상 1000 이하로 "
-                            "입력해야 합니다."
-                        )
-
-                else:
-
-                    st.warning(
-                        "승·무·패 배당 숫자 3개를 "
-                        "인식하지 못했습니다."
-                    )
-
 
                 st.session_state[
                     "_last_voice_processed"
                 ] = spoken
-
 
     except Exception as error:
 
@@ -1050,20 +1065,19 @@ if VOICE_AVAILABLE:
             f"음성 입력을 사용할 수 없습니다: {error}"
         )
 
-
 else:
 
     st.info(
-        "음성 입력을 사용하려면 "
+        "음성 입력을 사용하려면 requirements.txt에 "
         "streamlit-mic-recorder를 설치하세요."
     )
 
 
 # ============================================================
-# 수동 배당 입력
+# 수동 배당 입력창
 # ============================================================
 
-st.subheader("🎯 승 · 무 · 패 배당 입력")
+st.subheader("⚽ 승무패 배당 입력")
 
 
 d1, d2, d3 = st.columns(3)
@@ -1072,19 +1086,12 @@ d1, d2, d3 = st.columns(3)
 with d1:
 
     manual_home = st.number_input(
-
         "홈 승 배당",
-
         min_value=1.01,
-
         max_value=1000.0,
-
         value=2.00,
-
         step=0.01,
-
         format="%.2f",
-
         key="manual_home",
     )
 
@@ -1092,19 +1099,12 @@ with d1:
 with d2:
 
     manual_draw = st.number_input(
-
         "무승부 배당",
-
         min_value=1.01,
-
         max_value=1000.0,
-
         value=3.20,
-
         step=0.01,
-
         format="%.2f",
-
         key="manual_draw",
     )
 
@@ -1112,38 +1112,30 @@ with d2:
 with d3:
 
     manual_away = st.number_input(
-
         "원정 승 배당",
-
         min_value=1.01,
-
         max_value=1000.0,
-
         value=3.50,
-
         step=0.01,
-
         format="%.2f",
-
         key="manual_away",
     )
 
 
 # ============================================================
-# 시장 예상확률
+# 배당 기준 예상확률
 # ============================================================
 
 manual_probs = analysis.odds_probability(
-
     manual_home,
-
     manual_draw,
-
     manual_away,
 )
 
 
-st.subheader("📊 배당 대비 예상확률")
+st.divider()
+
+st.subheader("📊 배당 기준 예상확률")
 
 
 if manual_probs:
@@ -1169,26 +1161,26 @@ if manual_probs:
     )
 
 
-    st.caption(
-        "예상확률은 입력 배당의 역수를 계산한 뒤 "
-        "세 결과의 합이 100%가 되도록 정규화합니다."
+else:
+
+    st.error(
+        "입력한 배당으로 예상확률을 계산할 수 없습니다."
     )
 
 
 # ============================================================
-# 유사 배당 포함 여부
+# 동일 배당 검색
 # ============================================================
 
 st.divider()
 
-st.subheader("🎯 동일 배당 과거 경기 분석")
+st.subheader("🎯 동일 배당 과거 경기 검색")
 
 
 approximate = st.checkbox(
-
     "완전 동일이 아닌 유사 배당도 포함",
-
     value=False,
+    key="approximate_odds",
 )
 
 
@@ -1198,64 +1190,63 @@ tolerance = 0.0
 if approximate:
 
     tolerance = st.number_input(
-
         "배당 허용 오차",
-
         min_value=0.01,
-
         max_value=1.0,
-
         value=0.01,
-
         step=0.01,
-
         format="%.2f",
+        key="odds_tolerance",
     )
 
 
 # ============================================================
-# 선택한 업체의 데이터만 조회
+# 선택 업체 데이터 가져오기
 # ============================================================
 
-same_source_rows = database.get_analysis_rows(
-    manual_company
-)
+try:
+
+    if manual_company == "전체 업체":
+
+        same_source_rows = (
+            database.get_analysis_rows()
+        )
+
+    else:
+
+        same_source_rows = (
+            database.get_analysis_rows(
+                manual_company
+            )
+        )
+
+except Exception as error:
+
+    same_source_rows = []
+
+    st.error(
+        f"동일 배당 검색 데이터 조회 실패: {error}"
+    )
 
 
 # ============================================================
-# 동일 배당 검색
+# 동일 배당 분석
 # ============================================================
 
-same_rows_all = analysis.same_odds_analysis(
-
+same_rows = analysis.same_odds_analysis(
     same_source_rows,
-
     manual_home,
-
     manual_draw,
-
     manual_away,
-
     tolerance,
 )
 
 
-# 실제 결과가 확인된 경기만 확률 계산에 사용
-same_rows = [
-
-    row
-
-    for row in same_rows_all
-
-    if row.get("result") in ("승", "무", "패")
-]
-
-
 # ============================================================
-# 예상확률 / 실제확률 / 부족확률
+# 동일 배당 결과
 # ============================================================
 
-if same_rows and manual_probs:
+if same_rows:
 
     same_stats = analysis.result_counts(
         same_rows
@@ -1263,92 +1254,101 @@ if same_rows and manual_probs:
 
 
     st.success(
-        f"선택 업체: {manual_company} · "
-        f"실제 결과 확인 경기: "
+        f"검색된 과거 경기: "
         f"{same_stats['total']:,}경기"
     )
 
 
     # --------------------------------------------------------
-    # 발생 횟수
+    # 실제 승무패 결과
     # --------------------------------------------------------
+
+    st.subheader("⚽ 동일 배당 실제 발생 결과")
+
 
     s1, s2, s3 = st.columns(3)
 
 
     s1.metric(
-
         "승 발생",
-
         f"{same_stats['승']:,} "
         f"({same_stats['승률']:.2f}%)",
     )
 
 
     s2.metric(
-
         "무 발생",
-
         f"{same_stats['무']:,} "
         f"({same_stats['무율']:.2f}%)",
     )
 
 
     s3.metric(
-
         "패 발생",
-
         f"{same_stats['패']:,} "
         f"({same_stats['패율']:.2f}%)",
     )
 
 
     # --------------------------------------------------------
-    # 핵심 확률 비교표
+    # 예상확률 / 실제확률 / 부족확률
     # --------------------------------------------------------
 
+    st.divider()
+
     st.subheader(
-        "📋 배당 · 예상확률 · 실제확률 · 부족확률"
+        "📊 예상확률 · 실제확률 · 부족확률"
     )
+
+
+    # 중요:
+    # result_counts()의 실제 확률 키는
+    # 승률 / 무율 / 패율이다.
+    #
+    # 승 / 무 / 패 키는 발생 횟수이므로
+    # actual_rate를 계산할 때 사용하면 안 된다.
+
+    result_mapping = [
+        ("승", "승률"),
+        ("무", "무율"),
+        ("패", "패율"),
+    ]
 
 
     comparison = []
 
 
-    for result_key, odds in [
+    for result_key, rate_key in result_mapping:
 
-        ("승", manual_home),
-
-        ("무", manual_draw),
-
-        ("패", manual_away),
-
-    ]:
-
-        # 배당으로 계산한 시장 예상확률
-        expected_rate = manual_probs[result_key]
+        # 배당 기준 시장 예상확률
+        expected_rate = safe_float(
+            manual_probs[result_key]
+        )
 
 
-        # 선택 업체의 동일 배당 과거 실제확률
-        actual_rate = same_stats[
-            f"{result_key}률"
-        ]
+        # 과거 동일 배당 경기의 실제 발생확률
+        actual_rate = safe_float(
+            same_stats[rate_key]
+        )
 
 
         # 부족확률
-        shortage = expected_rate - actual_rate
+        shortage = (
+            expected_rate - actual_rate
+        )
+
+
+        # 예상확률과 실제확률의 차이
+        difference = (
+            actual_rate - expected_rate
+        )
 
 
         comparison.append({
 
             "결과": result_key,
 
-            "입력 배당": round(
-                odds,
-                2,
-            ),
-
-            "예상확률(%)": round(
+            "배당 기준 예상확률(%)": round(
                 expected_rate,
                 2,
             ),
@@ -1363,11 +1363,16 @@ if same_rows and manual_probs:
                 2,
             ),
 
-            "실제 발생 횟수": same_stats[
+            "차이(%p)": round(
+                difference,
+                2,
+            ),
+
+            "실제 발생횟수": same_stats[
                 result_key
             ],
 
-            "전체 경기 수": same_stats[
+            "전체 경기수": same_stats[
                 "total"
             ],
         })
@@ -1378,88 +1383,47 @@ if same_rows and manual_probs:
     )
 
 
-    st.dataframe(
-
-        comparison_df,
-
-        use_container_width=True,
-
-        hide_index=True,
+    display_dataframe(
+        comparison_df
     )
 
 
     # --------------------------------------------------------
-    # 부족확률 해석
+    # 확률 계산 설명
     # --------------------------------------------------------
 
-    st.markdown(
-        """
-        **부족확률 계산식**
+    st.caption(
+        "예상확률: 입력한 승·무·패 배당의 역수를 "
+        "합계 100%로 정규화한 값입니다."
+    )
 
-        부족확률 = 예상확률 - 실제확률
 
-        - 양수(+) : 과거 실제 발생률이 예상확률보다 낮음
-        - 음수(-) : 과거 실제 발생률이 예상확률보다 높음
-        - 0에 가까움 : 예상확률과 실제확률이 비슷함
+    st.caption(
+        "실제확률: 선택한 업체와 동일한 배당 조건에 "
+        "해당하는 과거 경기의 실제 발생률입니다."
+    )
 
-        부족확률은 과거 데이터의 차이를 나타내며,
-        미래 경기 결과를 보장하지 않습니다.
-        """
+
+    st.caption(
+        "부족확률(%p) = 예상확률 - 실제확률"
+    )
+
+
+    st.caption(
+        "양수는 과거 실제 발생률이 예상확률보다 낮았음을, "
+        "음수는 실제 발생률이 예상확률보다 높았음을 뜻합니다."
     )
 
 
     # --------------------------------------------------------
-    # 결과별 차이 요약
+    # 동일 배당 경기 목록
     # --------------------------------------------------------
 
-    st.subheader("🔎 확률 차이 요약")
+    st.divider()
 
-
-    for item in comparison:
-
-        result_name = item["결과"]
-
-        shortage = item["부족확률(%p)"]
-
-        expected_rate = item["예상확률(%)"]
-
-        actual_rate = item["실제확률(%)"]
-
-
-        if shortage > 0:
-
-            st.write(
-
-                f"**{result_name}** — "
-                f"예상 {expected_rate:.2f}% / "
-                f"실제 {actual_rate:.2f}% / "
-                f"부족 +{shortage:.2f}%p"
-            )
-
-        elif shortage < 0:
-
-            st.write(
-
-                f"**{result_name}** — "
-                f"예상 {expected_rate:.2f}% / "
-                f"실제 {actual_rate:.2f}% / "
-                f"차이 {shortage:.2f}%p"
-            )
-
-        else:
-
-            st.write(
-
-                f"**{result_name}** — "
-                f"예상확률과 실제확률이 같습니다."
-            )
-
-
-    # --------------------------------------------------------
-    # 과거 경기 목록
-    # --------------------------------------------------------
-
-    st.subheader("📝 동일 배당 과거 경기 목록")
+    st.subheader(
+        "📝 동일 배당 경기 목록"
+    )
 
 
     recent_same = pd.DataFrame(
@@ -1468,187 +1432,176 @@ if same_rows and manual_probs:
 
 
     display_columns = [
-
         "schedule_id",
-
         "match_date",
-
         "home_team",
-
         "away_team",
-
         "home_score",
-
         "away_score",
-
         "result",
-
         "bookmaker",
-
         "final_home",
-
         "final_draw",
-
         "final_away",
     ]
 
 
     available_columns = [
-
         column
-
         for column in display_columns
-
         if column in recent_same.columns
     ]
 
 
-    st.dataframe(
+    if available_columns:
 
-        recent_same[available_columns],
+        display_dataframe(
+            recent_same[available_columns]
+        )
 
-        use_container_width=True,
+    else:
 
-        hide_index=True,
-    )
+        display_dataframe(
+            recent_same
+        )
 
 
     # --------------------------------------------------------
-    # CSV 다운로드
+    # 동일 배당 경기 CSV 다운로드
     # --------------------------------------------------------
 
-    csv_data = recent_same[
-        available_columns
-    ].to_csv(
+    csv_data = recent_same.to_csv(
         index=False
     ).encode("utf-8-sig")
 
 
     st.download_button(
-
-        "⬇️ 동일 배당 과거 경기 CSV 다운로드",
-
+        label="📥 동일 배당 경기 CSV 다운로드",
         data=csv_data,
-
         file_name="same_odds_matches.csv",
-
         mime="text/csv",
-
         use_container_width=True,
     )
 
 
 else:
 
+    same_stats = None
+
+
     st.info(
-        f"선택 업체: {manual_company}\n\n"
-        "입력한 배당과 일치하는 과거 경기 중 "
-        "실제 결과가 확인된 경기가 없습니다. "
-        "유사 배당 검색을 켜거나 다른 배당을 입력해 보세요."
+        "조건에 맞는 과거 경기가 없습니다. "
+        "다른 배당이나 업체를 선택해 보세요."
     )
 
 
 # ============================================================
-# 전체 데이터 예상확률 대비 실제확률
+# 전체 데이터 예상확률 대비 실제 발생확률
 # ============================================================
 
 st.divider()
 
-st.subheader("📉 전체 분석 데이터 확률 비교")
+st.subheader(
+    "📉 전체 예상확률 대비 실제 확률"
+)
 
 
-ev = analysis.expected_vs_actual(rows)
+try:
+
+    ev = analysis.expected_vs_actual(
+        rows
+    )
+
+except Exception as error:
+
+    ev = []
+
+    st.error(
+        f"전체 확률 분석 실패: {error}"
+    )
 
 
 if ev:
 
     ev_df = pd.DataFrame(ev)
 
+    display_dataframe(ev_df)
 
-    # 부족확률과 실제확률을 포함해 표시
-    st.dataframe(
 
-        ev_df,
-
-        use_container_width=True,
-
-        hide_index=True,
+    st.caption(
+        "전체 저장 데이터에서 실제 결과가 확인되고 "
+        "배당으로 예상확률을 계산할 수 있는 경기만 집계합니다."
     )
 
 
 else:
 
     st.info(
-        "예상확률을 계산할 수 있는 "
-        "실제 결과 데이터가 없습니다."
+        "예상확률을 계산할 수 있는 실제 결과 데이터가 없습니다."
     )
 
 
 # ============================================================
-# 분석 결과 음성 읽기
+# 분석 결과 듣기
 # ============================================================
 
 st.divider()
 
-st.subheader("🔊 분석 결과 듣기")
+st.subheader(
+    "🔊 분석 결과 듣기"
+)
 
 
 if manual_probs:
 
-    if same_rows:
+    if same_rows and same_stats:
 
         speech_text = (
 
-            f"선택 업체는 {manual_company}입니다. "
+            f"동일 배당 분석 결과입니다. "
 
-            f"동일 배당 과거 경기 "
-            f"{same_stats['total']}경기를 분석했습니다. "
+            f"검색 경기 {same_stats['total']}경기. "
 
-            f"승 실제 발생률 "
-            f"{same_stats['승률']:.2f}퍼센트. "
+            f"승 발생 확률 "
+            f"{same_stats['승률']:.1f}퍼센트. "
 
-            f"무승부 실제 발생률 "
-            f"{same_stats['무율']:.2f}퍼센트. "
+            f"무승부 발생 확률 "
+            f"{same_stats['무율']:.1f}퍼센트. "
 
-            f"패 실제 발생률 "
-            f"{same_stats['패율']:.2f}퍼센트. "
+            f"패 발생 확률 "
+            f"{same_stats['패율']:.1f}퍼센트. "
 
-            f"시장 예상 승 확률 "
-            f"{manual_probs['승']:.2f}퍼센트. "
+            f"배당 기준 예상 승 확률 "
+            f"{manual_probs['승']:.1f}퍼센트. "
 
-            f"시장 예상 무승부 확률 "
-            f"{manual_probs['무']:.2f}퍼센트. "
+            f"배당 기준 예상 무승부 확률 "
+            f"{manual_probs['무']:.1f}퍼센트. "
 
-            f"시장 예상 패 확률 "
-            f"{manual_probs['패']:.2f}퍼센트."
+            f"배당 기준 예상 패 확률 "
+            f"{manual_probs['패']:.1f}퍼센트."
         )
 
     else:
 
         speech_text = (
 
-            f"시장 예상확률입니다. "
+            f"배당 기준 예상확률입니다. "
 
-            f"승 {manual_probs['승']:.2f}퍼센트. "
+            f"승 {manual_probs['승']:.1f}퍼센트. "
 
-            f"무승부 {manual_probs['무']:.2f}퍼센트. "
+            f"무승부 {manual_probs['무']:.1f}퍼센트. "
 
-            f"패 {manual_probs['패']:.2f}퍼센트. "
-
-            f"선택 업체는 {manual_company}입니다."
+            f"패 {manual_probs['패']:.1f}퍼센트."
         )
 
 
     safe_text = json.dumps(
-
         speech_text,
-
         ensure_ascii=False,
     )
 
 
     components.html(
-
         f"""
         <div style="
             font-family: sans-serif;
@@ -1709,7 +1662,6 @@ if manual_probs:
 
         </div>
         """,
-
         height=65,
     )
 
@@ -1720,7 +1672,9 @@ if manual_probs:
 
 st.divider()
 
-st.subheader("📝 최근 저장 경기")
+st.subheader(
+    "📝 최근 저장 경기"
+)
 
 
 if rows:
@@ -1731,48 +1685,55 @@ if rows:
 
 
     columns = [
-
         "schedule_id",
-
         "match_date",
-
         "home_team",
-
         "away_team",
-
         "home_score",
-
         "away_score",
-
         "result",
-
         "bookmaker",
-
         "final_home",
-
         "final_draw",
-
         "final_away",
     ]
 
 
     available = [
-
         column
-
         for column in columns
-
         if column in recent.columns
     ]
 
 
-    st.dataframe(
+    if available:
 
-        recent[available].head(100),
+        display_dataframe(
+            recent[available].head(100)
+        )
 
+    else:
+
+        display_dataframe(
+            recent.head(100)
+        )
+
+
+    # --------------------------------------------------------
+    # 최근 경기 CSV 다운로드
+    # --------------------------------------------------------
+
+    recent_csv = recent.to_csv(
+        index=False
+    ).encode("utf-8-sig")
+
+
+    st.download_button(
+        label="📥 최근 분석 데이터 CSV 다운로드",
+        data=recent_csv,
+        file_name="scoreman_analysis.csv",
+        mime="text/csv",
         use_container_width=True,
-
-        hide_index=True,
     )
 
 
