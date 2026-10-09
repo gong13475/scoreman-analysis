@@ -2538,8 +2538,30 @@ def _worker():
             timespec="seconds"
         )
 
+            with lock:
+        job["running"] = False
+        job["finished"] = True
+
+        job["end_time"] = datetime.now().isoformat(
+            timespec="seconds"
+        )
+
         job["result"] = (
-
             f"성공 {job['success']} / "
+            f"중복 {job['exists']} / "
+            f"실패 {job['failed']} / "
+            f"배당 {job['odds']}"
+        )
 
+    add_log("=" * 50)
+    add_log("🏁 Scoreman 수집 종료")
+
+    add_log(
+        f"성공={job['success']} "
+        f"중복={job['exists']} "
+        f"실패={job['failed']} "
+        f"배당={job['odds']}"
+    )
+
+    add_log("=" * 50)
       
